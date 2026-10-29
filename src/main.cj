@@ -22,7 +22,7 @@ import stdx.encoding.json.*
 // ============================================================
 
 /** 拼路径：自动处理分隔符，避免 base 末尾已有分隔符时出现双分隔 */
-func joinPath(base: String, name: String): String {
+public func joinPath(base: String, name: String): String {
     if (base.size == 0) {
         return name
     }
@@ -46,7 +46,7 @@ func envOr(name: String, fallback: String): String {
 }
 
 /** 从候选路径里取第一个存在的（体检用：同一工具在不同机器上位置不同） */
-func firstExisting(cands: Array<String>): String {
+public func firstExisting(cands: Array<String>): String {
     for (p in cands) {
         if (p.size > 0 && exists(p)) {
             return p

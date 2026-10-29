@@ -60,7 +60,7 @@ func intEnvOr(name: String, fallback: Int64): Int64 {
     }
 }
 
-func parsePortEnv(v: String, fallback: Int64): Int64 {
+public func parsePortEnv(v: String, fallback: Int64): Int64 {
     try {
         let n = Int64.parse(v)
         if (n > 0 && n <= 65535) {
@@ -119,7 +119,7 @@ public func cjhHealthy(port: Int64): Bool {
 }
 
 /** 可用端点的统一形状：页面拿到就能自己接上 */
-func putEndpoints(obj: JsonObject, port: Int64): Unit {
+public func putEndpoints(obj: JsonObject, port: Int64): Unit {
     obj.put("port", JsonInt(port))
     obj.put("apiUrl", JsonString("http://127.0.0.1:${port}"))
     obj.put("wsUrl", JsonString("ws://127.0.0.1:${port}/ws"))

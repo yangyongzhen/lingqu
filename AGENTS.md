@@ -1,0 +1,154 @@
+# 灵渠迁移台 · 项目开发规范（AGENTS.md）
+
+> 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
+> **改代码前先读 §1 门禁与 §2 架构契约。**
+> 适用版本：**0.2.0**（2026-10-29），与 `CHANGELOG.md` 同步维护。
+> 当前进度见 `docs/进度记录.md`；换机器/换会话先读 `docs/会话交接.md`；
+> 需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
+
+---
+
+## 0. 项目定位
+
+**Tauri 应用 → 鸿蒙 PC 的一站式 AI 迁移台**。三层技术栈：
+
+| 层 | 用什么 | 说明 |
+|---|---|---|
+| 外壳 / UI | **cj-tauri**（仓颉 + 系统 WebView） | 窗口、IPC、资产、能力清单、打包；桌面 = WebView2，鸿蒙 = ArkWeb |
+| AI 引擎 | **cjh**（仓颉 Coding Agent Harness，进程外 web 模式） | 迁移工具链的规划/诊断/改码，走 `127.0.0.1:8765` 的 REST + WS |
+| 迁移引擎 | 仓颉主导 + 外部工具编排 | 扫描 / 规则改造 / 交叉编译 / HAP / hdc 部署 / 证据采集 |
+
+**最终验收**（课题原文，见 `docs/需求.md`）：5 个真实 Tauri 应用迁移验证、迁移分析覆盖率 100%、
+单应用平均人工介入 ≤ 5 处、鸿蒙电脑上核心功能可用率 ≥ 80%、工具开源并提供迁移指南。
+
+---
+
+## 1. 交付门禁（唯一交付凭证）
+
+**任何代码变更交付前必须满足：**
+
+1. `.\scripts\test.ps1` **全绿**。四道闸缺一不可：
+   - ① 业务包 `cjpm build` —— **零警告**（unused 变量/导入、deprecated 一律清零，禁止"先交付后清理"）
+   - ② 业务包 `cjpm test` —— `FAILED: 0`、`ERROR: 0`
+   - ③ `cj-tauri check` —— 清单校验 + 骨架漂移 + **能力三方比对**（声明 × 插件自述 × 实际装配）
+   - ④ `targets/desktop` 的 `cjpm build` —— 骨架侧也要编得过且零警告
+2. **新增行为必须有对应测试**：新增纯函数 → 至少覆盖主路径 + 错误路径 + 一个边界；
+   bug 修复 → **先写复现该 bug 的用例（红）再修（绿）**。
+3. **行为变更必须给可观测证据**：日志行、命令返回值、窗口标题、进程/端口状态。
+   禁止「先交付后补证据」。
+4. **跑不起来就如实说明**（含「哪些平台未验证」），禁止把未验证说成通过。
+5. 涉及 WebView2 / cjh 进程 / 真机部署的部分，**单元测试不造假绿**——这类以实机为准，
+   并在 `docs/进度记录.md` 写清「验证到什么程度、证据是什么」。
+
+---
+
+## 2. 架构契约（改哪里、怎么改）
+
+### 2.1 三层职责，别混
+
+```
+cj-tauri.toml          应用清单——单一真相（id / 窗口 / 资产 / 能力目录）
+   ↓ cj-tauri sync（派生，勿手改）
+targets/desktop/       桌面 launcher    ┐
+targets/ohos/          鸿蒙 HAP 工程    ┘ 都是外壳，只调 lingqu.build()
+   ↓ 以 path 依赖引用
+src/ + assets/         业务包：一份业务代码，两端各编各的产物
+```
+
+- `targets/` **整个目录是派生品**（`.gitignore` 已忽略，含本机绝对路径）。手改会被 `check` 判漂移并被下次 sync 覆盖。
+- 要改窗口标题/尺寸/资产/能力目录 → 改 `cj-tauri.toml`，然后 `cj-tauri sync`。
+- 要改业务逻辑 → 改 `src/`；要改界面 → 改 `assets/ui/`。
+
+### 2.2 新增命令必须三处联动（漏一处就是运行期报错）
+
+1. `src/main.cj` 的 `build()` 里 `app.register("t2h:xxx", XxxCommand())`
+2. `assets/capabilities/default.json` 的 `commands` 里放行 `t2h:xxx`
+3. `assets/ui/index.html` 里 `tauri.invoke('t2h:xxx', {...})`
+
+漏 ① → `command not registered`；漏 ② → `command not allowed`；漏 ③ → 界面没入口。
+`cj-tauri check` 的三方比对该报这一条——**它是门禁，不是建议**。
+
+### 2.3 cjh 引擎托管的语义（`src/cjh_host.cj`，移植自 cj-tauri `examples/ai-chat`）
+
+| 契约 | 内容 |
+|---|---|
+| 就绪判据 | 只有一条：`GET /api/health` 收到 200。没有"看着像起来了"这种模糊态 |
+| 复用优先 | 8765 上已有 cjh（可能是用户自己的）就复用，**不抢不杀**，退出时也不动它 |
+| 收尾归属 | 只有本应用拉起的（`gCjhOwned=true`）才在退出时终止 |
+| 拉起方式 | 必须 `launchHidden()`（本应用是 GUI 子系统，`std.process.launch` 会给子进程配黑窗口） |
+| 绑定地址 | 自己拉起的一律 `--bind 127.0.0.1`（cjh 默认绑 `0.0.0.0` 且默认无鉴权） |
+| 就绪等待 | 100ms × 10s；超时**不算成功**，只是留着进程等重试 |
+| 二进制校验 | vendor 目录 4 个文件逐个 SHA256；**验不过绝不解包也不执行** |
+| 退出收尾 | 守护线程 `waitForExit()` 后收；`t2h:quit` 先收再退；收 5 轮以覆盖"秒关窗口"的抢跑 |
+
+改动这一块之前先读 `docs/设计决策记录.md` 的 D-003 / D-004，别把语义改薄。
+
+---
+
+## 3. 编码规范
+
+- **仓颉**：`cjpm build` 零警告是硬要求。未使用的形参写成 `_`（`handle(_: String, _: JsonObject, _: IpcContext)`），
+  不要靠 `-Woff` 掩盖。
+- **测试文件**命名必须以 `*_test.cj` 结尾（发布构建会排除它），放 `src/tests/`，包名 `lingqu.tests`。
+- **只测纯函数**：进程、网络、WebView2、真机部署不在单测里模拟（见 §1 第 5 条）。
+- **禁止用 shell 做文本改写源码**（`Get-Content | Set-Content`）：Windows PowerShell 5.1 会按 GBK 误解码
+  无 BOM 的 UTF-8 文件（中文成乱码），而且 `Set-Content -Encoding UTF8` 会给 `.cj` 加上 BOM。
+  改源码用编辑器/工具的精确替换能力，改完 `git diff` 复核。
+- **`.ps1` 脚本必须带 UTF-8 BOM**（同上原因，无 BOM 会被当 GBK 读，报「数组索引表达式丢失或无效」）。
+  `.bat` 则相反：**保持纯 ASCII**（cmd 按 OEM 代码页读）。
+- **提交信息里别用 `\"` 转义**：PowerShell 双引号串会把命令拆坏。多行/含引号的提交信息写进文件再 `git commit -F`。
+- 仓颉细节坑（从 cjh / cj-tauri 继承，供参考）：`Directory.walk` **非递归**；
+  `StringBuilder.append(Byte)` 按十进制整数输出；块注释内禁写 `/*` 序列；零参 lambda 写 `{ => }`。
+
+---
+
+## 4. 已踩坑清单（禁止重踩）
+
+| # | 坑 | 正确做法 |
+|---|---|---|
+| 1 | 启动即退，退出码 `-1073741515`（0xC0000135） | 缺 DLL。`llvm-objdump -p main.exe` 看导入表；常见缺 `libcjtbridge.dll`（PATH 加框架 `native`） |
+| 2 | 导入表齐了还退 | 缺 `WebView2Loader.dll`（按名加载，不在导入表）→ PATH 加框架 `native\webview2` |
+| 3 | `资产未找到：ui/index.html` / 加载 0 个 capability | **工作目录必须是工程根**（launcher 用相对路径读 `assets/`） |
+| 4 | `create WebView2 controller failed: 0x800700AA` | WebView2 用户数据目录不可用 → 设 `WEBVIEW2_USER_DATA_FOLDER` 到可写目录 |
+| 5 | `create WebView2 controller failed: 0x8000ffff` + Chromium `Check failed` | 宿主不允许 Chromium 起子进程/开命名管道（容器、受限沙箱常见）——换普通桌面会话，不是应用问题 |
+| 6 | `ld.lld: failed to write the output file: Permission denied` | 上一版 `main.exe` 还在跑占用产物 → 先关窗口（`test.ps1` 会自动探测并提示） |
+| 7 | `.gitignore` 的 `*.dll` 把 vendor 的运行时 DLL 一起忽略 | 已加例外 `!vendor/cjh/win-x64/*.dll`。少了它们的症状是「窗口照起、http 照通、只有 https 全灭」 |
+| 8 | `cjpm build` 报 `imports package 'stdx.encoding.json' ... not added as a dependency` | 没设 `CANGJIE_STDX`（toml 里的 `${CANGJIE_STDX}` 展开为空） |
+| 9 | `cjpm test` 报一堆 `undefined symbol: cj_bridge_*` | 业务包 `cjpm.toml` 缺 `-lcjtbridge`（测试可执行文件走的是业务包自己的链接行） |
+| 10 | 跑 `.ps1` 报「数组索引表达式丢失或无效」且报错行中文是乱码 | 脚本存成 UTF-8 **带 BOM** |
+| 11 | `cj-tauri check` 报「骨架漂移」 | 改了 `cj-tauri.toml` 或 `assets/` 却没重跑 sync → `cj-tauri sync desktop` / `sync ohos` |
+
+---
+
+## 5. 文档与提交
+
+**一边做一边沉淀**：每轮改动完成时，同批更新
+
+1. `CHANGELOG.md` —— 该版本做了什么（Keep a Changelog 风格，按 Added / Changed / Fixed 分组）
+2. `docs/进度记录.md` —— 本轮做了什么、验证到什么程度、下一步
+3. `docs/需求追踪.md` —— 涉及验收项时更新状态
+4. `docs/会话交接.md` —— 会话结束/换机器时更新（元信息、未完成、怎么接）
+5. 踩了新坑 → 同时进 §4 与 `docs/开发环境.md`
+
+**提交信息**：`<type>(<scope>): <一句话>`，正文写「现象 → 根因 → 处置」，行为变更附证据。
+type 用 `feat` / `fix` / `docs` / `refactor` / `test` / `chore`。
+
+---
+
+## 6. 版本与发版
+
+- 版本号三处一致：`cjpm.toml` 的 `version`、`cj-tauri.toml` 的 `version`、`CHANGELOG.md` 的最新条目。
+- 重大更新递增中间位（0.2.0 → 0.3.0），小修递增最后位（0.2.0 → 0.2.1）。
+- 发版前：`.\scripts\test.ps1` 全绿 → 更新 CHANGELOG（写清日期与验证范围）→ 打 tag。
+
+---
+
+## 7. 交付检查清单
+
+- [ ] `.\scripts\test.ps1` 全绿（四道闸）
+- [ ] 新增纯函数有测试；bug 修复有复现用例
+- [ ] 新增命令三处联动齐全（register × capabilities × UI）
+- [ ] 行为变更有可观测证据（日志/返回值/窗口/进程状态）
+- [ ] `CHANGELOG.md` + `docs/进度记录.md` 已更新
+- [ ] 未验证的部分已在文档里如实标注
+- [ ] `git status` 干净，提交信息符合 §5

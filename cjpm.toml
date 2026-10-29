@@ -5,7 +5,7 @@
   cjc-version = "1.0.5"
   name = "lingqu"
   description = "lingqu - cj-tauri 业务包"
-  version = "0.1.0"
+  version = "0.2.0"
   target-dir = ""
   output-type = "static"
   compile-option = ""
@@ -16,6 +16,19 @@
 [dependencies]
   # cj-tauri 框架本体（由 cj-tauri create 写入的本机路径；换机器重跑 create 或手改）
   cjTauri = { path = "E:\\test\\harmonyos\\test\\cj-tauri" }
+
+# ── 为什么业务包自己要写 link-option ────────────────────────────────────────
+# 业务包里引用了 cjTauri 的 FFI 外部函数（cj_bridge_*），而 C 桥的实现只在
+# **可执行产物**那一侧链接（targets/desktop/cjpm.toml 由 sync 派生时自带）。
+# 但 `cjpm test` 会把本包编成一个独立的测试可执行文件，那条链接行里没有 C 桥，
+# 于是 ld.lld 报一串 `undefined symbol: cj_bridge_*`。在业务包这一层补上即可。
+#   · 路径是本机绝对路径，与上面的 cjTauri 依赖同源（同一条「换机器重跑 create」纪律）
+#   · 不写 --subsystem=windows：这里只影响测试可执行文件，测试要能往控制台打输出
+[target.x86_64-w64-mingw32]
+  link-option = "-LE:/test/harmonyos/test/cj-tauri/native -lcjtbridge"
+
+[target.x86_64-unknown-linux-gnu]
+  link-option = "-LE:/test/harmonyos/test/cj-tauri/native -lcjtbridge -lwebkit2gtk-4.1 -lgtk-3 -lgdk-3 -lglib-2.0 -lgio-2.0 -lsoup-3.0 -ljavascriptcoregtk-4.1 -lgobject-2.0"
 
 [target.x86_64-unknown-linux-gnu.bin-dependencies]
     path-option = ["${CANGJIE_STDX}"]
