@@ -1,0 +1,36 @@
+# 跨平台换行与文件类型约定
+#
+# 本仓在 Windows 上开发、后续会在 Linux 上接续：
+#   · 脚本类必须按目标平台的约定落地，否则「Windows 上好好的，Linux 上一跑就报
+#     /usr/bin/env: ‘bash\r’: No such file or directory」
+#   · 源码与文档统一 LF（仓颉编译器与各类工具链对 LF 最友好）
+
+* text=auto
+
+# 源码 / 文档：LF
+*.cj    text eol=lf
+*.toml  text eol=lf
+*.json  text eol=lf
+*.json5 text eol=lf
+*.md    text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.js    text eol=lf
+*.ts    text eol=lf
+
+# shell 脚本：LF，并且在 Linux 上保持可执行位
+*.sh    text eol=lf
+*.sh    executable
+
+# Windows 脚本：CRLF（cmd.exe 对 LF-only 的 .bat 处理不稳定）
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# 二进制：别动
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.exe   binary
+*.dll   binary
+vendor/cjh/linux-x64/cjh binary

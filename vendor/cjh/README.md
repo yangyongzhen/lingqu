@@ -3,46 +3,61 @@
 灵渠的 AI 能力全部来自 [cjh](https://atomgit.com/qq8864/cjh)（仓颉实现的 Coding Agent Harness）。
 这里放一份**可直接运行的 cjh 产物**，让仓库开箱即用，不必先让使用者自己去下载编译。
 
-## 版本
+## 版本与形态（两个平台）
 
-- cjh 版本：**v1.6.1**（Windows x64，实测 `/api/health` 回报 `{"status":"ok","version":"1.6.1","web_port":8765}`）
-- 形态：**非单文件**——`cjh.exe` + 3 个同目录 DLL（缺一个的典型症状：
-  `TlsException: Can not load openssl library or function`，即「窗口照起、http 照通、只有 https 全灭」）
+| 平台 | 目录 | 产物形态 | 说明 |
+|---|---|---|---|
+| Windows x64 | `win-x64/` | `cjh.exe` + 3 个同目录 DLL | cjh 版本 **v1.6.1**，实测 `/api/health` → `{"status":"ok","version":"1.6.1","web_port":8765}` |
+| Linux x64 | `linux-x64/` | 单个 `cjh` | 静态链接，**没有随行 DLL**（形态与 Windows 不同，这是 cjh 官方分发形态决定的） |
+
+Windows 那三个 DLL 是**按名字 `dlopen`/`LoadLibrary` 加载**的，不在导入表里，缺一个的症状很隐蔽：
+
+```
+TlsException: Can not load openssl library or function …
+```
+
+也就是「窗口照起、`http://` 照通，**只有 https（LLM 调用）全灭**」。
+所以 `.gitignore` 里对它们做了例外（模板的 `*.dll` 规则会把它们一起忽略）。
 
 | 文件 | 大小 | 作用 |
 |---|---|---|
 | `cjh.exe` | 13.4 MB | 引擎本体，`cjh web --port 8765 --bind 127.0.0.1` |
 | `libcangjie-runtime.dll` | 1.2 MB | 仓颉运行时 |
-| `libssl-3-x64.dll` | 1.2 MB | TLS（cjh 按名字 dlopen，**必须与 exe 同目录**） |
+| `libssl-3-x64.dll` | 1.2 MB | TLS（按名字加载，必须与 exe 同目录） |
 | `libcrypto-3-x64.dll` | 6.3 MB | 同上 |
 
 ## 校验
 
-```powershell
-cd vendor/cjh
-Get-FileHash win-x64/cjh.exe -Algorithm SHA256
-# 与 SHA256SUMS 里那一行逐字比对
-```
+应用侧**不会**静默使用来路不明的二进制：`src/cjh_host.cj` 内置了每个文件的 SHA256 常量，
+启动/部署时逐个比对，**验不过就绝不解包也不执行**（这份二进制能跑 shell、能读写工作区，
+必须防同名替换）。`t2h:env` 也会把它作为一项体检项报出来。
 
-应用侧不会静默使用来路不明的二进制：`t2h:env` 会把它作为一项体检项报出来（就绪 / 缺失）。
+手工核对：
+
+```bash
+# Linux / Git Bash
+sha256sum -c <(cat vendor/cjh/SHA256SUMS | sed 's| win-x64/| vendor/cjh/win-x64/|;s| linux-x64/| vendor/cjh/linux-x64/|')
+```
 
 ## 更新这份产物
 
-```powershell
-# 从 cjh 的构建输出目录重新灌入，并重算 SHA256SUMS
-.\tools\vendor-cjh.ps1 -Source <cjh 产物目录>
+```bash
+# Windows 产物（exe + 3 DLL）
+./tools/vendor-cjh.sh --source <cjh 产物目录> --platform win-x64
+
+# Linux 产物（单个 cjh）
+./tools/vendor-cjh.sh --source <cjh 产物目录> --platform linux-x64
 ```
 
-`<cjh 产物目录>` 里需要有 `cjh.exe`、`libcangjie-runtime.dll`、`libssl-3-x64.dll`、`libcrypto-3-x64.dll`。
+灌入后**必须同步 `src/cjh_host.cj` 里的 SHA256 常量**（Windows 4 个、Linux 1 个），
+否则启动时会报「vendor SHA256 不符」。这是设计如此。
 
-## 路径解析顺序（见 `src/main.cj` 的 `cjhPath()`）
+## 路径解析顺序（见 `src/cjh_host.cj` 的 `cjhBinPath()`）
 
 1. `LINGQU_CJH` 环境变量
-2. `vendor/cjh/win-x64/cjh.exe`（工作目录 = 工程根）
-3. `../vendor/cjh/win-x64/cjh.exe`（工作目录 = `targets/desktop`）
-4. 开发期兜底的本机路径
-
-全都没有时，应用如实报「引擎缺失」，其余功能照常可用（手动模式）。
+2. 已部署目录（Windows `%LOCALAPPDATA%\lingqu\cjh`；Linux `$HOME/.local/share/lingqu/cjh`）
+3. 仓内 `vendor/cjh/<平台>/`（**要过 SHA256**）
+4. 全都没有 → 如实报「引擎缺失」，AI 面板不可用但其余功能照常（手动模式）
 
 ## 为什么不直接内嵌进单个 exe
 

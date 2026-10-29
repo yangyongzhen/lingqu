@@ -142,6 +142,9 @@ public class EnvCommand <: CommandHandler {
         var res = JsonObject()
         res.put("items", arr)
         res.put("cjhPort", JsonInt(cjhPort()))
+        // 界面自检开关：置 1 时页面会自己跑一遍「开设置 → 折叠 → 展开」并逐步上报，
+        // 用于 CI / 无视觉能力场景下的版面验证（见 UiReportCommand）
+        res.put("uiProbe", JsonBool(envOr("LINGQU_UI_PROBE", "") == "1"))
         return res
     }
 }
@@ -216,6 +219,99 @@ func startLifecycleWaiter(app: TauriApp): Unit {
 // 业务装配点
 // ============================================================
 
+// ============================================================
+// ④ 界面自检（t2h:ui_report）：让界面自己报版面指标
+// ============================================================
+
+/**
+ * 页面在首次渲染完成后把版面指标回投后端，后端只做一件事：写一行结构化日志。
+ *
+ * 为什么需要它：GUI「对不对」习惯靠肉眼，而肉眼不可自动化——CI 里、
+ * 以及 AI 助手没有视觉能力时，都无法判断「三栏布局还在不在、折叠有没有生效」。
+ * 这条命令把版面变成可断言的数字：视口尺寸、grid 列宽、当前屏、屏数、id 数、JS 错误数。
+ */
+public class UiReportCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var o = JsonObject()
+        o.put("width", JsonInt(argInt(args, "width", 0)))
+        o.put("height", JsonInt(argInt(args, "height", 0)))
+        o.put("gridColumns", JsonString(argStr(args, "gridColumns", "?")))
+        o.put("screens", JsonInt(argInt(args, "screens", 0)))
+        o.put("activeScreen", JsonString(argStr(args, "activeScreen", "?")))
+        o.put("aiHidden", JsonBool(argBool(args, "aiHidden", false)))
+        o.put("idCount", JsonInt(argInt(args, "idCount", 0)))
+        o.put("settingsOpen", JsonBool(argBool(args, "settingsOpen", false)))
+        o.put("modelItems", JsonInt(argInt(args, "modelItems", 0)))
+        o.put("modelError", JsonString(argStr(args, "modelError", "")))
+        o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
+        let text = o.toJsonString()
+        // 落文件而不是只打日志：GUI 的 stderr 去向受框架日志重定向影响（见 AGENTS §4 第 14 条），
+        // 落盘的东西才是可复核的证据。
+        //   .lingqu/ui-report.json —— 最新一次快照（覆盖写）
+        //   .lingqu/ui-report.log  —— 自检序列（每次一行，追加），用于比对状态流转
+        let dir = ".lingqu"
+        let snap = ".lingqu/ui-report.json"
+        let logf = ".lingqu/ui-report.log"
+        var wrote = false
+        try {
+            if (!exists(Path(dir))) {
+                Directory.create(Path(dir))
+            }
+            File.writeTo(snap, text.toArray())
+            var prev = ""
+            if (exists(Path(logf))) {
+                prev = String.fromUtf8(File.readFrom(logf))
+            }
+            File.writeTo(logf, (prev + text + "\n").toArray())
+            wrote = true
+        } catch (e: Exception) {
+            eprintln("[lingqu][ui] 写报告失败：${e}")
+        }
+        eprintln("[lingqu][ui] ${text}")
+        var res = JsonObject()
+        res.put("ok", JsonBool(wrote))
+        res.put("path", JsonString(snap))
+        res.put("log", JsonString(logf))
+        return res
+    }
+}
+
+/** 取整数参数（缺失/类型不符回默认值） */
+func argInt(args: JsonObject, key: String, fallback: Int64): Int64 {
+    match (args.get(key)) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsInt => return v.asInt().getValue()
+            case JsonKind.JsFloat => return Int64(v.asFloat().getValue())
+            case _ => return fallback
+        }
+        case None => return fallback
+    }
+}
+
+/** 取字符串参数 */
+func argStr(args: JsonObject, key: String, fallback: String): String {
+    match (args.get(key)) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsString => return v.asString().getValue()
+            case _ => return fallback
+        }
+        case None => return fallback
+    }
+}
+
+/** 取布尔参数 */
+func argBool(args: JsonObject, key: String, fallback: Bool): Bool {
+    match (args.get(key)) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsBool => return v.asBool().getValue()
+            case _ => return fallback
+        }
+        case None => return fallback
+    }
+}
+
 /**
  * 装配：命令注册 + 引擎接线。
  * 新命令记得同步 assets/capabilities/default.json，否则前端拿到 command not allowed。
@@ -231,12 +327,17 @@ public func build(): AppSpec {
 
             app.register("t2h:env", EnvCommand())
             app.register("t2h:quit", QuitCommand(app))
+            app.register("t2h:ui_report", UiReportCommand())
 
-            // cjh 三条运维命令（status 纯读 / start 按路径 / deploy 校验+部署+拉起）
+            // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
+            // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）
             let cjhCmds = CjhCommands()
             app.register("t2h:cjh_status", cjhCmds)
             app.register("t2h:cjh_start", cjhCmds)
             app.register("t2h:cjh_deploy", cjhCmds)
+            app.register("t2h:cjh_models", cjhCmds)
+            app.register("t2h:cjh_settings", cjhCmds)
+            app.register("t2h:cjh_settings_save", cjhCmds)
 
             // 退出收尾（窗口关掉也生效）
             startLifecycleWaiter(app)

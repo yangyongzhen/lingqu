@@ -5,6 +5,8 @@ import std.crypto.digest.*    // digest<T> 泛型函数在 std 侧
 import stdx.crypto.digest.*   // 具体实现 SHA256 在 stdx 侧（两处都要 import）
 import std.env.*
 import std.fs.*
+import std.io.*            // InputStream（读 HTTP 响应体）
+import std.collection.*    // ArrayList
 // SubProcess / launch 只在非 Windows 分支用（Windows 走框架 launchHidden），
 // import 也跟着同一条 @When 门禁——否则 Windows 构建会多一条 unused import 警告
 @When[os != "Windows"]
@@ -126,6 +128,92 @@ public func putEndpoints(obj: JsonObject, port: Int64): Unit {
 }
 
 // ============================================================
+// cjh REST 客户端（模型配置面板用）
+// ============================================================
+//
+// 为什么不从页面直接 fetch：页面跑在 WebView 的自定义 scheme 下，跨源请求会撞 CORS；
+// 而把 127.0.0.1 塞进 capabilities 的 scopes.http 又等于给页面开一条出网白名单。
+// 这几个调用是「读引擎自身状态」，放后端更收得住——页面只走 invoke。
+
+/** 读响应体（流 → 字符串），上限 maxBytes：/api/models 之类都很小，超了就是异常 */
+func readHttpBody(body: InputStream, maxBytes: Int64): String {
+    var list = ArrayList<Byte>()
+    let buf = Array<Byte>(8192, repeat: UInt8(0))
+    try {
+        while (list.size < maxBytes) {
+            let n = body.read(buf)
+            if (n <= 0) {
+                break
+            }
+            for (i in 0..n) {
+                list.add(buf[i])
+            }
+        }
+    } catch (e: Exception) {
+        let _ = e
+    }
+    var bytes = Array<Byte>(list.size, repeat: UInt8(0))
+    for (i in 0..list.size) {
+        bytes[i] = list[i]
+    }
+    return String.fromUtf8(bytes)
+}
+
+/**
+ * 打 cjh 的 REST 接口：成功返回响应体原文，失败返回空串（调用方据此报错，不抛）。
+ * 只用回环地址与短超时——引擎就在本机，2 秒不通就是不通。
+ */
+func cjhApiCall(method: String, path: String, jsonBody: String): String {
+    let client = ClientBuilder()
+        .readTimeout(Duration.second * 2)
+        .writeTimeout(Duration.second * 2)
+        .build()
+    var out = ""
+    try {
+        let builder = HttpRequestBuilder()
+        if (method == "POST") {
+            builder.post()
+        } else {
+            builder.get()
+        }
+        builder.url("http://127.0.0.1:${cjhPort()}${path}")
+        builder.header("Accept", "application/json")
+        if (jsonBody.size > 0) {
+            builder.header("Content-Type", "application/json")
+            builder.body(jsonBody)
+        }
+        let resp = client.send(builder.build())
+        let status = Int64(resp.status)
+        if (status >= 200 && status < 300) {
+            out = readHttpBody(resp.body, 512 * 1024)
+        }
+        resp.close()
+    } catch (e: Exception) {
+        let _ = e
+    }
+    client.close()
+    return out
+}
+
+/** 把一段 JSON 文本包成 {ok:true, data:...}；失败回 {ok:false, error} */
+func wrapJsonPayload(raw: String, what: String): JsonValue {
+    var res = JsonObject()
+    if (raw.size == 0) {
+        res.put("ok", JsonBool(false))
+        res.put("error", JsonString("${what}：cjh 没有响应（未启动或端口不通）"))
+        return res
+    }
+    try {
+        res.put("ok", JsonBool(true))
+        res.put("data", JsonValue.fromStr(raw))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("error", JsonString("${what}：响应不是合法 JSON（${e}）"))
+    }
+    return res
+}
+
+// ============================================================
 // 路径解析：环境变量 → 已部署 → 仓内 vendor（校验过）
 // ============================================================
 
@@ -210,11 +298,24 @@ public func cjhVendorVerified(dir: String): Bool {
     return true
 }
 
+/** Linux 版随包二进制的 SHA256：单文件、静态链接，没有随行 DLL（与 Windows 形态不同） */
+@When[os != "Windows"]
+let CJH_LINUX_SHA: String = "f1ae8d65035da5fe6ca71be195e3e5020b0f07af9ede8c431f9f1549107a6309"
+
 @When[os != "Windows"]
 public func cjhVendorVerified(dir: String): Bool {
-    // 当前仓里只随包了 Windows 产物；非 Windows 走 LINGQU_CJH 或 LINGQU_CJH_BUNDLE
+    // Linux/其它类 Unix：单文件二进制，同样要过 SHA256——理由与 Windows 侧一致
     let p = dir + cjhPathSep() + cjhBinName()
-    return fileReadable(p)
+    if (!fileReadable(p)) {
+        eprintln("[lingqu] vendor 缺文件：${p}")
+        return false
+    }
+    let got = sha256FileHex(p)
+    if (got != CJH_LINUX_SHA) {
+        eprintln("[lingqu] vendor SHA256 不符：${cjhBinName()} expected=${CJH_LINUX_SHA} got=${got}")
+        return false
+    }
+    return true
 }
 
 /** 部署后的安装目录；拿不到返回空串（调用方据此如实报错） */
@@ -680,9 +781,112 @@ func cjhStartByPath(path: String): JsonObject {
 // 命令面：t2h:cjh_status / t2h:cjh_start / t2h:cjh_deploy
 // ============================================================
 
+/** 文本字段：非空才写入（空串＝不改，避免把 cjh 现有服务商清空），返回写入个数 */
+func putIfText(o: JsonObject, key: String, v: JsonValue): Int64 {
+    match (v.kind()) {
+        case JsonKind.JsString =>
+            let s = v.asString().getValue()
+            if (s.size > 0) {
+                o.put(key, JsonString(s))
+                return 1
+            }
+            return 0
+        case _ => return 0
+    }
+}
+
+/** 密钥字段：空串与含 *** 的掩码都表示"不改" */
+func putIfSecret(o: JsonObject, v: JsonValue): Int64 {
+    match (v.kind()) {
+        case JsonKind.JsString =>
+            let s = v.asString().getValue()
+            if (s.size > 0 && !s.contains("***")) {
+                o.put("apiKey", JsonString(s))
+                return 1
+            }
+            return 0
+        case _ => return 0
+    }
+}
+
+/** 数字字段：整数按整数发，小数按小数发（温度是 Float64） */
+func putIfNumber(o: JsonObject, key: String, v: JsonValue): Int64 {
+    match (v.kind()) {
+        case JsonKind.JsInt =>
+            o.put(key, JsonInt(v.asInt().getValue()))
+            return 1
+        case JsonKind.JsFloat =>
+            o.put(key, JsonFloat(v.asFloat().getValue()))
+            return 1
+        case _ => return 0
+    }
+}
+
+/** 取 JsonValue 里的布尔（类型不对或没有都给 false） */
+func boolOrFalse(v: JsonValue): Bool {
+    match (v.kind()) {
+        case JsonKind.JsBool => return v.asBool().getValue()
+        case _ => return false
+    }
+}
+
 /**
- * cjh 的三条运维命令。放在应用里而不是做成插件：它们管的是**本应用自己 spawn 的进程**
+ * 保存模型配置：只把**用户真的填了**的字段发给 cjh，留空的字段一个都不碰。
+ * 这条很要紧——cjh 对 apiKey 有"空串/掩码不更新"的保护，但对 baseUrl/model 没有：
+ * 把空串发过去会把用户已有的服务商清掉。
+ */
+func cjhSaveSettings(args: JsonObject): JsonValue {
+    var payload = JsonObject()
+    var n: Int64 = 0
+    match (args.get("data")) {
+        case Some(v) =>
+            match (v.kind()) {
+                case JsonKind.JsObject =>
+                    for ((k, val) in v.asObject().getFields()) {
+                        match (k) {
+                            case "baseUrl" => n += putIfText(payload, "baseUrl", val)
+                            case "model" => n += putIfText(payload, "model", val)
+                            case "apiKey" => n += putIfSecret(payload, val)
+                            case "temperature" => n += putIfNumber(payload, "temperature", val)
+                            case "maxTokens" => n += putIfNumber(payload, "maxTokens", val)
+                            case "maxIterations" => n += putIfNumber(payload, "maxIterations", val)
+                            case _ => ()
+                        }
+                    }
+                case _ => ()
+            }
+        case None => ()
+    }
+    var res = JsonObject()
+    if (n == 0) {
+        res.put("ok", JsonBool(false))
+        res.put("error", JsonString("没有要保存的字段（留空的字段会跳过，不会覆盖 cjh 现有配置）"))
+        return res
+    }
+    let wrapped = wrapJsonPayload(cjhApiCall("POST", "/api/settings", payload.toJsonString()), "保存配置")
+    // 保存成功时把「实际写入了几个字段」回给页面，反馈才准确
+    var okFlag = false
+    match (wrapped.asObject().get("ok")) {
+        case Some(v) => okFlag = boolOrFalse(v)
+        case None => ()
+    }
+    if (okFlag) {
+        wrapped.asObject().put("savedFields", JsonInt(n))
+    }
+    return wrapped
+}
+
+/**
+ * cjh 的运维与配置命令。放在应用里而不是做成插件：它们管的是**本应用自己 spawn 的进程**
  * （句柄就在本文件的两个全局里），没有跨应用复用价值。
+ *
+ * 命令面：
+ *   t2h:cjh_status         三态 + 端点（纯读，可轮询）
+ *   t2h:cjh_deploy         校验/部署/拉起/健康检查
+ *   t2h:cjh_start          按指定路径拉起（部署不可用时的兜底，UI 默认不给入口）
+ *   t2h:cjh_models         GET  /api/models   → {ok, data:{current, models:[...]}}
+ *   t2h:cjh_settings       GET  /api/settings → {ok, data:{...}}（密钥是掩码）
+ *   t2h:cjh_settings_save  POST /api/settings ← 只提交给到的字段
  */
 public class CjhCommands <: CommandHandler {
     public init() {}
@@ -693,6 +897,9 @@ public class CjhCommands <: CommandHandler {
             case "t2h:cjh_status" => cjhStatusJson()
             case "t2h:cjh_start" => cjhStartByPath(stringArgOr(args, "path", ""))
             case "t2h:cjh_deploy" => cjhDeployAndStart()
+            case "t2h:cjh_models" => wrapJsonPayload(cjhApiCall("GET", "/api/models", ""), "读取模型列表")
+            case "t2h:cjh_settings" => wrapJsonPayload(cjhApiCall("GET", "/api/settings", ""), "读取配置")
+            case "t2h:cjh_settings_save" => cjhSaveSettings(args)
             case _ => throw CommandException("unknown cjh command: ${cmd}")
         }
     }

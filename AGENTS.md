@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.2.0**（2026-10-29），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.4.0**（2026-10-30），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；换机器/换会话先读 `docs/会话交接.md`；
 > 需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -27,7 +27,7 @@
 
 **任何代码变更交付前必须满足：**
 
-1. `.\scripts\test.ps1` **全绿**。四道闸缺一不可：
+1. `./scripts/test.sh`（Linux/macOS/Git-Bash）或 `scripts\test.bat`（Windows）**全绿**。四道闸缺一不可：
    - ① 业务包 `cjpm build` —— **零警告**（unused 变量/导入、deprecated 一律清零，禁止"先交付后清理"）
    - ② 业务包 `cjpm test` —— `FAILED: 0`、`ERROR: 0`
    - ③ `cj-tauri check` —— 清单校验 + 骨架漂移 + **能力三方比对**（声明 × 插件自述 × 实际装配）
@@ -39,6 +39,9 @@
 4. **跑不起来就如实说明**（含「哪些平台未验证」），禁止把未验证说成通过。
 5. 涉及 WebView2 / cjh 进程 / 真机部署的部分，**单元测试不造假绿**——这类以实机为准，
    并在 `docs/进度记录.md` 写清「验证到什么程度、证据是什么」。
+6. **界面改动要能被自动断言**：用 `t2h:ui_report` 回投版面指标（视口 / grid 列宽 / 当前屏 /
+   设置面板状态 / 模型条数 / JS 错误数），需要整段流程时置 `LINGQU_UI_PROBE=1` 让页面自跑序列。
+   产物落 `.lingqu/ui-report.{json,log}`（已 gitignore）。**没有视觉也要能证明版面对**。
 
 ---
 
@@ -91,11 +94,16 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
   不要靠 `-Woff` 掩盖。
 - **测试文件**命名必须以 `*_test.cj` 结尾（发布构建会排除它），放 `src/tests/`，包名 `lingqu.tests`。
 - **只测纯函数**：进程、网络、WebView2、真机部署不在单测里模拟（见 §1 第 5 条）。
-- **禁止用 shell 做文本改写源码**（`Get-Content | Set-Content`）：Windows PowerShell 5.1 会按 GBK 误解码
-  无 BOM 的 UTF-8 文件（中文成乱码），而且 `Set-Content -Encoding UTF8` 会给 `.cj` 加上 BOM。
-  改源码用编辑器/工具的精确替换能力，改完 `git diff` 复核。
-- **`.ps1` 脚本必须带 UTF-8 BOM**（同上原因，无 BOM 会被当 GBK 读，报「数组索引表达式丢失或无效」）。
-  `.bat` 则相反：**保持纯 ASCII**（cmd 按 OEM 代码页读）。
+- **脚本一律 bash 为准**（跨平台一份实现）：`scripts/*.sh` 是功能本体，`*.bat` 只做「找 bash 再委托」。
+  理由与教训见 ADR **D-012**：`.ps1` 有三大坑（无 BOM 按 GBK 解码、`2>&1` 把 stderr 变成
+  ErrorRecord 后在 EAP=Stop 下炸且报错文案误导、`Set-Content` 给 `.cj`/`.toml` 加 BOM），
+  且 Windows 专用不利于后续 Linux 接续。**不要再新增 `.ps1`**。
+- **`.bat` 必须纯 ASCII**（cmd 按 OEM 代码页读）；**`.sh` 必须 LF**（由 `.gitattributes` 保证，
+  否则 Linux 上撞 `/usr/bin/env: 'bash\r'`）。
+- **禁止用 shell 做文本改写源码**（`Get-Content | Set-Content`）：PS 5.1 会按 GBK 误解码无 BOM 的
+  UTF-8 文件（中文成乱码），并给文件加 BOM（`.cj`/`.toml` 都不该有）。改源码用编辑器/工具的
+  精确替换能力，改完 `git diff` 复核。
+- **临时调试脚本别留在仓里**：`scripts/.dbg*.ps1` 这类东西会被 `git add -A` 带进去。
 - **提交信息里别用 `\"` 转义**：PowerShell 双引号串会把命令拆坏。多行/含引号的提交信息写进文件再 `git commit -F`。
 - 仓颉细节坑（从 cjh / cj-tauri 继承，供参考）：`Directory.walk` **非递归**；
   `StringBuilder.append(Byte)` 按十进制整数输出；块注释内禁写 `/*` 序列；零参 lambda 写 `{ => }`。
@@ -111,12 +119,17 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 3 | `资产未找到：ui/index.html` / 加载 0 个 capability | **工作目录必须是工程根**（launcher 用相对路径读 `assets/`） |
 | 4 | `create WebView2 controller failed: 0x800700AA` | WebView2 用户数据目录不可用 → 设 `WEBVIEW2_USER_DATA_FOLDER` 到可写目录 |
 | 5 | `create WebView2 controller failed: 0x8000ffff` + Chromium `Check failed` | 宿主不允许 Chromium 起子进程/开命名管道（容器、受限沙箱常见）——换普通桌面会话，不是应用问题 |
-| 6 | `ld.lld: failed to write the output file: Permission denied` | 上一版 `main.exe` 还在跑占用产物 → 先关窗口（`test.ps1` 会自动探测并提示） |
+| 6 | `ld.lld: failed to write the output file: Permission denied` | 上一版 `main.exe` 还在跑占用产物 → 先关窗口（门禁脚本会自动探测并提示） |
 | 7 | `.gitignore` 的 `*.dll` 把 vendor 的运行时 DLL 一起忽略 | 已加例外 `!vendor/cjh/win-x64/*.dll`。少了它们的症状是「窗口照起、http 照通、只有 https 全灭」 |
 | 8 | `cjpm build` 报 `imports package 'stdx.encoding.json' ... not added as a dependency` | 没设 `CANGJIE_STDX`（toml 里的 `${CANGJIE_STDX}` 展开为空） |
 | 9 | `cjpm test` 报一堆 `undefined symbol: cj_bridge_*` | 业务包 `cjpm.toml` 缺 `-lcjtbridge`（测试可执行文件走的是业务包自己的链接行） |
-| 10 | 跑 `.ps1` 报「数组索引表达式丢失或无效」且报错行中文是乱码 | 脚本存成 UTF-8 **带 BOM** |
+| 10 | 跑 `.ps1` 报「数组索引表达式丢失或无效」且报错行中文是乱码 | 历史坑：本仓已弃用 `.ps1`（见 §3 与 ADR D-012）。若确要写 PowerShell 脚本，必须存成 UTF-8 **带 BOM** |
 | 11 | `cj-tauri check` 报「骨架漂移」 | 改了 `cj-tauri.toml` 或 `assets/` 却没重跑 sync → `cj-tauri sync desktop` / `sync ohos` |
+| 12 | 链接报 `undefined symbol: _CGP7cjTauri…`（符号名一串乱码） | 业务包公开接口变了（新增/改动 `public func`）但骨架的增量缓存还是旧对象 → `./scripts/test.sh -c`（删 `targets/desktop/target` 与 `target/` 后重建） |
+| 13 | 页面报 `command not registered: t2h:xxx` | **同一个 handler 类的 `match` 里写了分支 ≠ 已注册**——每个命令名都要单独 `app.register`。`cj-tauri check` 只校验「已注册 ⊆ 已声明」，**不查反方向** |
+| 14 | 后端 `eprintln` 不出现在 stderr 也不在 .log 里 | `setLogToDefaultFile` 会接管 stderr 的去向；**要当证据的东西落文件**（如 `.lingqu/ui-report.json`），别只打日志 |
+| 15 | `cjpm test` 偶发 exit=1 但 `FAILED: 0 / ERROR: 0` | 业务包是 `output-type = "static"`，测试可执行文件静态链接；cjh 的 AGENTS 记录过同类「测试框架在退出时 double free」。**门禁失败必须打印日志尾部**（早期只 grep FAILED/ERROR，把真因藏了） |
+| 16 | Windows 上 `scripts/*.sh` 里命令全部 `exit 127` | 机器上已导出 `CANGJIE_HOME=D:\...` 这种 Windows 形式路径，MSYS 的 PATH 里无效 → 脚本内统一 `to_posix`（`cygpath -u` 或手写转换） |
 
 ---
 
@@ -139,13 +152,14 @@ type 用 `feat` / `fix` / `docs` / `refactor` / `test` / `chore`。
 
 - 版本号三处一致：`cjpm.toml` 的 `version`、`cj-tauri.toml` 的 `version`、`CHANGELOG.md` 的最新条目。
 - 重大更新递增中间位（0.2.0 → 0.3.0），小修递增最后位（0.2.0 → 0.2.1）。
-- 发版前：`.\scripts\test.ps1` 全绿 → 更新 CHANGELOG（写清日期与验证范围）→ 打 tag。
+- 发版前：`./scripts/test.sh`（或 `scripts\test.bat`）全绿 → 更新 CHANGELOG（写清日期与验证范围）→ 打 tag。
 
 ---
 
 ## 7. 交付检查清单
 
-- [ ] `.\scripts\test.ps1` 全绿（四道闸）
+- [ ] `./scripts/test.sh` 或 `scripts\test.bat` 全绿（四道闸）
+- [ ] 界面改动有 `t2h:ui_report` 的版面证据（或 `LINGQU_UI_PROBE=1` 序列）
 - [ ] 新增纯函数有测试；bug 修复有复现用例
 - [ ] 新增命令三处联动齐全（register × capabilities × UI）
 - [ ] 行为变更有可观测证据（日志/返回值/窗口/进程状态）

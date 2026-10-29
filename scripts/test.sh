@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+# 灵渠迁移台 · 交付门禁（唯一交付凭证）
+#
+# 四道闸，缺一不可，任何一道红即整体失败（exit 1）：
+#   ① 业务包 cjpm build   —— 零警告（cj-tauri 的硬规矩：unused/import/deprecated 一律清零）
+#   ② 业务包 cjpm test    —— 单元测试全绿（FAILED=0 / ERROR=0）
+#   ③ cj-tauri check     —— 清单校验 + 骨架漂移 + 能力三方比对（声明×自述×装配）
+#   ④ 桌面产物 cjpm build —— 骨架侧也要编得过
+#
+# 为什么是 bash：本仓要跨平台（当前 Windows + Linux，后续鸿蒙 PC）。
+# 一份实现，Windows 用 scripts/test.bat 包装（它只负责找到 bash 再委托过来），
+# 与 cj-tauri / cjh 两个上游仓的口径一致（它们也是 test.sh + run_win.bat 的组合）。
+#
+# 用法：
+#   ./scripts/test.sh               # 全量（交付前必跑）
+#   ./scripts/test.sh -q            # 只跑 ①②（改业务代码时的快速回路）
+#   ./scripts/test.sh -s            # 先 cj-tauri sync 再跑（改了 cj-tauri.toml 之后）
+#   ./scripts/test.sh -c            # 删增量缓存再跑（业务包公开接口变更后必须）
+#
+# 环境变量（都有按平台的默认值，跨机器时覆盖即可）：
+#   CANGJIE_HOME / CANGJIE_STDX / CJ_TAURI_ROOT
+
+set -uo pipefail
+
+QUICK=0
+SYNC=0
+CLEAN=0
+for arg in "$@"; do
+  case "$arg" in
+    -q|--quick) QUICK=1 ;;
+    -s|--sync)  SYNC=1 ;;
+    -c|--clean) CLEAN=1 ;;
+    -h|--help)
+      sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *) echo "[x] 未知参数：$arg（可用 -q / -s / -c / -h）" >&2; exit 2 ;;
+  esac
+done
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ---------- 平台探测 ----------
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+  Linux)                OS=linux ;;
+  Darwin)               OS=macos ;;
+  *)                    OS=unknown ;;
+esac
+
+# Windows 形式的路径（D:\x\y 或 D:/x/y）在 MSYS 的 PATH 里是无效条目——
+# 机器上若已导出 CANGJIE_HOME=D:\... ，直接把 Windows 形式塞进 PATH 会导致
+# 所有命令 exit 127（command not found）。统一转成 /d/x/y。
+to_posix() {
+  case "$1" in
+    [A-Za-z]:[\\/]*)
+      if command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "$1"
+      else
+        local drive rest
+        drive="$(printf '%s' "${1:0:1}" | tr 'A-Z' 'a-z')"
+        rest="${1:2}"
+        rest="${rest//\\//}"
+        printf '/%s%s\n' "$drive" "$rest"
+      fi
+      ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+# ---------- 默认路径（环境变量优先） ----------
+if [ "$OS" = "windows" ]; then
+  : "${CANGJIE_HOME:=/d/Program Files (x86)/Cangjie}"
+  : "${CANGJIE_STDX:=/d/cangjie-stdx/windows_x86_64_cjnative/dynamic/stdx}"
+  : "${CJ_TAURI_ROOT:=/e/test/harmonyos/test/cj-tauri}"
+else
+  : "${CANGJIE_HOME:=/opt/cangjie/cangjie}"
+  : "${CANGJIE_STDX:=/opt/cangjie-stdx/linux_x86_64_cjnative/dynamic/stdx}"
+  : "${CJ_TAURI_ROOT:=$ROOT/../cj-tauri}"
+fi
+
+say()  { printf '%s\n' "$*"; }
+info() { printf '\033[36m%s\033[0m\n' "$*"; }
+pass() { printf '  \033[32m[PASS]\033[0m %s\n' "$*"; }
+fail() { printf '  \033[31m[FAIL]\033[0m %s\n' "$*"; }
+warn() { printf '      \033[33m%s\033[0m\n' "$*"; }
+
+# 三个根路径统一归一化（Windows 上环境变量可能是 D:\... 形式）
+CANGJIE_HOME="$(to_posix "$CANGJIE_HOME")"
+CANGJIE_STDX="$(to_posix "$CANGJIE_STDX")"
+CJ_TAURI_ROOT="$(to_posix "$CJ_TAURI_ROOT")"
+export CANGJIE_HOME CANGJIE_STDX CJ_TAURI_ROOT
+
+for d in "$CANGJIE_HOME" "$CANGJIE_STDX" "$CJ_TAURI_ROOT/native"; do
+  [ -d "$d" ] || { echo "[x] 缺目录：$d（用环境变量覆盖脚本内置默认值）" >&2; exit 1; }
+done
+
+CLI="$CJ_TAURI_ROOT/cli/target/release/bin/main.exe"
+[ "$OS" = "linux" ] && CLI="$CJ_TAURI_ROOT/cli/target/release/bin/main"
+
+# ---------- PATH / 动态库 ----------
+export CANGJIE_HOME CANGJIE_STDX CJ_TAURI_ROOT
+if [ "$OS" = "windows" ]; then
+  RUNTIME_LIB="$CANGJIE_HOME/runtime/lib/windows_x86_64_cjnative"
+  EXTRA="$CJ_TAURI_ROOT/native:$CJ_TAURI_ROOT/native/webview2"
+else
+  RUNTIME_LIB="$CANGJIE_HOME/runtime/lib/linux_x86_64_cjnative"
+  EXTRA="$CJ_TAURI_ROOT/native"
+  export LD_LIBRARY_PATH="$RUNTIME_LIB:$CANGJIE_STDX:$CJ_TAURI_ROOT/native:${LD_LIBRARY_PATH:-}"
+fi
+export PATH="$RUNTIME_LIB:$CANGJIE_HOME/bin:$CANGJIE_HOME/tools/bin:$CANGJIE_HOME/tools/lib:$CANGJIE_STDX:$EXTRA:$PATH"
+
+# 跑原生命令并同时收 stdout+stderr（写临时文件，不做管道捕获：
+# 管道里的 stderr 记录对象在 set -e 环境下会带来一堆噪音，落文件最干净）
+TEXT=""
+CODE=0
+run_capture() {
+  local dir="$1"; shift
+  local log
+  log="$(mktemp 2>/dev/null || echo "/tmp/lingqu-gate.$$")"
+  ( cd "$dir" && "$@" ) >"$log" 2>&1
+  CODE=$?
+  # 去掉 ANSI 转义（cjpm 的彩色输出）
+  TEXT="$(sed -E "s/$(printf '\033')\[[0-9;]*m//g" "$log" 2>/dev/null || cat "$log")"
+  rm -f "$log"
+}
+
+count_pattern() { printf '%s\n' "$TEXT" | grep -c -E "$1" || true; }
+
+# 失败时打印捕获日志的尾部：失败原因往往既不含 FAILED 也不含 error:（而是崩溃/链接错），
+# 只 grep 关键词会把真正原因藏起来。
+dump_tail() {
+  local n="${1:-30}"
+  printf '%s\n' "$TEXT" | tail -n "$n" | while IFS= read -r l; do warn "$l"; done
+}
+
+RESULTS=()
+
+info "=== 灵渠交付门禁（$OS）==="
+say "工程      : $ROOT"
+say "仓颉 SDK  : $CANGJIE_HOME"
+say "stdx      : $CANGJIE_STDX"
+say "cj-tauri  : $CJ_TAURI_ROOT"
+
+# ---------- 可选：sync ----------
+if [ "$SYNC" = "1" ]; then
+  info "[0/4] cj-tauri sync ..."
+  if [ ! -x "$CLI" ] && [ ! -f "$CLI" ]; then fail "找不到 cj-tauri CLI：$CLI"; exit 1; fi
+  run_capture "$ROOT" "$CLI" sync
+  if [ "$CODE" -ne 0 ]; then fail "sync 失败"; printf '%s\n' "$TEXT"; exit 1; fi
+  pass "sync"
+fi
+
+# ---------- ① 业务包构建（零警告） ----------
+info "[1/4] 业务包 cjpm build（零警告）..."
+run_capture "$ROOT" cjpm build
+WARN="$(count_pattern '^[[:space:]]*warning:')"
+if [ "$CODE" -eq 0 ] && [ "$WARN" -eq 0 ]; then
+  pass "cjpm build（0 warning）"
+  RESULTS+=("build-biz:PASS")
+else
+  fail "cjpm build exit=$CODE warnings=$WARN"
+  dump_tail 40
+  RESULTS+=("build-biz:FAIL")
+fi
+
+# ---------- ② 单元测试 ----------
+info "[2/4] 业务包 cjpm test ..."
+run_capture "$ROOT" cjpm test
+FAILN="$(count_pattern 'FAILED:[[:space:]]*[1-9]')"
+ERRN="$(count_pattern 'ERROR:[[:space:]]*[1-9]')"
+TOTAL="$(printf '%s\n' "$TEXT" | grep -oE 'TOTAL:[[:space:]]*[0-9]+' | tail -1 | grep -oE '[0-9]+' || true)"
+if [ "$CODE" -eq 0 ] && [ "$FAILN" -eq 0 ] && [ "$ERRN" -eq 0 ]; then
+  pass "cjpm test（TOTAL=${TOTAL:-?}，FAILED=0，ERROR=0）"
+  RESULTS+=("test:PASS")
+else
+  fail "cjpm test exit=$CODE（FAILED=$FAILN ERROR=$ERRN）"
+  # 不要只 grep FAILED/ERROR —— 测试二进制崩溃/编译失败时日志里根本没有这两个词，
+  # 早先版本就是因为只 grep 而把真实原因藏了（见 AGENTS §4 第 13 条）
+  dump_tail 40
+  RESULTS+=("test:FAIL")
+fi
+
+if [ "$QUICK" = "1" ]; then
+  say ""
+  say "（-q：跳过 ③④）"
+  if printf '%s\n' "${RESULTS[@]}" | grep -q 'FAIL'; then exit 1; fi
+  printf '\033[32m结果：%s\033[0m\n' "${RESULTS[*]}"
+  exit 0
+fi
+
+# ---------- ③ cj-tauri check（三方比对 + 漂移） ----------
+info "[3/4] cj-tauri check（能力三方比对 / 骨架漂移）..."
+if [ ! -f "$CLI" ] && [ ! -x "$CLI" ]; then
+  fail "找不到 CLI：$CLI"
+  RESULTS+=("check:FAIL")
+else
+  run_capture "$ROOT" "$CLI" check
+  if [ "$CODE" -eq 0 ]; then
+    pass "cj-tauri check"
+    RESULTS+=("check:PASS")
+  else
+    fail "cj-tauri check"
+    printf '%s\n' "$TEXT" | head -20 | while IFS= read -r l; do [ -n "$l" ] && warn "$l"; done
+    RESULTS+=("check:FAIL")
+  fi
+fi
+
+# ---------- ④ 桌面产物构建 ----------
+info "[4/4] 桌面产物 cjpm build（targets/desktop）..."
+APPDIR="$ROOT/targets/desktop"
+if [ ! -d "$APPDIR" ]; then
+  fail "骨架不存在：$APPDIR（先跑 ./scripts/test.sh -s）"
+  RESULTS+=("build-app:FAIL")
+else
+  if [ "$CLEAN" = "1" ]; then
+    # 业务包公开接口变了之后，骨架的增量缓存会留下旧对象
+    # （现象：链接报一串乱码符号名 undefined symbol: _CGP7cjTauri…）
+    warn "-c：删除增量缓存（targets/desktop/target 与 target/）"
+    rm -rf "$APPDIR/target" "$ROOT/target"
+  fi
+  # 产物被占用是最常见的假失败：上一版窗口还开着，链接器报 Permission denied
+  if [ "$OS" = "windows" ]; then
+    tasklist 2>/dev/null | grep -qi '^main\.exe' && {
+      warn "[!] 上一版 main.exe 仍在运行，先结束它以释放产物"
+      taskkill //F //IM main.exe >/dev/null 2>&1 || true
+      sleep 1
+    }
+  else
+    pgrep -x main >/dev/null 2>&1 && {
+      warn "[!] 上一版 lingqu 仍在运行，先结束它以释放产物"
+      pkill -x main >/dev/null 2>&1 || true
+      sleep 1
+    }
+  fi
+  run_capture "$APPDIR" cjpm build
+  WARN="$(count_pattern '^[[:space:]]*warning:')"
+  if [ "$CODE" -eq 0 ] && [ "$WARN" -eq 0 ]; then
+    pass "targets/desktop cjpm build（0 warning）"
+    RESULTS+=("build-app:PASS")
+  else
+    fail "targets/desktop cjpm build exit=$CODE warnings=$WARN"
+    printf '%s\n' "$TEXT"
+    RESULTS+=("build-app:FAIL")
+  fi
+fi
+
+# ---------- 汇总 ----------
+say ""
+if printf '%s\n' "${RESULTS[@]}" | grep -q 'FAIL'; then
+  printf '\033[31m门禁未通过：%s\033[0m\n' "${RESULTS[*]}"
+  printf '\033[31m修到全绿再提交（AGENTS.md §1）\033[0m\n'
+  exit 1
+fi
+printf '\033[32m门禁全绿：%s\033[0m\n' "${RESULTS[*]}"
+printf '\033[32m别忘了同步 CHANGELOG.md 与 docs/进度记录.md（AGENTS.md §5）\033[0m\n'
+exit 0

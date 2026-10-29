@@ -51,21 +51,19 @@ lingqu/
 ## 构建与运行
 
 前置：仓颉 SDK（`cjpm` / `cjc`）、[cj-tauri 框架仓](https://atomgit.com/qq8864/cj-tauri)（含 `native\libcjtbridge.dll`
-与 `native\webview2\WebView2Loader.dll`）、stdx。**这些路径都在一个脚本里配好**，详见 [`docs/开发环境.md`](docs/开发环境.md)。
+与 `native\webview2\WebView2Loader.dll`）、stdx。**这些路径都在脚本里配好了**，详见 [`docs/开发环境.md`](docs/开发环境.md)。
 
-```powershell
-.\scripts\run-dev.ps1 -Sync -Build -Cjh
+```bash
+./scripts/setup.sh          # 换机器先跑：把 cjpm.toml 里的本机绝对路径对齐
+./scripts/test.sh -s        # 门禁四道闸（首次会派生骨架）
+./scripts/run-dev.sh -b     # 编译 + 起窗口（AI 引擎自动拉起）
 ```
 
-| 开关 | 作用 |
-|---|---|
-| `-Sync` | 先 `cj-tauri sync`（改了 `cj-tauri.toml` 之后要重跑） |
-| `-Build` | 先 `cd targets\desktop && cjpm build` |
-| `-Cjh` | 顺带把 `vendor/cjh/win-x64/cjh.exe` 拉起来（8765 上已有实例则复用） |
+Windows 上把 `./scripts/xxx.sh` 换成 `scripts\xxx.bat`（同样参数）。**脚本一律 bash 为准，
+`.bat` 只做「找 bash 再委托」**——一份实现、两个平台（见 ADR D-012）。
 
 脚本做的事（少一条就跑不起来，全是实测报错换来的）：PATH 加**四段**——仓颉运行时、stdx、
-框架 `native`、框架 `native\webview2`；**工作目录切到工程根**（launcher 用相对路径读 `assets/`）；
-`LINGQU_CJH` 指向仓内 cjh。
+框架 `native`、框架 `native\webview2`；**工作目录切到工程根**（launcher 用相对路径读 `assets/`）。
 
 鸿蒙端（PC / 2in1）：
 
@@ -151,12 +149,16 @@ cjh 以 **web 模式**被驱动：`cjh web --port 8765 --bind 127.0.0.1`，对�
 
 ## 工程门禁
 
-```powershell
-.\scripts\test.ps1          # 四道闸：业务包构建(零警告) + 单测 + check 三方比对 + 骨架构建
-.\scripts\test.ps1 -Quick   # 只跑前两道（改代码时的快速回路）
+```bash
+./scripts/test.sh -s        # 四道闸：业务包构建(零警告) + 单测 + check 三方比对 + 骨架构建
+./scripts/test.sh -q        # 只跑前两道（改代码时的快速回路）
 ```
 
-**任何代码变更交付前必须全绿**，规范见 [`AGENTS.md`](AGENTS.md) §1。
+Windows：`scripts\test.bat -s`（同样参数）。**任何代码变更交付前必须全绿**，规范见 [`AGENTS.md`](AGENTS.md) §1。
+
+界面改动额外有一条：`t2h:ui_report` 会把版面指标（grid 列宽 / 当前屏 / 设置面板 / 模型条数 / JS 错误）
+落 `.lingqu/ui-report.{json,log}`；整段流程验证可用 `LINGQU_UI_PROBE=1` 让页面自跑序列——
+**没有视觉也能证明版面对**。
 
 ---
 

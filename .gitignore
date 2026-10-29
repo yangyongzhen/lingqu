@@ -27,7 +27,11 @@ assets/ui/dev-server.log
 .DS_Store
 Thumbs.db
 
-# 本地运行产物（scripts/run-dev.ps1 生成）
+# 本地运行产物（scripts/run-dev.sh / .bat 生成）
 .wv2data/
 .run-out.txt
 .run-err.txt
+
+# 运行期自检产物（t2h:ui_report 落盘）与本地调试截图
+.lingqu/
+.shot-*.png

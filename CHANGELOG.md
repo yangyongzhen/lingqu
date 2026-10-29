@@ -5,6 +5,93 @@
 
 ---
 
+## [0.4.0] - 2026-10-30
+
+**主题**：跨平台工程化（Windows + Linux 同源）+ 界面可自动验证。
+
+### Added
+
+- **门禁改 bash 为准（跨平台一份实现）**：`scripts/test.sh`（Linux / macOS / Windows-Git-Bash 通用）
+  + `scripts/test.bat`（Windows 只做"找 bash 再委托"，纯 ASCII）。与 cj-tauri / cjh 两个上游仓同口径。
+  支持 `-q`（快速回路）/ `-s`（先 sync）/ `-c`（清增量缓存）
+- **`scripts/run-dev.sh` + `run-dev.bat`**：跨平台启动（PATH/动态库/工作目录一次配好；引擎由应用自己托管）
+- **`scripts/setup.sh`**：换机器时把 `cjpm.toml` 里写死的本机绝对路径（框架 path + 两处 `-L<native>`）
+  一键改成本机值，不必重跑 `cj-tauri create`（那会覆盖业务代码）
+- **Linux 版内置引擎**：`vendor/cjh/linux-x64/cjh`（单文件、静态链接，无随行 DLL），
+  并在 `cjhVendorVerified` 的 Linux 分支里加了 SHA256 校验
+- **`.gitattributes`**：`.sh` 强制 LF 且保留可执行位、`.bat` 用 CRLF、二进制不动——
+  否则 Linux 上会撞 `/usr/bin/env: 'bash\r': No such file or directory`
+- **界面自检闭环 `t2h:ui_report`**：页面把版面指标（视口、grid 列宽、当前屏、屏数、id 数、
+  设置面板状态、模型条数、JS 错误数）回投后端，后端落 `.lingqu/ui-report.json` 与 `ui-report.log`；
+  置 `LINGQU_UI_PROBE=1` 时页面自己跑一遍「开设置 → 折叠 → 展开」序列。
+  **没有视觉能力也能验证版面**（本项目首次做到）
+- **快捷键 `Ctrl+,`** 打开模型与服务商设置
+
+### Fixed
+
+- **`t2h:cjh_models` / `cjh_settings` / `cjh_settings_save` 未注册**：`CjhCommands` 的 `match`
+  里写了分支，但没给这三个命令名逐条 `app.register` → 页面拿到 `command not registered`。
+  由界面自检抓出（`cj-tauri check` 只校验"已注册 ⊆ 已声明"，不查"已声明 ⊆ 已注册"）
+- **门禁把失败原因藏了**：失败时只 `grep FAILED|ERROR|error:`，而真实原因（崩溃 / 链接错）里没有这些词。
+  改为失败即打印日志尾部
+- `run-dev.sh` 与 `test.sh` 在 Windows 上会因环境里的 `CANGJIE_HOME=D:\...` 形式路径导致
+  所有命令 `exit 127`：统一加 `to_posix`（`cygpath -u` 或手写转换）
+
+### Changed
+
+- **弃用 `.ps1` 脚本**（`test.ps1` / `run-dev.ps1` / `tools/vendor-cjh.ps1`）：
+  PowerShell 5.1 的坑太多（无 BOM 按 GBK 解码、`2>&1` 把 stderr 变成 ErrorRecord 后
+  在 EAP=Stop 下炸、`Set-Content` 给 `.cj`/`.toml` 加 BOM），且 Windows 专用不利跨平台。
+  替代为 `scripts/*.sh` + `*.bat` + `tools/vendor-cjh.sh`
+- `tools/vendor-cjh.sh` 支持 `--platform win-x64|linux-x64`，一次重算两平台的 `SHA256SUMS`
+
+### 验证范围
+
+- ✅ `scripts/test.sh` 与 `scripts/test.bat` 均实测执行通过（三连全量 + 干净构建）
+- ✅ 窗口实机截图（1280×840，标题 `灵渠迁移台 · Lingqu`）、WebView2 起 6 个渲染进程
+- ✅ 界面自检序列实测：`240px 652px 372px` → 开设置 `models=2` → 折叠 `240px 1024px` → 展开复原，`jsErrors=0`
+- ✅ cjh 由应用从 `vendor/` 自动拉起，`/api/health` → `{"status":"ok","version":"1.6.1"}`
+- ⚠️ Linux 侧脚本**未在 Linux 上执行过**（按约定留给后续接续时验证）
+- ⚠️ 纯视觉层面（配色、字距、留白）未做人工目检
+
+---
+
+## [0.3.0] - 2026-10-29
+
+**主题**：UI 门面重做（对齐效果图）+ 模型配置。
+
+### Added
+
+- **七屏全部按效果图填实**：评分环与五维条、覆盖率分子分母、五类清单页签、阻塞项（严重度色标）、
+  Cargo 依赖矩阵、改造步骤时间线、实时日志（着色）、构建五阶段、产物卡（含 `.so` 的 AssetKey 指纹）、
+  功能清单打勾表 + 证据缩略图、报告三段式与风险分级
+- **AI 助手可折叠**：面板头 `»`、顶栏「AI 助手」、快捷键 `Ctrl+B` 三条入口；折叠后中栏占满，
+  右侧留一条竖向悬浮唤出条
+- **模型与服务商配置视图**（参考 cjnote `examples/cjnote`）：引擎状态与端点、模型列表（点选即切）、
+  Base URL / API Key（**永不回填**）/ 模型名 / 温度 / 单轮最大 tokens / 最大工具轮数，
+  「保存并生效」直接推给运行中的 cjh（外部实例也生效，不必重启）
+- **后端命令**：`t2h:cjh_models`（GET `/api/models`）、`t2h:cjh_settings`（GET `/api/settings`）、
+  `t2h:cjh_settings_save`（POST `/api/settings`，**只提交用户真填了的字段**）
+- 深/浅色主题切换（同一套令牌，与 cj-tauri 生态一致）
+- 引擎未就绪时，对话区给**可操作**的提示卡（「立刻拉起」/「校验并重试」），而不是干巴巴的"未连接"
+
+### Changed
+
+- **去掉「指定路径启动」入口**——引擎是内置随包的，启动即自动托管；`t2h:cjh_start` 保留为后端兜底
+- 引擎三态同时显示在顶栏、左栏底部、输入框上方，任何一屏都看得见
+- REST 调用放后端而不是页面直接 fetch：避免 WebView 自定义 scheme 的跨源问题，
+  也不用把 `127.0.0.1` 写进 `scopes.http` 给页面开一条出网白名单
+- 前端**不持久化任何状态到 localStorage**——ArkWeb 自定义 scheme 下它不可用，
+  这正是本工具要写进规则库（R5-001）的坑，自己不能踩
+
+### 验证范围（诚实标注）
+
+- ✅ `scripts/test.ps1` 四道闸全绿；后端零警告；13 例单测通过；HTML 结构平衡（7 屏 / 302 div / 43 button）
+- ✅ 前后端命令面三方一致（`cj-tauri check` 比对通过）
+- ⚠️ 界面渲染、折叠、模型读取/保存的实际交互仍需人工目视验证（受限宿主里窗口起不来）
+
+---
+
 ## [0.2.0] - 2026-10-29
 
 **主题**：AI 引擎托管完整化 + 工程规范落地。
