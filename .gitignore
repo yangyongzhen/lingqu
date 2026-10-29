@@ -19,6 +19,10 @@ assets/ui/dev-server.log
 *.dll
 *.dll.a
 
+# 例外：内置 cjh 引擎的随行 DLL 必须入库——它是运行时依赖，不是构建产物。
+# 少了它们的症状很隐蔽：窗口照起、http 照通，只有 https（LLM 调用）全灭。
+!vendor/cjh/win-x64/*.dll
+
 # 系统文件
 .DS_Store
 Thumbs.db
