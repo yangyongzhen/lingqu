@@ -11,11 +11,20 @@
     "t2h:cjh_models",
     "t2h:cjh_settings",
     "t2h:cjh_settings_save",
+    "ws:connect",
+    "ws:send",
+    "ws:close",
     "log:path",
     "log:write",
     "system:version",
     "system:ping",
     "system:echo"
   ],
-  "events": []
+  "events": ["ws:frame", "ws:state"],
+  "permissions": ["ws:default"],
+  "scopes": {
+    "ws": {
+      "allow": ["127.0.0.1", "localhost"]
+    }
+  }
 }

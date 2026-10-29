@@ -130,6 +130,9 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 14 | 后端 `eprintln` 不出现在 stderr 也不在 .log 里 | `setLogToDefaultFile` 会接管 stderr 的去向；**要当证据的东西落文件**（如 `.lingqu/ui-report.json`），别只打日志 |
 | 15 | `cjpm test` 偶发 exit=1 但 `FAILED: 0 / ERROR: 0` | 业务包是 `output-type = "static"`，测试可执行文件静态链接；cjh 的 AGENTS 记录过同类「测试框架在退出时 double free」。**门禁失败必须打印日志尾部**（早期只 grep FAILED/ERROR，把真因藏了） |
 | 16 | Windows 上 `scripts/*.sh` 里命令全部 `exit 127` | 机器上已导出 `CANGJIE_HOME=D:\...` 这种 Windows 形式路径，MSYS 的 PATH 里无效 → 脚本内统一 `to_posix`（`cygpath -u` 或手写转换） |
+| 17 | 页面收到的帧被整条吞掉、只等到 `done` 显示空回复 | **帧解包必须先认 `p.type`**：`delta` 帧自带 `text` 字段，先按「包装体 `{text:...}`」去 `JSON.parse` 会抛异常。顺序：`p.type` → `p.text` → `p.data` → 字符串 parse（cjnote 踩过同款） |
+| 18 | 审批卡一直不出现 | cjh **默认宽松模式**（`settings.json` 无 `capability` 段 = 所有工具放行）。要验审批需临时 `capability.enabled=true` + `approval:["*:*"]`，验完恢复；密钥在 `auth.json` 不在 `settings.json` |
+| 19 | 误以为改 `settings.json` 会丢 API Key | 密钥存 `~/.cjh/auth.json`；改 `settings.json` 不影响。但**仍要先备份**——`ConvertTo-Json` 回写会重排格式 |
 
 ---
 

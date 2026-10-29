@@ -5,6 +5,44 @@
 
 ---
 
+## [0.5.0] - 2026-10-30
+
+**主题**：P1 对话通道接通（WS 流式 + 工具卡 + 审批卡）。
+
+### Added
+
+- **装配 `WsPlugin`**：capabilities 声明 `ws:connect/send/close`、事件 `ws:frame/ws:state`、
+  `permissions: ["ws:default"]`、`scopes.ws: ["127.0.0.1","localhost"]`
+- **页面 WS 通道**（对齐 cj-tauri `examples/cjnote` 的跑通实现）：
+  - 引擎就绪自动连 `ws://127.0.0.1:<port>/ws`；`ws:state` 是唯一连接判据；断线退避重连（上限 12 次）
+  - 帧分发：`delta`（增量累积 + 90ms 节流重绘）/ `tool_start` / `tool_result`（认 `is_error`）/
+    `done`（认 `finish_reason`）/ `ack` / `cancelled` / `approval_request` / `error` / `history_messages` / `raw`
+  - 帧解包**先认 `p.type`**（delta 帧自带 `text`，先按包装体 parse 会把帧吞掉——cjnote 踩过）
+  - 会话续接：从帧里接住 `session_id`，重连后自动 `resume_session`，不另起会话
+- **工具调用卡**：工具名 + 参数 + 结果回填（失败标红）；结果超 2000 字符截断显示
+- **审批卡**：工具名 / 命中规则 / 参数（JSON）/ 倒计时（与 `expires_in_ms` 同步）/ 批准·拒绝；
+  超时或断连就地标「按拒绝收场」；回执走 `approval_response{request_id, approved}`
+- **错误可执行化**：按 `error.code`（`model_unavailable` / `provider_error` / `no_api_key` 等）给下一步提示
+- **会话控制**：面板头「＋ 新建会话」「■ 中断」
+- **自检扩展**：`ui_report` 增 `wsState / frames / toolCards / approvals / lastFrameType / replyPreview`；
+  `LINGQU_UI_PROBE=1` 跑常规序列（含真实发问），`LINGQU_UI_PROBE=approval` 触发审批并**自动点拒绝**验证回执链路
+
+### 验证范围
+
+- ✅ **通道连通**：`ws=connected`，一问一答 `frames=2`（`delta`+`done`），`replyPreview="收到"`
+- ✅ **审批闭环**：临时把 cjh 置严格模式（`capability.approval=["*:*"]`）→ `approvals=1`（卡片出现）
+  → 自检自动点「拒绝」→ 回合继续到 `done`（`frames=268`）。**验证后已恢复原配置**
+- ✅ 四道闸全绿；能力三方比对通过（ws 命令与事件均声明齐）
+- ⚠️ 未验证：多轮长对话的滚动/性能、`tasks` 帧的面板（尚未接）、鸿蒙端 WS（cjh 在鸿蒙无 ws 能力位）
+
+### 已知限制（诚实标注）
+
+- cjh **默认是宽松模式**（无 `capability` 段 = 所有工具放行），所以审批卡只有在 cjh 侧开启
+  `capability.enabled=true` + `approval` 命中时才会出现。工具不替用户改 cjh 的安全策略，
+  只在卡片出现时正确渲染与回执。验证配方见 `docs/实施路线图.md` P1。
+
+---
+
 ## [0.4.0] - 2026-10-30
 
 **主题**：跨平台工程化（Windows + Linux 同源）+ 界面可自动验证。

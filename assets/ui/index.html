@@ -247,6 +247,22 @@ body.ai-hidden .dock{display:none}
 .tool .th .nm{font-family:var(--mono);font-weight:600;color:var(--acc)}
 .tool .th .st{margin-left:auto;font-size:10.5px;color:var(--ok)}
 .tool .tb{padding:9px 10px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;color:var(--dim);line-height:1.75}
+.tool .st.err{color:var(--err)}
+
+/* 危险操作审批卡（cjh 的 approval_request） */
+.approve{border:1px solid rgba(255,184,107,.45);background:var(--warnsoft);border-radius:10px;padding:11px 12px}
+.approve .h{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--warn)}
+.approve .h .atime{margin-left:auto;font-weight:400;font-size:10.5px;color:var(--dim)}
+.approve .q{font-size:12.3px;margin:7px 0 8px;line-height:1.6}
+.approve .diff{font-family:var(--mono);font-size:11px;background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;padding:8px 9px;white-space:pre-wrap;margin-bottom:9px;max-height:160px;overflow:auto}
+.approve .btns{display:flex;gap:8px}
+.approve .btns .btn{flex:0 0 auto}
+.approve .settled{font-size:11.5px;color:var(--dim)}
+.composer .row{display:flex;gap:8px;align-items:flex-end}
+.composer .row textarea{flex:1}
+.composer .row .btn{flex:0 0 auto;height:32px}
+.state.ok{color:var(--ok)}
 .composer{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:8px;flex:0 0 auto}
 .composer textarea{width:100%;resize:none;height:62px;background:var(--panel2);border:1px solid var(--line);
   color:var(--fg);border-radius:10px;padding:9px 11px;font:inherit;font-size:12.5px}
@@ -611,6 +627,8 @@ body.ai-hidden .ai-show{display:block}
         <span class="t"><span class="ico">✦</span>AI 助手</span>
         <span class="right">
           <span class="state" id="aiState"><i class="dot"></i><span id="aiStateTxt">连接中…</span></span>
+          <button class="iconbtn" id="aiNew" title="新建会话">＋</button>
+          <button class="iconbtn" id="aiAbort" title="中断当前回合">■</button>
           <button class="iconbtn" id="aiCfgBtn" title="模型与服务商设置">⚙</button>
           <button class="iconbtn" id="aiHide" title="收起 AI 助手（Ctrl+B）">»</button>
         </span>
@@ -672,8 +690,11 @@ body.ai-hidden .ai-show{display:block}
       </div>
 
       <div class="composer" id="aiComposer">
-        <textarea id="aiInput" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
-        <div class="foot"><span class="dot" id="dotFoot"></span><span id="txtFoot">等待引擎</span><span class="spacer" style="flex:1"></span><span class="kbd">Ctrl+B</span><span>收起面板</span></div>
+        <div class="row">
+          <textarea id="aiInput" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="btn primary sm" id="aiSend">发送</button>
+        </div>
+        <div class="foot"><span class="dot" id="dotFoot"></span><span id="txtFoot">等待引擎</span><span class="spacer" style="flex:1"></span><span class="kbd">Ctrl+B</span><span>收起</span></div>
       </div>
     </aside>
   </div>
@@ -790,9 +811,9 @@ withBridge(function(tauri){
   function loadEnv(){
     invoke('t2h:env').then(function(d){
       renderEnv(d);
-      // 环境体检回包里带 uiProbe 标志：为真则自动跑一轮界面自检序列。
-      // 这样「版面对不对」不再依赖肉眼看截图，CI / 无视觉能力场景也能验证。
-      if (d && d.uiProbe) { runUiProbe(); }
+      // 环境体检回包里带 uiProbe 标志：非空则自动跑一轮界面自检序列。
+      // 这样「版面对不对、通道通不通」不再依赖肉眼看截图，CI / 无视觉能力场景也能验证。
+      if (d && d.uiProbe) { window.__uiProbeMode = String(d.uiProbe); runUiProbe(); }
     }).catch(function(e){
       $('envList').innerHTML = '<div class="pill err">体检失败：' + esc(e.message) + '</div>';
       setDot('dotEnv', 'err'); $('txtEnv').textContent = '体检失败';
@@ -824,6 +845,16 @@ withBridge(function(tauri){
     $('setState').textContent = (stateNames[s.state] || '未知') + (s.owned ? '（本应用托管）' : '');
     $('setState').className = 'bv ' + (running ? 'good' : 'bad');
     $('setEndpoint').textContent = running ? (s.apiUrl + '　' + (s.wsUrl || '')) : (s.binPath || s.vendorDir || '（未就绪）');
+
+    // 引擎就绪 → 建 WS 通道；引擎掉了 → 主动断开（不装作还连着）
+    if (typeof CJ !== 'undefined') {
+      if (running && s.port) {
+        CJ.port = s.port;
+        if (typeof wsConnect === 'function') { wsConnect(); }
+      } else if (!running && (CJ.up || CJ.connecting)) {
+        if (typeof wsClose === 'function') { wsClose(); }
+      }
+    }
 
     // 缺失时在对话区给一张可操作的提示卡，而不是干巴巴一句"未连接"
     if (!running) {
@@ -952,26 +983,344 @@ withBridge(function(tauri){
   }
   $('setSave').onclick = function(){ saveSettings(null); };
 
-  /* ===== 对话区（引擎就绪后可接 WS，这里先只做输入回显占位） ===== */
+  /* ============================================================
+   * 对话通道：ws://127.0.0.1:<port>/ws
+   * 协议：cjh src/web/protocol.cj；实现细节对齐 cj-tauri examples/cjnote（跑通过的实现）
+   *   发：chat / new_session / resume_session / abort / approval_response / switch_model
+   *   收：delta / tool_start / tool_result / done / ack / cancelled /
+   *       approval_request / error / tasks / history_messages / raw
+   * 三条来自 cjnote 的硬经验：
+   *   ① 帧解包**必须先认 p.type**：delta 帧自带 text 字段，按「包装体」去 parse 会把帧吞掉
+   *   ② delta 是**增量**，累积到 acc 再节流重绘（逐帧重排会打满主线程）
+   *   ③ ws:state 的 connected/closed 是唯一连接判据；断线要就地收口当前回合
+   * ============================================================ */
+  var CJ = {
+    port: 0, up: false, connecting: false, retry: 0, timer: null, session: '',
+    frames: 0, toolCards: 0, approvals: 0, lastType: '', lastError: '',
+    acc: '', curBubble: null, flushTimer: null, curApproval: null
+  };
+
+  function wsUrl() { return 'ws://127.0.0.1:' + (CJ.port || 8765) + '/ws'; }
+  function chatBox() { return $('aiChat'); }
+  function atBottom() { var b = chatBox(); if (b) { b.scrollTop = b.scrollHeight; } }
+  function bump(k) { CJ[k] = (CJ[k] || 0) + 1; }
+  function mkEl(html) { var d = document.createElement('div'); d.innerHTML = html; return d.firstElementChild; }
+  function now() {
+    var d = new Date();
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+  function insertNode(node) { chatBox().insertBefore(node, $('aiHint')); atBottom(); return node; }
+
+  function addMsg(role, html) {
+    return insertNode(mkEl('<div class="msg' + (role === 'me' ? ' me' : '') + '">' +
+      '<div class="av' + (role === 'me' ? '' : ' ai') + '">' + (role === 'me' ? '你' : 'AI') + '</div>' +
+      '<div class="b"><div class="who">' + (role === 'me' ? '我' : '灵渠 · cjh') + ' · ' + now() + '</div>' +
+      '<div class="bubble">' + html + '</div></div></div>')).querySelector('.bubble');
+  }
+
+  function newAssistantTurn() {
+    var bubble = addMsg('ai', '');
+    CJ.curBubble = bubble;
+    CJ.acc = '';
+    return bubble;
+  }
+
+  // 流式节流：delta 可能每秒几十条，累积后 ~90ms 合并重绘一次
+  function flushStream() {
+    CJ.flushTimer = null;
+    if (CJ.curBubble) { CJ.curBubble.textContent = CJ.acc; atBottom(); }
+  }
+  function scheduleFlush() {
+    if (CJ.flushTimer) return;
+    CJ.flushTimer = setTimeout(flushStream, 90);
+  }
+
+  function finishTurn(note) {
+    if (CJ.flushTimer) { clearTimeout(CJ.flushTimer); CJ.flushTimer = null; }
+    if (CJ.curBubble) { CJ.curBubble.textContent = CJ.acc; }
+    if (CJ.acc) { CJ.lastReply = CJ.acc; }
+    if (note) { insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+      '<div class="small muted">' + esc(note) + '</div></div></div>')); }
+    CJ.curBubble = null;
+    CJ.acc = '';
+  }
+
+  function addToolCard(name, args) {
+    var argsText = '';
+    try { argsText = (typeof args === 'string') ? args : JSON.stringify(args || {}); } catch (e) { argsText = ''; }
+    var card = mkEl('<div class="tool"><div class="th"><span class="dot warn"></span>' +
+      '<span class="nm">' + esc(name) + '</span><span class="st">执行中…</span></div>' +
+      '<div class="tb">' + esc(argsText) + '</div></div>');
+    var wrap = mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+      '<div class="who">工具调用 · ' + now() + '</div></div></div>');
+    wrap.querySelector('.b').appendChild(card);
+    insertNode(wrap);
+    bump('toolCards');
+    return card;
+  }
+
+  function fillToolResult(name, content, isError) {
+    var cards = chatBox().querySelectorAll('.tool');
+    var target = null;
+    for (var i = cards.length - 1; i >= 0; i--) {
+      var nm = cards[i].querySelector('.nm');
+      if (!nm) continue;
+      if (!target) target = cards[i];
+      var st = cards[i].querySelector('.st');
+      var running = st && st.textContent.indexOf('执行中') >= 0;
+      if (nm.textContent === name && running) { target = cards[i]; break; }
+    }
+    if (!target) return;
+    var st2 = target.querySelector('.st');
+    if (st2) {
+      st2.textContent = isError ? '失败' : '完成';
+      st2.className = 'st' + (isError ? ' err' : '');
+    }
+    var tb = target.querySelector('.tb');
+    if (tb) {
+      var text = String(content == null ? '' : content);
+      tb.textContent = text.length > 2000 ? text.slice(0, 2000) + '\n…（已截断显示）' : text;
+    }
+    atBottom();
+  }
+
+  /* ---------- 审批卡（cjh 的 approval_request）---------- */
+  function settleApproval(card, label, cls) {
+    if (!card || card.getAttribute('data-settled') === '1') return;
+    card.setAttribute('data-settled', '1');
+    if (card.__timer) { clearInterval(card.__timer); card.__timer = null; }
+    var btns = card.querySelector('.btns');
+    if (btns) { btns.innerHTML = '<span class="pill ' + (cls || '') + '">' + esc(label) + '</span>'; }
+    if (CJ.curApproval === card) { CJ.curApproval = null; }
+  }
+
+  function addApproval(m) {
+    var rid = m.request_id || '';
+    var tool = m.tool || m.tool_name || '工具';
+    var argsText = '';
+    try { argsText = (typeof m.args === 'string') ? m.args : JSON.stringify(m.args || {}, null, 2); } catch (e) { argsText = ''; }
+    var waitS = Math.floor((m.expires_in_ms || 0) / 1000);
+
+    var card = mkEl('<div class="approve">' +
+      '<div class="h"><span class="dot warn"></span>危险操作待批准：' + esc(tool) +
+      '<span class="atime">' + (waitS > 0 ? (waitS + ' 秒后按拒绝收场') : '等待回执中') + '</span></div>' +
+      (m.reason ? '<div class="q">命中规则：' + esc(m.reason) + '</div>' : '') +
+      '<div class="diff">' + esc(argsText) + '</div>' +
+      '<div class="btns"><button class="btn sm primary" data-a="1">批准</button>' +
+      '<button class="btn sm" data-a="0">拒绝</button></div></div>');
+    var wrap = mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+      '<div class="who">审批 · ' + now() + '</div></div></div>');
+    wrap.querySelector('.b').appendChild(card);
+    insertNode(wrap);
+    bump('approvals');
+    CJ.curApproval = card;
+
+    card.querySelectorAll('button[data-a]').forEach(function(b){
+      b.onclick = function(){
+        var ok = b.getAttribute('data-a') === '1';
+        wsSend({ type: 'approval_response', request_id: rid, approved: ok });
+        settleApproval(card, ok ? '已批准' : '已拒绝', ok ? 'ok' : 'err');
+      };
+    });
+
+    // 倒计时与 cjh 的 expires_in_ms 同步：归零就地标超时（cjh 按「拒绝」收场，回合继续）
+    if (waitS > 0) {
+      var left = waitS;
+      var timeEl = card.querySelector('.atime');
+      var tick = function(){
+        if (left <= 0) {
+          if (card.__timer) { clearInterval(card.__timer); card.__timer = null; }
+          settleApproval(card, '已超时（按拒绝收场，回合继续）', 'warn');
+          return;
+        }
+        if (timeEl) timeEl.textContent = left + ' 秒后按拒绝收场';
+        left -= 1;
+      };
+      tick();
+      card.__timer = setInterval(tick, 1000);
+    }
+  }
+
+  /* ---------- 错误文案（按 cjh 的 error.code 给可执行提示）---------- */
+  function cjhErrText(m) {
+    var code = m.code || '';
+    var base = m.message || '未知错误';
+    var tip = '';
+    if (code === 'model_unavailable') tip = '机型/模型名或 base_url 不对——到 Ctrl+, 的模型设置里换一个可用服务商。';
+    else if (code === 'provider_error') tip = '连不上服务商：检查网络与 API Key（模型设置面板里有当前值）。';
+    else if (code === 'no_api_key') tip = '还没配 API Key——Ctrl+, 填一个再发。';
+    else if (code === 'approval_timeout') tip = '审批超时，按拒绝收场。';
+    if (m.retryable) tip += (tip ? ' ' : '') + '（可重试）';
+    return esc(base) + (code ? '<div class="small muted mono">code=' + esc(code) + '</div>' : '') +
+      (tip ? '<div class="small muted">' + esc(tip) + '</div>' : '');
+  }
+
+  function addError(html, code) {
+    insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+      '<div class="who">错误 · ' + now() + '</div>' +
+      '<div class="bubble" style="border-color:rgba(255,123,114,.4);background:var(--errsoft)">' +
+      html + '</div></div></div>'));
+  }
+
+  /* ---------- 发帧 / 连接 ---------- */
+  function wsSend(obj) {
+    return invoke('ws:send', { text: JSON.stringify(obj) }).catch(function(e){
+      addError('发送失败：' + esc(e && e.message ? e.message : e), 'ws_send');
+    });
+  }
+
+  function renderWsState() {
+    var txt = CJ.up ? '已连接' : (CJ.connecting ? '连接中…' : '未连接');
+    var cls = CJ.up ? 'ok' : (CJ.connecting ? 'warn' : 'err');
+    var box = $('aiState');
+    if (box) {
+      box.className = 'state' + (CJ.up ? ' ok' : '');
+      box.innerHTML = '<i class="dot ' + cls + '"></i><span id="aiStateTxt">' + txt + '</span>';
+    }
+    var foot = $('txtFoot');
+    if (foot) {
+      foot.textContent = CJ.up
+        ? ('WS 已连接 · 帧 ' + CJ.frames + (CJ.session ? ' · ' + CJ.session : ''))
+        : '未连接（等引擎就绪自动连）';
+    }
+  }
+
+  function scheduleReconnect() {
+    if (CJ.timer || CJ.retry >= 12) return;
+    CJ.retry += 1;
+    CJ.timer = setTimeout(function(){ CJ.timer = null; wsConnect(); }, Math.min(800 * CJ.retry, 5000));
+  }
+
+  function wsConnect() {
+    if (CJ.up || CJ.connecting || !CJ.port) return;
+    CJ.connecting = true;
+    renderWsState();
+    invoke('ws:connect', { url: wsUrl() }).catch(function(e){
+      CJ.connecting = false;
+      CJ.lastError = 'ws connect: ' + (e && e.message ? e.message : e);
+      renderWsState();
+      scheduleReconnect();
+    });
+  }
+
+  function wsClose() {
+    if (CJ.up || CJ.connecting) { invoke('ws:close').catch(function(){}); }
+    CJ.up = false; CJ.connecting = false;
+    renderWsState();
+  }
+
+  /* ---------- 帧解包与分发 ---------- */
+  function unwrapFrame(p) {
+    if (typeof p === 'string') {
+      try { return JSON.parse(p); } catch (e) { return null; }
+    }
+    if (!p || typeof p !== 'object') return null;
+    // 顺序不能换：delta 帧自带 text，先按包装体 parse 会把帧整条吞掉
+    if (typeof p.type === 'string') return p;
+    if (typeof p.text === 'string') { try { return JSON.parse(p.text); } catch (e) { return null; } }
+    if (typeof p.data === 'string') { try { return JSON.parse(p.data); } catch (e) { return null; } }
+    return null;
+  }
+
+  function takeSession(m) {
+    if (m.session_id && m.session_id !== CJ.session) {
+      CJ.session = m.session_id;
+      renderWsState();
+    }
+  }
+
+  function onFrame(m) {
+    var t = m.type || '';
+    bump('frames');
+    CJ.lastType = t;
+    takeSession(m);
+
+    if (t === 'delta') {
+      if (!CJ.curBubble) newAssistantTurn();
+      CJ.acc += (m.text || '');
+      scheduleFlush();
+    } else if (t === 'tool_start') {
+      addToolCard(m.name || 'tool', m.args);
+    } else if (t === 'tool_result') {
+      fillToolResult(m.name || 'tool', m.content, !!m.is_error);
+    } else if (t === 'approval_request') {
+      addApproval(m);
+    } else if (t === 'done') {
+      var fr = m.finish_reason || 'stop';
+      var s = m.summary || {};
+      var tail = [];
+      if (s.rounds != null) tail.push('轮次 ' + s.rounds);
+      if (s.tools != null) tail.push('工具 ' + s.tools);
+      if (s.duration_ms != null) tail.push((s.duration_ms / 1000).toFixed(1) + 's');
+      if (fr === 'cancelled') { finishTurn('已中断'); }
+      else if (fr === 'error') { finishTurn('回合异常收尾（细节见上方工具结果）'); }
+      else { finishTurn(tail.length ? ('回合结束 · ' + tail.join(' · ')) : ''); }
+    } else if (t === 'error') {
+      finishTurn('');
+      addError(cjhErrText(m), m.code);
+    } else if (t === 'cancelled') {
+      // was_running=false 是事实（那一帧到达时没有在跑的回合），不是错误
+      finishTurn('已取消（was_running=' + (m.was_running ? 'true' : 'false') + '）');
+    } else if (t === 'ack') {
+      var foot = $('txtFoot'); if (foot) { foot.textContent = 'ack: ' + (m.action || ''); }
+    } else if (t === 'history_messages') {
+      var n = (m.messages && m.messages.length) || 0;
+      insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+        '<div class="small muted">已恢复历史会话' + (n ? ('（' + n + ' 条）') : '') + '</div></div></div>'));
+    } else if (t === 'raw') {
+      addError('无法解析的帧：<span class="mono">' + esc(String(m.text || '').slice(0, 200)) + '</span>', 'raw');
+    }
+    renderWsState();
+  }
+
+  /* ---------- 发送提问 ---------- */
+  function sendChat() {
+    var ta = $('aiInput');
+    var v = (ta.value || '').trim();
+    if (!v) return;
+    if (!CJ.up) { addError('通道未连接——等引擎就绪会自动连上；也可点右栏「一键部署并启动引擎」重试。', 'ws_down'); return; }
+    addMsg('me', esc(v));
+    newAssistantTurn();
+    ta.value = '';
+    wsSend({ type: 'chat', message: v });
+  }
+
   $('aiInput').addEventListener('keydown', function(e){
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      var v = $('aiInput').value.trim();
-      if (!v) return;
-      var chat = $('aiChat');
-      var me = document.createElement('div');
-      me.className = 'msg me';
-      me.innerHTML = '<div class="av">你</div><div class="b"><div class="who">我</div><div class="bubble">' + esc(v) + '</div></div>';
-      chat.insertBefore(me, $('aiHint'));
-      var ai = document.createElement('div');
-      ai.className = 'msg';
-      ai.innerHTML = '<div class="av ai">AI</div><div class="b"><div class="who">灵渠 · cjh</div>' +
-        '<div class="bubble muted">对话通道（WS 流式）尚未接入——当前骨架只做到引擎托管与配置。接入后会显示工具调用与审批卡。</div></div>';
-      chat.insertBefore(ai, $('aiHint'));
-      $('aiInput').value = '';
-      chat.scrollTop = chat.scrollHeight;
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  $('aiSend').onclick = sendChat;
+
+  $('aiNew').onclick = function(){
+    wsSend({ type: 'new_session' });
+    Array.prototype.slice.call(chatBox().querySelectorAll('.msg')).forEach(function(n){ n.remove(); });
+    CJ.session = ''; CJ.acc = ''; CJ.curBubble = null;
+    addMsg('ai', '新会话已开始。');
+    renderWsState();
+  };
+  $('aiAbort').onclick = function(){ wsSend({ type: 'abort' }); };
+
+  // 事件挂载（capabilities 已放行 ws:frame / ws:state）
+  tauri.listen('ws:frame', function(p){
+    var m = unwrapFrame(p);
+    if (!m) return;
+    try { onFrame(m); } catch (e) { addError('帧处理出错：' + esc(e && e.message ? e.message : e), 'frame'); }
+  });
+  tauri.listen('ws:state', function(p){
+    var st = p && p.state ? p.state : '';
+    if (st === 'connected') {
+      CJ.up = true; CJ.connecting = false; CJ.retry = 0;
+      renderWsState();
+      // 重连后接回原会话，避免每次断线都另起一个
+      if (CJ.session) { wsSend({ type: 'resume_session', session_id: CJ.session }); }
+    } else if (st === 'closed') {
+      CJ.up = false; CJ.connecting = false;
+      renderWsState();
+      if (CJ.curBubble) { finishTurn('（连接已断开——回复可能不完整）'); }
+      scheduleReconnect();
     }
   });
+  renderWsState();
+
 
   /* ===== 退出 ===== */
   $('btnQuit').onclick = function(){ invoke('t2h:quit').catch(function(){}); };
@@ -992,6 +1341,12 @@ withBridge(function(tauri){
       settingsOpen: document.body.classList.contains('ai-settings'),
       modelItems: document.querySelectorAll('.modelitem').length,
       modelError: window.__modelErr || '',
+      wsState: CJ.up ? 'connected' : (CJ.connecting ? 'connecting' : 'closed'),
+      frames: CJ.frames,
+      toolCards: CJ.toolCards,
+      approvals: CJ.approvals,
+      lastFrameType: CJ.lastType,
+      replyPreview: (CJ.lastReply || '').slice(0, 120),
       errorCount: window.__uiErrors.length
     }).catch(function(){});
     if (tag) { console.log('[ui-report] ' + tag); }
@@ -1018,11 +1373,33 @@ withBridge(function(tauri){
    * 三步：① 初始版面 → ② 打开模型设置（会真的去读 /api/models）→ ③ 折叠 / 展开。
    * 每步都上报一行，落到 .lingqu/ui-report.log，供人/CI 断言。 */
   function runUiProbe(){
+    var mode = (window.__uiProbeMode || '1');
     setTimeout(function(){ reportUi('probe-initial'); }, 400);
     setTimeout(function(){ openSettings(); }, 1200);
-    setTimeout(function(){ showSettings(false); applyAiHidden(true); }, 3000);
+    // WS 通道自检：连上就发一条真实提问，靠 frames/delta/replyPreview 断言"通道真的通了"
+    setTimeout(function(){
+      if (!CJ.up) return;
+      if (mode === 'approval') {
+        // 触发 cjh 的危险操作审批（approval_request → 卡片 → 我们不作答，等它超时按拒绝收场）
+        $('aiInput').value = '请用 bash 工具执行这条命令：rm -rf /tmp/lingqu-probe-approval';
+      } else {
+        $('aiInput').value = '只回复两个字：收到';
+      }
+      sendChat();
+    }, 2000);
+    setTimeout(function(){ showSettings(false); applyAiHidden(true); }, 3200);
     setTimeout(function(){ applyAiHidden(false); }, 4200);
-    setTimeout(function(){ reportUi('probe-done'); }, 5000);
+    // 审批自检：出现审批卡就**自动点「拒绝」**（模拟人工决策），
+    // 既验证卡片渲染，也验证 approval_response 回执链路真的把回合推下去了。
+    setTimeout(function(){
+      if (CJ.curApproval) {
+        var b = CJ.curApproval.querySelector('button[data-a="0"]');
+        if (b) { b.click(); window.__approvalAutoDenied = true; }
+      }
+    }, 12000);
+    setTimeout(function(){ reportUi('probe-frames'); }, 9000);
+    setTimeout(function(){ reportUi('probe-chat-done'); }, 22000);
+    setTimeout(function(){ reportUi('probe-done'); }, 24000);
   }
 
   document.addEventListener('keydown', function(e){

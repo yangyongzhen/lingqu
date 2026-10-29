@@ -2,6 +2,7 @@ package lingqu
 
 import cjTauri.*
 import cjTauri.plugins.log.*
+import cjTauri.plugins.ws.*
 import std.env.*
 import std.fs.*
 import stdx.encoding.json.*
@@ -142,9 +143,9 @@ public class EnvCommand <: CommandHandler {
         var res = JsonObject()
         res.put("items", arr)
         res.put("cjhPort", JsonInt(cjhPort()))
-        // 界面自检开关：置 1 时页面会自己跑一遍「开设置 → 折叠 → 展开」并逐步上报，
-        // 用于 CI / 无视觉能力场景下的版面验证（见 UiReportCommand）
-        res.put("uiProbe", JsonBool(envOr("LINGQU_UI_PROBE", "") == "1"))
+        // 界面自检开关：置 1 时页面会自己跑一遍「开设置 → 折叠 → 展开 → 发一句」并逐步上报；
+        // 置 approval 时改为发一条会触发危险操作审批的指令（验证审批卡）。
+        res.put("uiProbe", JsonString(envOr("LINGQU_UI_PROBE", "")))
         return res
     }
 }
@@ -245,6 +246,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("settingsOpen", JsonBool(argBool(args, "settingsOpen", false)))
         o.put("modelItems", JsonInt(argInt(args, "modelItems", 0)))
         o.put("modelError", JsonString(argStr(args, "modelError", "")))
+        o.put("wsState", JsonString(argStr(args, "wsState", "unknown")))
+        o.put("frames", JsonInt(argInt(args, "frames", 0)))
+        o.put("toolCards", JsonInt(argInt(args, "toolCards", 0)))
+        o.put("approvals", JsonInt(argInt(args, "approvals", 0)))
+        o.put("lastFrameType", JsonString(argStr(args, "lastFrameType", "")))
+        o.put("replyPreview", JsonString(argStr(args, "replyPreview", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         let text = o.toJsonString()
         // 落文件而不是只打日志：GUI 的 stderr 去向受框架日志重定向影响（见 AGENTS §4 第 14 条），
@@ -321,6 +328,8 @@ public func build(): AppSpec {
         .window(WindowConfig("lingqu", 1280, 840))
         // 日志落盘：GUI 产物双击没控制台，报障时一个文件看全
         .plugin(LogPlugin())
+        // WS：cjh 的对话/工具/审批都走 ws://127.0.0.1:<port>/ws（帧类型见 docs/实施路线图.md P1）
+        .plugin(WsPlugin())
         .wire({ app =>
             // 日志落盘：GUI 产物双击没控制台，报障时一个文件看全（C 桥 + 仓颉 + 页面 log:write）
             let _ = app.setLogToDefaultFile("lingqu")
