@@ -3,6 +3,7 @@ package lingqu
 import cjTauri.*
 import cjTauri.plugins.log.*
 import cjTauri.plugins.ws.*
+import lingqu.scanner.*
 import std.env.*
 import std.fs.*
 import stdx.encoding.json.*
@@ -146,6 +147,8 @@ public class EnvCommand <: CommandHandler {
         // 界面自检开关：置 1 时页面会自己跑一遍「开设置 → 折叠 → 展开 → 发一句」并逐步上报；
         // 置 approval 时改为发一条会触发危险操作审批的指令（验证审批卡）。
         res.put("uiProbe", JsonString(envOr("LINGQU_UI_PROBE", "")))
+        // 扫描探针：给了路径就在启动时跑一次 t2h:scan，把指标回投到 ui_report（无视觉也能验扫描器）
+        res.put("scanPath", JsonString(envOr("LINGQU_SCAN_PATH", "")))
         return res
     }
 }
@@ -217,6 +220,75 @@ func startLifecycleWaiter(app: TauriApp): Unit {
 }
 
 // ============================================================
+// ⑤ 迁移扫描（t2h:scan）：P2
+// ============================================================
+
+/**
+ * 扫描一个 Tauri 工程，产出 `lingqu/scan/v1` 的画像（五类清单 + 覆盖率 + 评分）。
+ * 口径见 `docs/P2-scan-口径草案.md`：一项 = 迁移单元；未知是禁用值。
+ * 结果同时落 `.lingqu/scan/<工程名>.json`（证据留档，报告从这里派生）。
+ */
+public class ScanCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:scan 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
+            return res
+        }
+        if (!exists(Path(path))) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("路径不存在：${path}"))
+            return res
+        }
+
+        let scan = scanProject(path)
+        let json = scan.toJson()
+
+        // 工程名取路径末段
+        var name = path
+        match (path.lastIndexOf("/")) {
+            case Some(i) => name = path[(i + 1)..path.size]
+            case None => ()
+        }
+        if (name.size == 0) {
+            name = "project"
+        }
+        let outDir = ".lingqu/scan"
+        let outFile = "${outDir}/${name}.json"
+        var wrote = false
+        try {
+            if (!exists(Path(".lingqu"))) {
+                Directory.create(Path(".lingqu"))
+            }
+            if (!exists(Path(outDir))) {
+                Directory.create(Path(outDir))
+            }
+            File.writeTo(outFile, json.toJsonString().toArray())
+            wrote = true
+        } catch (e: Exception) {
+            eprintln("[lingqu][scan] 写扫描结果失败：${e}")
+        }
+
+        res.put("ok", JsonBool(true))
+        res.put("project", JsonString(name))
+        res.put("out", JsonString(if (wrote) { outFile } else { "" }))
+        res.put("metrics", scan.metricsJson())
+        res.put("score", scan.scoreJson())
+        res.put("scan", json)
+        let c = scan.counts()
+        eprintln("[lingqu][scan] ${name}: R=${c[0]} D=${c[1]} H=${c[2]} U=${c[3]}")
+        return res
+    }
+}
+
+// ============================================================
 // 业务装配点
 // ============================================================
 
@@ -252,6 +324,14 @@ public class UiReportCommand <: CommandHandler {
         o.put("approvals", JsonInt(argInt(args, "approvals", 0)))
         o.put("lastFrameType", JsonString(argStr(args, "lastFrameType", "")))
         o.put("replyPreview", JsonString(argStr(args, "replyPreview", "")))
+        o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
+        o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
+        o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
+        o.put("scanU", JsonInt(argInt(args, "scanU", 0)))
+        o.put("scanC1", JsonInt(argInt(args, "scanC1", 0)))
+        o.put("scanTotal", JsonInt(argInt(args, "scanTotal", 0)))
+        o.put("scanOut", JsonString(argStr(args, "scanOut", "")))
+        o.put("scanError", JsonString(argStr(args, "scanError", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         let text = o.toJsonString()
         // 落文件而不是只打日志：GUI 的 stderr 去向受框架日志重定向影响（见 AGENTS §4 第 14 条），
@@ -337,6 +417,7 @@ public func build(): AppSpec {
             app.register("t2h:env", EnvCommand())
             app.register("t2h:quit", QuitCommand(app))
             app.register("t2h:ui_report", UiReportCommand())
+            app.register("t2h:scan", ScanCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

@@ -5,6 +5,7 @@
     "t2h:env",
     "t2h:quit",
     "t2h:ui_report",
+    "t2h:scan",
     "t2h:cjh_status",
     "t2h:cjh_deploy",
     "t2h:cjh_start",

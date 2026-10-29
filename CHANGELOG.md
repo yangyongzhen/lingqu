@@ -5,6 +5,52 @@
 
 ---
 
+## [0.6.0] - 2026-10-30
+
+**主题**：P2 `t2h:scan` 扫描器（五类清单 + 覆盖率 + 评分），口径按 `docs/P2-scan-口径草案.md` 落地。
+
+### Added
+
+- **`src/scanner/scan.cj`（新增包 `lingqu.scanner`）**
+  - 工程识别：`Cargo.toml`（crate / tauri 版本）、`tauri.conf.json`（bundleId / frontendDist）
+  - **五类清单**：命令（`#[tauri::command]` 函数 + `generate_handler!` 注册核对）、事件（emit/listen）、
+    插件（Cargo + package.json 两侧合并）、**前端浏览器能力**（按能力计项，不按文件）、平台 API 符号
+  - 处置四值域 + `未知` 禁用值；**同一符号/能力跨文件合并**，sites 只记账
+  - 度量：`R/D/H/U`、`C1`（结论覆盖率）、`C3`（人工占比）、`C2`（留空并标注需人工基线）
+  - 评分：runtime / api 两维实算；build / deps / dist 标 `-1`（未扫描）且 `partial=true`，
+    **不编造 100 分**；总分是加权平均（`Σ维分×权重 / Σ权重`）
+  - 输出 `lingqu/scan/v1` JSON，落 `.lingqu/scan/<工程>.json`
+- **命令 `t2h:scan {path}`** + capabilities 声明 + `.gitignore` 覆盖 `.lingqu/`
+- **扫描探针**：环境变量 `LINGQU_SCAN_PATH` → 页面启动即跑一次扫描，指标回投 `t2h:ui_report`
+  （`scanR/D/H/U/C1/total/out/error`），**无视觉也能验扫描器**
+- **16+2 例单测**（`src/tests/scanner_test.cj`）：命令/事件/插件/前端/平台解析、判定表、
+  C1/C3 计算、禁用值拉低覆盖、评分不重复乘 100、命令一律 `不适用`
+
+### Fixed（都是实测扫出来的）
+
+- **总分算成 2500**：`weighted × 100 / 0.45` 把 100 乘了两遍 → 改为加权平均（回归测试锁住）
+- **跨文件同名项没合并**：`app_data_dir`、`localStorage` 在多个文件各生成一项 → 编排层按名字合并
+  （habit-tree 的 `localStorage` 从 5 项合成 1 项、17 个 sites）
+- **扣分过重**：改造按 −10 算导致 habit-tree runtime/api 双双见底 25 分（与"该应用已迁移成功"矛盾）
+  → 改造 −5 / 降级 −15，总分回到 68
+- **事件与插件过度归因为"人工"**：cc-switch 上 22 个事件名 + 7 个插件全判人工，H=30 直接违反 A3（≤5）
+  → 事件桥三端闭环判 `不适用`；插件判定表补齐（updater/deep-link/window-state/process/opener/
+    global-shortcut/log/os 等）→ 两个样本 H 都降到 **1**
+
+### 验证范围
+
+| 样本 | R | C1 | H | C3 | total | 五类分布 |
+|---|---|---|---|---|---|---|
+| habit-tree | 20 | 100% | 1 | 5.0% | 68（partial） | cmd12 / ev0 / plg0 / fe4 / api4 |
+| cc-switch | 317 | 100% | 1 | 0.3% | 65（partial） | cmd275 / ev22 / plg10 / fe4 / api6 |
+
+- ✅ 四道闸全绿；**31 例单测**；能力三方比对通过
+- ✅ 两个真实样本上 R/D/U 一致、无重复符号、sites 计数正确
+- ⚠️ **未做**：C2 发现置信度（需人工基线双向 diff）、UI ② 迁移画像接真数据（仍是示意）、
+  events/plugins 在 habit-tree 上为 0（该应用确实没用 `tauri-plugin-*` 与 `emit/listen`，非漏扫）
+
+---
+
 ## [0.5.0] - 2026-10-30
 
 **主题**：P1 对话通道接通（WS 流式 + 工具卡 + 审批卡）。

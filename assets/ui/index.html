@@ -814,6 +814,8 @@ withBridge(function(tauri){
       // 环境体检回包里带 uiProbe 标志：非空则自动跑一轮界面自检序列。
       // 这样「版面对不对、通道通不通」不再依赖肉眼看截图，CI / 无视觉能力场景也能验证。
       if (d && d.uiProbe) { window.__uiProbeMode = String(d.uiProbe); runUiProbe(); }
+      // 扫描探针：后端把 LINGQU_SCAN_PATH 透传下来，就在启动时跑一次 t2h:scan
+      if (d && d.scanPath) { runScanProbe(String(d.scanPath)); }
     }).catch(function(e){
       $('envList').innerHTML = '<div class="pill err">体检失败：' + esc(e.message) + '</div>';
       setDot('dotEnv', 'err'); $('txtEnv').textContent = '体检失败';
@@ -1325,6 +1327,29 @@ withBridge(function(tauri){
   /* ===== 退出 ===== */
   $('btnQuit').onclick = function(){ invoke('t2h:quit').catch(function(){}); };
 
+  /* ===== 扫描探针：给了路径就立刻跑一次 t2h:scan，把指标回投自检 ===== */
+  function runScanProbe(path){
+    invoke('t2h:scan', { path: path }).then(function(r){
+      r = r || {};
+      if (!r.ok) {
+        window.__scan = { path: path, error: r.error || 'scan failed' };
+      } else {
+        var m = r.metrics || {};
+        var s = r.score || {};
+        window.__scan = {
+          path: path, out: r.out || '',
+          R: m.R, D: m.D, H: m.H, U: m.U,
+          C1: m.C1, C3: m.C3,
+          total: s.total, partial: s.partial
+        };
+      }
+      reportUi('scan-done');
+    }).catch(function(e){
+      window.__scan = { path: path, error: e && e.message ? e.message : 'invoke error' };
+      reportUi('scan-error');
+    });
+  }
+
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -1347,6 +1372,14 @@ withBridge(function(tauri){
       approvals: CJ.approvals,
       lastFrameType: CJ.lastType,
       replyPreview: (CJ.lastReply || '').slice(0, 120),
+      scanR: (window.__scan && window.__scan.R) || 0,
+      scanD: (window.__scan && window.__scan.D) || 0,
+      scanH: (window.__scan && window.__scan.H) || 0,
+      scanU: (window.__scan && window.__scan.U) || 0,
+      scanC1: (window.__scan && window.__scan.C1) || 0,
+      scanTotal: (window.__scan && window.__scan.total) || 0,
+      scanOut: (window.__scan && window.__scan.out) || '',
+      scanError: (window.__scan && window.__scan.error) || '',
       errorCount: window.__uiErrors.length
     }).catch(function(){});
     if (tag) { console.log('[ui-report] ' + tag); }
