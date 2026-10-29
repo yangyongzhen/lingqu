@@ -248,9 +248,6 @@ public class ScanCommand <: CommandHandler {
             return res
         }
 
-        let scan = scanProject(path)
-        let json = scan.toJson()
-
         // 工程名取路径末段（"/" 与 "\" 都认——Windows 路径只按 "/" 切会把整条路径当名字）
         var name = projectNameOf(path)
         if (name.size == 0) {
@@ -258,6 +255,38 @@ public class ScanCommand <: CommandHandler {
         }
         // 兜底：个别字符（`:` 等）在文件名里不合法，统一替换成 `_`
         name = sanitizeFileName(name)
+
+        // ---- C2 人工基线：参数 baseline 优先，否则自动找 samples/baselines/<工程名>.json ----
+        // 基线是「人工通读得出的该被识别的项」；没有基线就不出 C2（如实标 -1，绝不编 100）
+        var baselinePath = argStr(args, "baseline", "")
+        var baselineErr = ""
+        if (baselinePath.size == 0) {
+            let guess = "samples/baselines/${name}.json"
+            if (exists(Path(guess))) {
+                baselinePath = guess
+            }
+        }
+        var blOpt: Option<Baseline> = None
+        if (baselinePath.size > 0) {
+            if (exists(Path(baselinePath))) {
+                try {
+                    let bl = parseBaseline(String.fromUtf8(File.readFrom(baselinePath)))
+                    if (bl.total() > 0) {
+                        blOpt = Some(bl)
+                    } else {
+                        baselineErr = "基线文件解析出 0 项：${baselinePath}"
+                    }
+                } catch (e: Exception) {
+                    baselineErr = "读基线失败：${e}"
+                }
+            } else {
+                baselineErr = "基线文件不存在：${baselinePath}"
+            }
+        }
+
+        let scan = scanProject(path, blOpt)
+        let json = scan.toJson()
+
         let outDir = ".lingqu/scan"
         let outFile = "${outDir}/${name}.json"
         var wrote = false
@@ -282,9 +311,20 @@ public class ScanCommand <: CommandHandler {
         res.put("project", JsonString(name))
         res.put("out", JsonString(if (wrote) { outFile } else { "" }))
         res.put("outError", JsonString(outErr))
+        var baselineUsed = ""
+        match (blOpt) {
+            case Some(_) => baselineUsed = baselinePath
+            case None => ()
+        }
+        res.put("baseline", JsonString(baselineUsed))
+        res.put("baselineError", JsonString(baselineErr))
         res.put("metrics", scan.metricsJson())
         res.put("score", scan.scoreJson())
         res.put("scan", json)
+        match (scan.conf) {
+            case Some(cf) => res.put("confidence", cf.toJson())
+            case None => ()
+        }
         let c = scan.counts()
         eprintln("[lingqu][scan] ${name}: R=${c[0]} D=${c[1]} H=${c[2]} U=${c[3]}")
         return res
@@ -337,6 +377,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("scanError", JsonString(argStr(args, "scanError", "")))
         o.put("scanOutError", JsonString(argStr(args, "scanOutError", "")))
         o.put("scanKindRows", JsonString(argStr(args, "scanKindRows", "")))
+        // C2 对照指标：-1 表示没对照基线（页面上显示"未对照"）
+        o.put("scanC2", JsonInt(argInt(args, "scanC2", -1)))
+        o.put("scanMissed", JsonInt(argInt(args, "scanMissed", 0)))
+        o.put("scanExtra", JsonInt(argInt(args, "scanExtra", 0)))
+        o.put("scanVerdictDiff", JsonInt(argInt(args, "scanVerdictDiff", 0)))
+        o.put("scanBaseline", JsonString(argStr(args, "scanBaseline", "")))
         o.put("scanKind", JsonString(argStr(args, "scanKind", "")))
         o.put("scanRows", JsonInt(argInt(args, "scanRows", 0)))
         o.put("scanBlockers", JsonInt(argInt(args, "scanBlockers", 0)))

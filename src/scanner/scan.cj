@@ -390,8 +390,59 @@ let FRONTEND_MARKERS: Array<(String, String)> = [
     ("navigator.clipboard", "navigator.clipboard"),
     ("createObjectURL", "Blob 下载"),
     ("download=", "Blob 下载"),
+    // canvas 导出图片：ArkWeb 下 toDataURL 的长 base64 跨桥有大文件风险（C2 基线对照后补）
+    ("toDataURL(", "canvas.toDataURL"),
+    ("toBlob(", "canvas.toDataURL"),
+    // 读本地文件（配合 input[type=file] 用）
+    ("new FileReader", "FileReader"),
+    ("FileReader(", "FileReader"),
+    // 外链回退路径
+    ("window.open(", "window.open"),
     ("fetch(", "fetch")
 ]
+
+/**
+ * 前端侧 @tauri-apps/api 模块 → 平台 API 项（kind 仍是 `platform`）。
+ * 为什么单独一类：这些能力在 OHOS **没有对应实现**，属于要换系统 API 的平台差异，
+ * 不是浏览器能力。habit-tree 的 `getVersion` 就是这么漏掉的（C2 基线对照发现的）。
+ * `@tauri-apps/api/core`（invoke）与 `.../event`（emit/listen）**不算**——前者是桥本身、
+ * 后者归事件清单，避免一项两算。
+ */
+let FRONTEND_TAURI_API_MARKERS: Array<(String, String)> = [
+    ("getVersion(", "getVersion"),
+    ("@tauri-apps/api/window", "tauri window API"),
+    ("@tauri-apps/api/path", "tauri path API"),
+    ("@tauri-apps/api/fs", "tauri fs API"),
+    ("@tauri-apps/api/dialog", "tauri dialog API"),
+    ("@tauri-apps/api/webview", "tauri webview API")
+]
+
+public func parseFrontendTauriApis(src: Source): ArrayList<ScanItem> {
+    let out = ArrayList<ScanItem>()
+    let byName = HashMap<String, ScanItem>()
+    let lines = src.text.split("\n", -1)
+    var ln: Int64 = 0
+    for (line in lines) {
+        ln += 1
+        let t = line.trimAscii()
+        if (t.startsWith("//") || t.startsWith("*")) {
+            continue
+        }
+        for ((marker, symbol) in FRONTEND_TAURI_API_MARKERS) {
+            if (line.contains(marker)) {
+                match (byName.get(symbol)) {
+                    case Some(it) => it.site(src.rel, ln)
+                    case None =>
+                        let it = ScanItem("platform", symbol)
+                        it.site(src.rel, ln)
+                        byName.add(symbol, it)
+                        out.add(it)
+                }
+            }
+        }
+    }
+    return out
+}
 
 public func parseFrontend(src: Source): ArrayList<ScanItem> {
     let out = ArrayList<ScanItem>()
@@ -524,6 +575,25 @@ public func verdictOfPlatform(symbol: String): Array<String> {
     if (symbol == "tauri_plugin_opener" || symbol == "open::that") {
         return [V_DOWNGRADE, "R3-009", "打开链接/文件依赖宿主能力（鸿蒙能力位 0）→ 应用内提示"]
     }
+    // ---- 前端侧 @tauri-apps/api 能力（C2 基线对照后补的一类：OHOS 无对应实现，要换系统 API）----
+    if (symbol == "getVersion") {
+        return [V_REWRITE, "R3-010", "鸿蒙无 app 版本 API（@tauri-apps/api/app 走宿主）→ bundleManager 桥接"]
+    }
+    if (symbol == "tauri window API") {
+        return [V_REWRITE, "R3-011", "窗口 API 走宿主 window 能力，鸿蒙窗口能力面不同 → 校准 + cfg 分支"]
+    }
+    if (symbol == "tauri path API") {
+        return [V_REWRITE, "R3-012", "path API 依赖 HOME/沙箱路径 → 同 R3-001，改沙箱路径"]
+    }
+    if (symbol == "tauri fs API") {
+        return [V_DOWNGRADE, "R3-013", "fs scope 语义不同（沙箱）→ 校准 capabilities 的 scopes.fs"]
+    }
+    if (symbol == "tauri dialog API") {
+        return [V_DOWNGRADE, "R3-014", "鸿蒙无原生对话框（能力位 0）→ 应用内 overlay"]
+    }
+    if (symbol == "tauri webview API") {
+        return [V_MANUAL, "", "WebView 直接操作在 ArkWeb 下能力面不同，需要人判断影响面"]
+    }
     return [V_MANUAL, "", "未归类的平台 API：需要人判断影响面"]
 }
 
@@ -551,6 +621,15 @@ public func verdictOfFrontend(api: String): Array<String> {
     }
     if (api == "Blob 下载") {
         return [V_DOWNGRADE, "R5-009", "ArkWeb 下载桥未接线 → Rust 端写文件 + 系统保存"]
+    }
+    if (api == "canvas.toDataURL") {
+        return [V_REWRITE, "R5-010", "ArkWeb canvas 可用但导出大图有内存/编码差异 → 改走 toBlob + 原生保存（不要 base64 长串跨桥）"]
+    }
+    if (api == "FileReader") {
+        return [V_NA, "", "FileReader 本身 ArkWeb 可用；只有配合 <input type=file> 才受限（那条单独计项）"]
+    }
+    if (api == "window.open") {
+        return [V_NA, "", "主路径已走 open_url 命令；window.open 仅浏览器开发回退，ArkWeb 不可用也不影响功能"]
     }
     if (api == "fetch") {
         return [V_MANUAL, "", "跨源 fetch：需确认 ArkWeb 的 CORS 与出网白名单（能力/清单）"]
@@ -650,6 +729,8 @@ public class ScanResult {
     public var project = JsonObject()
     public var items: ArrayList<ScanItem> = ArrayList<ScanItem>()
     public var notes: ArrayList<String> = ArrayList<String>()
+    /** C2 对照结果：只有给了人工基线才有（没基线时为空，指标如实标 -1，不编 100） */
+    public var conf: Option<Confidence> = None
 
     public func counts(): Array<Int64> {
         var total: Int64 = 0
@@ -686,9 +767,18 @@ public class ScanResult {
         let c3 = if (total == 0) { 0.0 } else { Float64(manual) * 100.0 / Float64(total) }
         o.put("C1", JsonFloat(c1))
         o.put("C3", JsonFloat(c3))
-        // C2 需要人工基线比对，本版留空并如实标注
-        o.put("C2", JsonNull())
-        o.put("C2Note", JsonString("需与人工基线清单双向 diff（P2 收尾时做）"))
+        // C2 发现置信度：只有做了人工基线 diff 才有数（没做就是 -1 + 说明，绝不编 100）
+        match (this.conf) {
+            case Some(cf) =>
+                o.put("C2", JsonFloat(cf.c2()))
+                o.put("C2Note", JsonString("(基线项 ${cf.baselineTotal} − 漏识别 ${cf.missed.size}) ÷ 基线项 ${cf.baselineTotal}；来源：${cf.source}"))
+                o.put("confMissed", JsonInt(Int64(cf.missed.size)))
+                o.put("confExtra", JsonInt(Int64(cf.extra.size)))
+                o.put("confPrecision", JsonFloat(cf.precision()))
+            case None =>
+                o.put("C2", JsonNull())
+                o.put("C2Note", JsonString("未提供人工基线（samples/baselines/<工程>.json），本次不出 C2"))
+        }
         return o
     }
 
@@ -788,6 +878,11 @@ public class ScanResult {
             }
         }
         o.put("blockers", blockers)
+        // C2 对照（有基线时才有这一段）
+        match (this.conf) {
+            case Some(cf) => o.put("confidence", cf.toJson())
+            case None => ()
+        }
         var notes = JsonArray()
         for (n in this.notes) {
             notes.add(JsonString(n))
@@ -889,6 +984,14 @@ public func sanitizeFileName(name: String): String {
 }
 
 public func scanProject(root: String): ScanResult {
+    return scanProject(root, None)
+}
+
+/**
+ * 带人工基线的扫描：算完五类清单后做**双向 diff**，把 C2 发现置信度填进结果。
+ * 没有基线就按 None 走 —— C2 留空并写明原因，不编造 100。
+ */
+public func scanProject(root: String, baseline: Option<Baseline>): ScanResult {
     let res = ScanResult()
 
     // ---------- 1) 工程识别 ----------
@@ -976,6 +1079,32 @@ public func scanProject(root: String): ScanResult {
         }
     }
 
+    // ---------- 4.5) 前端侧 @tauri-apps/api 能力（并进平台 API 类）----------
+    var feApiMap = HashMap<String, ScanItem>()
+    var feApiOrder = ArrayList<String>()
+    for (src in frontSources) {
+        for (it in parseFrontendTauriApis(src)) {
+            if (!feApiOrder.contains(it.name)) {
+                feApiOrder.add(it.name)
+            }
+            match (feApiMap.get(it.name)) {
+                case Some(old) => for (s in it.sites) {
+                    old.sites.add(s)
+                }
+                case None => feApiMap.add(it.name, it)
+            }
+        }
+    }
+    for (nm in feApiOrder) {
+        match (feApiMap.get(nm)) {
+            case Some(it) =>
+                let rule = verdictOfPlatform(it.name)
+                it.decide(rule[0], rule[1], rule[2])
+                res.items.add(it)
+            case None => ()
+        }
+    }
+
     // ---------- 5) 事件（同一事件名跨文件合并）----------
     var eventMap = HashMap<String, ScanItem>()
     var eventOrder = ArrayList<String>()
@@ -1055,6 +1184,22 @@ public func scanProject(root: String): ScanResult {
     }
     if (registered.size > 0) {
         res.notes.add("generate_handler! 注册了 ${registered.size} 个命令")
+    }
+
+    // ---------- 8) C2 发现置信度：与人工基线双向 diff ----------
+    match (baseline) {
+        case Some(bl) =>
+            let cf = diffConfidence(bl, res.items)
+            res.conf = Some(cf)
+            res.notes.add("C2 对照基线「${bl.project}」（${bl.total()} 项）：漏识别 ${cf.missed.size}，误识别 ${cf.extra.size}，结论分歧 ${cf.verdictDiff.size}")
+            if (cf.missed.size > 0) {
+                res.notes.add("漏识别：${cf.missed}")
+            }
+            if (cf.extra.size > 0) {
+                res.notes.add("误识别（扫描有、基线无）：${cf.extra}")
+            }
+        case None =>
+            res.notes.add("未提供人工基线，C2 不出数（口径见 docs/P2-scan-口径草案.md §A4）")
     }
 
     return res

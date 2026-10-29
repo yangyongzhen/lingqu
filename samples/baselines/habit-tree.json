@@ -1,0 +1,34 @@
+{
+  "schema": "lingqu/baseline/v1",
+  "project": "habit-tree",
+  "source": "人工通读 E:\\test\\rust\\habit-tree 的 src-tauri/src/{commands,lib,storage,stats,ohos_bridge}.rs 与 src/{ui,store,quote,celebrate,theme,color}.ts + src/index.html（2026-10-30），逐条给结论；口径见 docs/P2-scan-口径草案.md §A4",
+  "note": "基线只用于 C2 双向 diff，基线里的 verdict 不参与 C1/C2 计算。kind 取扫描器同名口径：command/event/plugin/frontend/platform。",
+  "items": [
+    { "kind": "command", "name": "list_habits", "verdict": "不适用", "note": "纯 redb 读，无平台依赖" },
+    { "kind": "command", "name": "upsert_habit", "verdict": "不适用", "note": "纯数据写" },
+    { "kind": "command", "name": "delete_habit", "verdict": "不适用", "note": "纯数据写" },
+    { "kind": "command", "name": "export_backup", "verdict": "不适用", "note": "serde 序列化，无平台依赖" },
+    { "kind": "command", "name": "import_backup", "verdict": "不适用", "note": "serde 反序列化" },
+    { "kind": "command", "name": "ls_get_all", "verdict": "不适用", "note": "localStorage 桥（ArkWeb 无 localStorage 时的后端）" },
+    { "kind": "command", "name": "ls_set", "verdict": "不适用", "note": "同上" },
+    { "kind": "command", "name": "ls_remove", "verdict": "不适用", "note": "同上" },
+    { "kind": "command", "name": "ls_clear", "verdict": "不适用", "note": "同上" },
+    { "kind": "command", "name": "open_url", "verdict": "不适用", "note": "内部转调 open::that，宿主能力由插件侧承接" },
+    { "kind": "command", "name": "share_card", "verdict": "不适用", "note": "PNG base64 落沙箱 + 宿主分享" },
+    { "kind": "command", "name": "save_card", "verdict": "不适用", "note": "PNG 落公共目录" },
+
+    { "kind": "frontend", "name": "localStorage", "verdict": "改造", "note": "src 下 17 处；ArkWeb 自定义 scheme 下为 null → ls_* 命令桥" },
+    { "kind": "frontend", "name": "fetch", "verdict": "人工", "note": "src/quote.ts:21 每日一句，需确认出网/CORS 白名单" },
+    { "kind": "frontend", "name": "input[type=color]", "verdict": "改造", "note": "ui.ts 3 处；ArkWeb 不支持且隐藏仍参与合成 → 应用内色板" },
+    { "kind": "frontend", "name": "Blob 下载", "verdict": "降级", "note": "exportData：createObjectURL + a[download]，ArkWeb 下载桥未接线" },
+    { "kind": "frontend", "name": "canvas.toDataURL", "verdict": "改造", "note": "celebrate.ts:140/163 导出庆祝卡片 PNG，长 base64 跨桥有风险 → toBlob + 原生保存" },
+    { "kind": "frontend", "name": "FileReader", "verdict": "不适用", "note": "ui.ts:1140 importFileChange 未被任何元素/事件引用（无 input[type=file]）→ 死代码，不构成迁移单元" },
+    { "kind": "frontend", "name": "window.open", "verdict": "不适用", "note": "ui.ts:1018 openExternal 的浏览器回退；Tauri 路径已走 open_url 命令" },
+
+    { "kind": "platform", "name": "app_data_dir", "verdict": "改造", "note": "6 处；OHOS 无 HOME，路径解析可能返回 None" },
+    { "kind": "platform", "name": "dirs::data_dir", "verdict": "改造", "note": "lib.rs:15 作为 app_data_dir 的前置探测" },
+    { "kind": "platform", "name": "std::env::temp_dir", "verdict": "降级", "note": "2 处；改应用沙箱 cache 目录" },
+    { "kind": "platform", "name": "std::process::Command", "verdict": "降级", "note": "3 处（open_url 打开浏览器）；沙箱内受限" },
+    { "kind": "platform", "name": "getVersion", "verdict": "改造", "note": "ui.ts:13/1089 读应用版本；OHOS 无该 API → bundleManager 桥" }
+  ]
+}

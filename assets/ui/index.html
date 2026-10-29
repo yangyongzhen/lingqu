@@ -406,9 +406,20 @@ body.ai-hidden .ai-show{display:block}
               <div class="stat"><div class="k">人工 H</div><div class="v" id="mH" style="color:var(--warn)">—<small>项</small></div></div>
               <div class="stat"><div class="k">未知 U</div><div class="v" id="mU" style="color:var(--err)">—<small>项</small></div></div>
             </div>
-            <div class="legend"><span><i class="dot ok"></i>C1 结论覆盖 <b id="mC1" style="color:var(--fg)">—</b></span><span><i class="dot warn"></i>C3 人工占比 <b id="mC3">—</b></span><span><i class="dot err"></i>U 必须为 0</span></div>
+            <div class="legend"><span><i class="dot ok"></i>C1 结论覆盖 <b id="mC1" style="color:var(--fg)">—</b></span><span><i class="dot info"></i>C2 发现置信 <b id="mC2" style="color:var(--fg)">—</b></span><span><i class="dot warn"></i>C3 人工占比 <b id="mC3">—</b></span><span><i class="dot err"></i>U 必须为 0</span></div>
             <div class="sethint" id="scanNote" style="margin-top:6px">点右上「扫描」选一个 Tauri 工程；也可置 LINGQU_SCAN_PATH 自动扫。</div>
           </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>C2 发现置信度 · 人工基线对照</h3><span class="right" id="confNote">未对照基线</span></div>
+          <div class="grid2" style="gap:10px">
+            <div class="stat"><div class="k">基线项</div><div class="v" id="confBase">—<small>项</small></div></div>
+            <div class="stat"><div class="k">命中</div><div class="v" id="confMatched" style="color:var(--ok)">—<small>项</small></div></div>
+            <div class="stat"><div class="k">漏识别</div><div class="v" id="confMissed" style="color:var(--err)">—<small>项</small></div></div>
+            <div class="stat"><div class="k">误识别</div><div class="v" id="confExtra" style="color:var(--warn)">—<small>项</small></div></div>
+          </div>
+          <div class="sethint" id="confSource" style="margin-top:8px">C2 = 1 − 漏识别 ÷ 基线项。基线是人通读代码列的清单（<span class="mono">samples/baselines/&lt;工程&gt;.json</span>），基线的结论不参与覆盖率计算。</div>
+          <div id="confLists" style="margin-top:6px"></div>
         </div>
         <div class="card">
           <div class="card-h"><h3>清单</h3><span class="right" id="itemsNote">尚未扫描</span></div>
@@ -1355,8 +1366,8 @@ withBridge(function(tauri){
 
     window.__scan = {
       path: res.project || '', out: res.out || '', outError: res.outError || '',
-      R: m.R, D: m.D, H: m.H, U: m.U, C1: m.C1, C3: m.C3,
-      total: s.total, partial: s.partial
+      R: m.R, D: m.D, H: m.H, U: m.U, C1: m.C1, C3: m.C3, C2: m.C2,
+      total: s.total, partial: s.partial, baseline: res.baseline || ''
     };
 
     // 评分环
@@ -1382,6 +1393,43 @@ withBridge(function(tauri){
     put('mR', m.R || 0); put('mD', m.D || 0); put('mH', m.H || 0); put('mU', m.U || 0);
     $('mC1').textContent = (typeof m.C1 === 'number' ? m.C1.toFixed(1) : '—') + '%';
     $('mC3').textContent = (typeof m.C3 === 'number' ? m.C3.toFixed(1) : '—') + '%';
+    // C2：后端未做基线对照时给 null（不是 0 也不是 100）
+    $('mC2').textContent = (typeof m.C2 === 'number' && m.C2 >= 0) ? m.C2.toFixed(1) + '%' : '未对照';
+
+    // C2 对照面板
+    var cf = res.confidence || null;
+    if (cf) {
+      put('confBase', cf.baselineTotal || 0);
+      put('confMatched', cf.matched || 0);
+      put('confMissed', cf.missedCount || 0);
+      put('confExtra', cf.extraCount || 0);
+      $('confNote').textContent = (typeof cf.C2 === 'number' ? 'C2 ' + cf.C2.toFixed(1) + '%' : '—')
+        + ' · precision ' + (typeof cf.precision === 'number' && cf.precision >= 0 ? cf.precision.toFixed(1) + '%' : '—');
+      $('confSource').innerHTML = '基线来源：<span class="mono">' + escHtml(cf.source || '（未填写）') + '</span>'
+        + '；结论分歧 <b>' + (cf.verdictDiffCount || 0) + '</b> 项（只对照，不影响 C1/C2）。';
+      var lines = [];
+      if ((cf.missed || []).length) {
+        lines.push('<div class="sethint" style="color:var(--err)">漏识别（基线有、扫描没有）：<span class="mono">' + cf.missed.map(escHtml).join('、') + '</span></div>');
+      }
+      if ((cf.extra || []).length) {
+        lines.push('<div class="sethint" style="color:var(--warn)">误识别（扫描有、基线没有，需人看）：<span class="mono">' + cf.extra.map(escHtml).join('、') + '</span></div>');
+      }
+      if ((cf.verdictDiff || []).length) {
+        lines.push('<div class="sethint">结论分歧：<span class="mono">' + cf.verdictDiff.map(escHtml).join('；') + '</span></div>');
+      }
+      if (!lines.length) {
+        lines.push('<div class="sethint" style="color:var(--ok)">双向 diff 全一致：没有漏识别、没有误识别、结论无分歧。</div>');
+      }
+      $('confLists').innerHTML = lines.join('');
+      window.__conf = { C2: cf.C2, missed: cf.missedCount, extra: cf.extraCount, diff: cf.verdictDiffCount, base: cf.baselineTotal };
+    } else {
+      $('confNote').textContent = '未对照基线';
+      $('confSource').innerHTML = '未找到人工基线 <span class="mono">samples/baselines/&lt;工程&gt;.json</span>'
+        + (res.baselineError ? '（' + escHtml(res.baselineError) + '）' : '') + '，C2 不出数。';
+      $('confLists').innerHTML = '';
+      ['confBase','confMatched','confMissed','confExtra'].forEach(function(id){ $(id).innerHTML = '—<small>项</small>'; });
+      window.__conf = null;
+    }
 
     // 页签计数
     var n = function(k){ return (items[k] || []).length; };
@@ -1540,6 +1588,11 @@ withBridge(function(tauri){
       scanError: (window.__scan && window.__scan.error) || '',
       scanOutError: (window.__scan && window.__scan.outError) || '',
       scanKindRows: window.__scanKindRows || '',
+      scanC2: (window.__scan && typeof window.__scan.C2 === 'number') ? window.__scan.C2 : -1,
+      scanMissed: (window.__conf && window.__conf.missed) || 0,
+      scanExtra: (window.__conf && window.__conf.extra) || 0,
+      scanVerdictDiff: (window.__conf && window.__conf.diff) || 0,
+      scanBaseline: (window.__scan && window.__scan.baseline) || '',
       scanKind: SCAN.kind,
       scanRows: window.__scanRows || 0,
       scanBlockers: window.__scanBlockers || 0,
