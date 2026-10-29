@@ -18,9 +18,10 @@
 *.js    text eol=lf
 *.ts    text eol=lf
 
-# shell 脚本：LF，并且在 Linux 上保持可执行位
+# shell 脚本：LF
+# 注意：**可执行位不归 .gitattributes 管**（那是索引里的文件模式），
+# 在 Windows 上新增 .sh 后必须显式补：git update-index --chmod=+x scripts/xxx.sh
 *.sh    text eol=lf
-*.sh    executable
 
 # Windows 脚本：CRLF（cmd.exe 对 LF-only 的 .bat 处理不稳定）
 *.bat   text eol=crlf
