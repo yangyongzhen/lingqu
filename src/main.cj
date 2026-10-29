@@ -4,6 +4,7 @@ import cjTauri.*
 import cjTauri.plugins.log.*
 import cjTauri.plugins.ws.*
 import lingqu.scanner.*
+import lingqu.deps.*
 import std.env.*
 import std.fs.*
 import stdx.encoding.json.*
@@ -335,6 +336,83 @@ public class ScanCommand <: CommandHandler {
 // 业务装配点
 // ============================================================
 
+/**
+ * t2h:deps —— Cargo 依赖树 OHOS 兼容性扫描（P3）。
+ * 数据源：src-tauri/Cargo.lock（整树）+ Cargo.toml 的 [patch.*] 段（fork 是否已落）。
+ * 结果落 `.lingqu/deps/<工程名>.json`（lingqu/deps/v1），失败原因进 outError（D-013）。
+ */
+public class DepsCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:deps 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
+            return res
+        }
+        if (!exists(Path(path))) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("路径不存在：${path}"))
+            return res
+        }
+
+        var name = projectNameOf(path)
+        if (name.size == 0) {
+            name = "project"
+        }
+        name = sanitizeFileName(name)
+
+        let deps = depsScanJson(path)
+
+        // 读盘失败不静默：outError 原样透传，落档跳过
+        // （口径与 baseline.cj 的 jsonStrOf 同款：match v.kind() 再 asString().getValue()）
+        var errText = ""
+        match (deps.get("outError")) {
+            case Some(v) => match (v.kind()) {
+                case JsonKind.JsString => errText = v.asString().getValue()
+                case _ => ()
+            }
+            case None => ()
+        }
+
+        var wrote = false
+        var outErr = ""
+        if (errText.size == 0) {
+            let outDir = ".lingqu/deps"
+            let outFile = "${outDir}/${name}.json"
+            try {
+                if (!exists(Path(".lingqu"))) {
+                    Directory.create(Path(".lingqu"))
+                }
+                if (!exists(Path(outDir))) {
+                    Directory.create(Path(outDir))
+                }
+                File.writeTo(outFile, deps.toJsonString().toArray())
+                wrote = true
+                eprintln("[lingqu][deps] ${name}: 落档 ${outFile}")
+            } catch (e: Exception) {
+                outErr = "${e}"
+                eprintln("[lingqu][deps] 写依赖矩阵失败：${e}")
+            }
+        } else {
+            eprintln("[lingqu][deps] ${name}: ${errText}")
+        }
+
+        res.put("ok", JsonBool(errText.size == 0))
+        res.put("project", JsonString(name))
+        res.put("out", JsonString(if (wrote) { ".lingqu/deps/${name}.json" } else { "" }))
+        res.put("outError", JsonString(outErr))
+        res.put("error", JsonString(errText))
+        res.put("deps", deps)
+        return res
+    }
+}
+
 // ============================================================
 // ④ 界面自检（t2h:ui_report）：让界面自己报版面指标
 // ============================================================
@@ -386,6 +464,13 @@ public class UiReportCommand <: CommandHandler {
         o.put("scanKind", JsonString(argStr(args, "scanKind", "")))
         o.put("scanRows", JsonInt(argInt(args, "scanRows", 0)))
         o.put("scanBlockers", JsonInt(argInt(args, "scanBlockers", 0)))
+        // P3 依赖矩阵指标（t2h:deps 探针回投；depsTotal=0 且 depsOut 空表示未扫）
+        o.put("depsTotal", JsonInt(argInt(args, "depsTotal", 0)))
+        o.put("depsPatch", JsonInt(argInt(args, "depsPatch", 0)))
+        o.put("depsUnavailable", JsonInt(argInt(args, "depsUnavailable", 0)))
+        o.put("depsRows", JsonInt(argInt(args, "depsRows", 0)))
+        o.put("depsOut", JsonString(argStr(args, "depsOut", "")))
+        o.put("depsError", JsonString(argStr(args, "depsError", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         let text = o.toJsonString()
         // 落文件而不是只打日志：GUI 的 stderr 去向受框架日志重定向影响（见 AGENTS §4 第 14 条），
@@ -472,6 +557,7 @@ public func build(): AppSpec {
             app.register("t2h:quit", QuitCommand(app))
             app.register("t2h:ui_report", UiReportCommand())
             app.register("t2h:scan", ScanCommand())
+            app.register("t2h:deps", DepsCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

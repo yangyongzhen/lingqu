@@ -441,31 +441,24 @@ body.ai-hidden .ai-show{display:block}
         </div>
       </section>
 
-      <!-- ③ 依赖扫描 -->
+      <!-- ③ 依赖扫描：t2h:deps 数据驱动（lingqu/deps/v1） -->
       <section class="screen" data-screen="deps">
         <div class="whead">
           <div><h1>Cargo 依赖树 · OHOS 兼容性</h1><p>逐 crate 判定并给出替代方案，判定依据可点开看源码特征与已知结论。</p></div>
-          <div class="acts"><button class="btn">重新扫描</button><button class="btn primary">应用全部建议（4）</button></div>
+          <div class="acts"><input id="depsPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_SCAN_PATH）" style="width:280px"><button class="btn primary" id="btnDeps">扫描依赖</button></div>
         </div>
-        <div class="card" style="margin-bottom:12px;padding:10px 14px">
-          <div class="legend" style="margin:0">
-            <div class="seg"><button class="on">不兼容 4</button><button>需 patch 3</button><button>全量 87</button></div>
-            <span><i class="dot ok"></i>可用 78</span><span><i class="dot warn"></i>需改造 5</span><span><i class="dot err"></i>不可用 4</span>
-            <span class="right" style="margin-left:auto">占位示意 · 待 t2h:deps 接入</span>
+        <div class="card" style="margin-bottom:12px;padding:10px 14px" id="depsMetricsCard">
+          <div class="legend" style="margin:0" id="depsLegend">
+            <div class="seg"><button class="on" data-f="all">全量 0</button><button data-f="patch">需 patch 0</button><button data-f="no">不可用 0</button></div>
+            <span><i class="dot ok"></i>可用 0</span><span><i class="dot warn"></i>需 patch 0</span><span><i class="dot err"></i>不可用 0</span>
+            <span class="right" id="depsNote" style="margin-left:auto">待 t2h:deps 扫描</span>
           </div>
         </div>
         <div class="card" style="margin-top:0">
           <table>
             <thead><tr><th style="width:24%">crate</th><th>版本</th><th>状态</th><th style="width:26%">原因 / 依据</th><th style="width:24%">替代 / 改造</th></tr></thead>
-            <tbody>
-              <tr><td class="mono"><b>tauri</b></td><td class="mono">2.11.5</td><td><span class="pill warn">需 patch</span></td><td class="muted">crates.io 版无 OHOS 后端</td><td class="muted mono small">→ feat/open-harmony @rev</td></tr>
-              <tr><td class="mono"><b>wry</b></td><td class="mono">0.56.0</td><td><span class="pill warn">需 patch</span></td><td class="muted">须与 fork 同源，且 ^ 会绕过 patch</td><td class="muted mono small">钉 =0.56.0</td></tr>
-              <tr><td class="mono"><b>rfd</b></td><td class="mono">0.15.4</td><td><span class="pill err">不可用</span></td><td class="muted">依赖原生对话框（能力位 0）</td><td class="muted">移入 cfg(not(ohos)) + 应用内降级</td></tr>
-              <tr><td class="mono"><b>reqwest</b></td><td class="mono">0.12</td><td><span class="pill err">不可用</span></td><td class="muted">默认 TLS 在 OHOS 下不可用</td><td class="muted mono small">rustls + webpki-roots</td></tr>
-              <tr><td class="mono"><b>dirs</b></td><td class="mono">5.0</td><td><span class="pill err">不可用</span></td><td class="muted">OHOS 无 HOME → 返回 None</td><td class="muted">沙箱路径 + cfg 分支</td></tr>
-              <tr><td class="mono"><b>tauri-plugin-clipboard-manager</b></td><td class="mono">2.x</td><td><span class="pill ok">可用</span></td><td class="muted">鸿蒙走 pasteboard NDK FFI（真机验证）</td><td class="muted">—</td></tr>
-              <tr><td class="mono"><b>tauri-plugin-notification</b></td><td class="mono">2.x</td><td><span class="pill err">不可用</span></td><td class="muted">鸿蒙能力位 0</td><td class="muted">降级 + 可选开关</td></tr>
-              <tr><td class="mono"><b>serde / tokio / thiserror …</b></td><td class="muted">74 个</td><td><span class="pill ok">可用</span></td><td class="muted">纯计算或 stdx 可替代</td><td class="muted">—</td></tr>
+            <tbody id="depsRows">
+              <tr><td colspan="5" class="muted">还没有数据——填工程路径点「扫描依赖」，或置 LINGQU_SCAN_PATH 让探针自动扫。</td></tr>
             </tbody>
           </table>
         </div>
@@ -1344,6 +1337,18 @@ withBridge(function(tauri){
     });
   }
 
+  // 五维条：未扫描（-1）显示「—」且条为空。deps 维到手后单独重画，抽成函数复用
+  function renderScoreDims(s){
+    $('scoreDims').innerHTML = DIMS.map(function(d){
+      var v = s[d[0]];
+      var scanned = (typeof v === 'number' && v >= 0);
+      var cls = scanned ? (v < 70 ? 'warn' : '') : '';
+      return '<div class="dim"><span class="t">' + d[1] + '</span>'
+        + '<span class="bar"><i class="' + cls + '" style="width:' + (scanned ? v : 0) + '%"></i></span>'
+        + '<span class="n">' + (scanned ? String(v) : '—') + '</span></div>';
+    }).join('');
+  }
+
   function renderScan(res){
     res = res || {};
     SCAN.res = res;
@@ -1379,14 +1384,7 @@ withBridge(function(tauri){
       : '五维全扫描';
 
     // 五维条：未扫描（-1）显示「—」且条为空
-    $('scoreDims').innerHTML = DIMS.map(function(d){
-      var v = s[d[0]];
-      var scanned = (typeof v === 'number' && v >= 0);
-      var cls = scanned ? (v < 70 ? 'warn' : '') : '';
-      return '<div class="dim"><span class="t">' + d[1] + '</span>'
-        + '<span class="bar"><i class="' + cls + '" style="width:' + (scanned ? v : 0) + '%"></i></span>'
-        + '<span class="n">' + (scanned ? String(v) : '—') + '</span></div>';
-    }).join('');
+    renderScoreDims(s);
 
     // 覆盖率指标
     function put(id, val){ $(id).innerHTML = String(val) + '<small>项</small>'; }
@@ -1535,9 +1533,103 @@ withBridge(function(tauri){
     });
   };
 
+  /* ===== ③ 依赖扫描：t2h:deps 真数据渲染 ===== */
+  var DEPS = { items: [], filter: 'all', out: '', error: '' };
+  function depsPillClass(v){
+    if (v === '需patch') return 'warn';
+    if (v === '不可用') return 'err';
+    return 'ok';
+  }
+  function renderDepsRows(){
+    var rows = DEPS.items.filter(function(it){
+      if (DEPS.filter === 'patch') return it.verdict === '需patch';
+      if (DEPS.filter === 'no') return it.verdict === '不可用';
+      return true;
+    });
+    var tb = $('depsRows');
+    if (!DEPS.items.length) {
+      tb.innerHTML = '<tr><td colspan="5" class="muted">' + (DEPS.error ? ('扫描失败：' + DEPS.error) : '还没有数据——填工程路径点「扫描依赖」，或置 LINGQU_SCAN_PATH 让探针自动扫。') + '</td></tr>';
+      return;
+    }
+    var html = '';
+    rows.forEach(function(it){
+      html += '<tr><td class="mono"><b>' + esc(it.name) + '</b></td>'
+        + '<td class="mono">' + esc(it.version || '—') + '</td>'
+        + '<td><span class="pill ' + depsPillClass(it.verdict) + '">' + esc(it.verdict) + '</span></td>'
+        + '<td class="muted small">' + esc(it.rule || '') + ' · ' + esc(it.evidence || '') + '</td>'
+        + '<td class="muted mono small">' + esc(it.alternative || '—') + '</td></tr>';
+    });
+    tb.innerHTML = html || '<tr><td colspan="5" class="muted">该筛选下没有条目。</td></tr>';
+  }
+  function renderDeps(r){
+    var d = (r && r.deps) || {};
+    var m = d.metrics || {};
+    DEPS.items = d.items || [];
+    DEPS.out = r.out || '';
+    DEPS.error = (r && r.error) || d.outError || '';
+    window.__deps = {
+      total: m.total || 0, patch: m.patch || 0, unavailable: m.unavailable || 0,
+      ok: m.ok || 0, out: DEPS.out, error: DEPS.error, rows: DEPS.items.length
+    };
+    var seg = document.querySelectorAll('#depsLegend .seg button');
+    if (seg.length === 3) {
+      seg[0].textContent = '全量 ' + (m.total || 0);
+      seg[1].textContent = '需 patch ' + (m.patch || 0);
+      seg[2].textContent = '不可用 ' + (m.unavailable || 0);
+    }
+    var note = $('depsNote');
+    if (DEPS.error) {
+      note.style.color = 'var(--err)';
+      note.textContent = DEPS.error;
+    } else {
+      note.style.color = '';
+      note.textContent = '已落档 ' + (DEPS.out || '（未落档）');
+      // 依赖维评分到手就把 ② 屏的 deps 维条点亮（原来是 -1 显示「—」）
+      if (typeof window.__deps.score === 'number' && window.__deps.score >= 0) {
+        var s = window.__scan || {};
+        if (typeof s.deps !== 'number' || s.deps < 0) { s.deps = window.__deps.score; }
+        renderScoreDims(s);
+      }
+    }
+    renderDepsRows();
+  }
+  document.querySelectorAll('#depsLegend .seg button').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('#depsLegend .seg button').forEach(function(x){ x.classList.remove('on'); });
+      b.classList.add('on');
+      DEPS.filter = b.getAttribute('data-f') || 'all';
+      renderDepsRows();
+      reportUi('deps-filter-' + DEPS.filter);
+    });
+  });
+  $('btnDeps').addEventListener('click', function(){
+    var p = ($('depsPath').value || '').trim();
+    if (!p) { $('depsNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_SCAN_PATH）。'; return; }
+    $('depsNote').textContent = '扫描中：' + p;
+    invoke('t2h:deps', { path: p }).then(function(r){
+      renderDeps(r || {});
+      reportUi('deps-manual');
+    }).catch(function(e){
+      DEPS.error = e && e.message ? e.message : 'invoke error';
+      renderDeps({});
+      reportUi('deps-manual-error');
+    });
+  });
+
   /* ===== 扫描探针：给了路径就立刻跑一次 t2h:scan 并渲染，把指标回投自检 ===== */
   function runScanProbe(path){
     $('scanPath').value = path;
+    $('depsPath').value = path;
+    // 依赖矩阵与画像共用一次探针：同一路径 t2h:scan + t2h:deps 各跑一次，
+    // deps 的指标（total/patch/unavailable/rows）单独回投，可独立断言
+    invoke('t2h:deps', { path: path }).then(function(r){
+      renderDeps(r || {});
+      reportUi('deps-done');
+    }).catch(function(e){
+      DEPS.error = e && e.message ? e.message : 'invoke error';
+      renderDeps({});
+      reportUi('deps-error');
+    });
     invoke('t2h:scan', { path: path }).then(function(r){
       renderScan(r || {});
       reportUi('scan-done');
@@ -1596,6 +1688,12 @@ withBridge(function(tauri){
       scanKind: SCAN.kind,
       scanRows: window.__scanRows || 0,
       scanBlockers: window.__scanBlockers || 0,
+      depsTotal: (window.__deps && window.__deps.total) || 0,
+      depsPatch: (window.__deps && window.__deps.patch) || 0,
+      depsUnavailable: (window.__deps && window.__deps.unavailable) || 0,
+      depsRows: (window.__deps && window.__deps.rows) || 0,
+      depsOut: (window.__deps && window.__deps.out) || '',
+      depsError: (window.__deps && window.__deps.error) || '',
       errorCount: window.__uiErrors.length
     }).catch(function(){});
     if (tag) { console.log('[ui-report] ' + tag); }

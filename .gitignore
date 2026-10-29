@@ -35,3 +35,4 @@ Thumbs.db
 # 运行期自检产物（t2h:ui_report 落盘）与本地调试截图
 .lingqu/
 .shot-*.png
+.atomcode/

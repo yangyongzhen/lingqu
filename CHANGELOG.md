@@ -5,6 +5,62 @@
 
 ---
 
+## [0.9.0] - 2026-10-30
+
+**主题**：P3 `t2h:deps` —— Cargo 依赖树 OHOS 兼容性矩阵 + 替代建议库（路线图 T3-1～T3-5），
+③ 依赖扫描屏接真数据，依赖维评分上线。
+
+### Added
+
+- **`src/deps/deps.cj`（新，`lingqu.deps` 包）**：
+  - `parseCargoLock`：解析 `Cargo.lock`（v3/v4）整树，按 `[[package]]` 块取 name/version；
+    `[metadata]` 段不收；残缺块（缺 version）也收。**不跑 cargo 子进程**——单测只测纯函数（D-009）
+  - `parsePatchedCrates`：提取 `Cargo.toml` 的 `[patch.*]` 段覆盖的 crate 名
+    （`[patch.crates-io]` 与 `[patch."https://…"]` 都算），用于判断 fork 替换是否已落档
+  - `applyRule` 规则表（**每条都有实测出处，不凭空编**）：tauri 全家桶 / wry / tao /
+    openharmony-ability → 需 patch（alternative 给 git rev 与版本钉法）；
+    `openssl-sys` / `native-tls` / `rfd` → 不可用 + 替代方案（rustls / 应用内降级）；
+    `reqwest` / `dirs` / `napi-ohos` → 有条件可用（evidence 写清条件）；
+    **已在 `[patch.*]` 里的 crate 优先判「已处置」（R2-DEPS-100）**——这是迁移前后的关键区别；
+    表外的 crate 默认"可用"，evidence 标明"待真机验证"，**不冒充已验证**（避免误报，P3 出口判据 1）
+  - `depsScanJson`：总入口，产出 `lingqu/deps/v1`；读盘失败走 `outError`（D-013 不静默）
+  - `depsScoreOf`：依赖维评分（不可用 −15 / 需 patch −5，与 runtime/api 维同口径），floor 0
+- **命令 `t2h:deps` + 三处联动**：`src/main.cj` 注册、capabilities 放行、UI 调用；
+  结果落 `.lingqu/deps/<工程名>.json`
+- **③ 依赖扫描屏接真数据**：工程路径输入 + 扫描按钮 + 全量/需 patch/不可用筛选页签 +
+  状态 pill / 规则 / 依据 / 替代建议四列表格；`ui_report` 新增
+  `depsTotal / depsPatch / depsUnavailable / depsRows / depsOut / depsError` 六个可断言字段
+  （**后端 `UiReportCommand` 是显式字段白名单，前端新字段必须同批在服务端补放行**——本轮踩到）
+- **② 画像的依赖维评分条点亮**：`t2h:deps` 出分后 ② 屏 deps 维从"—"变为真分数
+  （build/dist 仍属 P5，如实保持 -1）
+- **9 例新单测**（总 50）：lock 解析（主路径/空文件/残缺块）、patch 提取（含子表头排除）、
+  规则表逐档断言、已 patch 优先、评分（主路径/扣到底不出负数）、错误路径（无 Cargo.lock → outError）、
+  真实样本回归（cc-switch-ohos，无样本时跳过不造假）、`quotedValue` 边界
+
+### Fixed
+
+- `ui_report` 服务端字段白名单漏新字段：前端加了 `deps*` 指标但落盘日志里始终不出现
+  （回投被服务端丢弃）。处置：`UiReportCommand` 同批补放行，探针可断言
+
+### 验证证据（cc-switch-ohos 真实样本，`.lingqu/ui-report.log`）
+
+| 断言项 | 值 |
+|---|---|
+| depsTotal / depsRows | **625**（与 Cargo.lock 包数一致——出口判据 3） |
+| depsPatch | 0（该工程 `[patch.*]` 已落，tauri/wry 全部命中"已处置"R2-DEPS-100） |
+| depsUnavailable | 1（`rfd` 0.16.0 → R2-DEPS-011 + 替代建议） |
+| depsOut | `.lingqu/deps/cc-switch-ohos.json`（真实落档） |
+| 依赖维评分 | 85 |
+| errorCount | 0 |
+| 门禁 | 四道闸全绿，**50 例单测** |
+
+**未做（如实标注）**：规则库只覆盖已实测的 10+ 个 crate（tauri 系 / wry / tao / napi-ohos /
+openssl 系 / rfd / dirs / reqwest），其余 615 个 crate 走默认直编——**不可用清单与真实交叉编译
+失败点的 ≥80% 吻合度验证（出口判据 1）需 P5 交叉编译流水线到位后做**；`cargo metadata` 子进程
+版采集层未做（当前用 Cargo.lock 静态解析，够用且可单测）。
+
+---
+
 ## [0.8.0] - 2026-10-30
 
 **主题**：P2 收尾 —— **C2 发现置信度**落地（人工基线双向 diff），并据此补齐 4 条扫描规则。
