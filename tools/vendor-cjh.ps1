@@ -5,11 +5,12 @@
 #   .\tools\vendor-cjh.ps1 -Source "<cjh 构建输出>" -Version "v1.5.4"
 #
 # Source 目录里必须有：cjh.exe / libcangjie-runtime.dll / libssl-3-x64.dll / libcrypto-3-x64.dll
+# 注意：本文件带 UTF-8 BOM（Windows PowerShell 5.1 读无 BOM 的 .ps1 会按 GBK 解码中文）。
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Source,
-    [string]$Version = "v1.5.3"
+    [string]$Version = "v1.6.1"
 )
 
 $ErrorActionPreference = "Stop"

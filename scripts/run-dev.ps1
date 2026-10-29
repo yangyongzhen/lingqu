@@ -1,4 +1,4 @@
-# 灵渠迁移台 · Windows 开发启动脚本
+﻿# 灵渠迁移台 · Windows 开发启动脚本
 #
 # 遵循框架 run_win.bat 的口径（那份脚本是踩完坑写的）：
 #   运行时目录 + stdx + 框架 native + 框架 native\webview2 四段 PATH，
@@ -11,6 +11,8 @@
 #   .\scripts\run-dev.ps1 -Sync               # 先 cj-tauri sync（改了 cj-tauri.toml 之后）
 #
 # 需要按本机情况改的都在下面的「配置区」。
+# 注意：本文件必须是「带 UTF-8 BOM」的 —— Windows PowerShell 5.1 读无 BOM 的 .ps1
+#       会按 ANSI(GBK) 解码，中文注释会把字符串引号撑坏，报「数组索引表达式丢失或无效」。
 
 [CmdletBinding()]
 param(
@@ -79,7 +81,12 @@ if ($Cjh) {
     Say "[cjh] 拉起引擎（端口 $CjhPort）..." Cyan
     if (-not (Test-Path $vendorCjh)) { Die "仓内没有 cjh：$vendorCjh（跑 tools\vendor-cjh.ps1 或放一份）" }
     $alive = $false
-    try { $c = New-Object Net.Sockets.TcpClient; $c.Connect("127.0.0.1", $CjhPort); $alive = $true; $c.Close() } catch {}
+    try {
+        $c = New-Object Net.Sockets.TcpClient
+        $ok = $c.ConnectAsync("127.0.0.1", $CjhPort).Wait(400)
+        if ($ok -and $c.Connected) { $alive = $true }
+        $c.Close()
+    } catch { }
     if ($alive) {
         Say "      端口 $CjhPort 上已有 cjh，复用（不抢你的实例）" Yellow
     } else {
@@ -95,5 +102,5 @@ Say "      cwd: $root" DarkGray
 Push-Location $root
 try {
     & $exe
-    Say "      退出码：$LASTEXITCODE" DarkGray
+    Say "      exit code: $LASTEXITCODE" DarkGray
 } finally { Pop-Location }

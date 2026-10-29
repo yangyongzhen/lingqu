@@ -5,7 +5,7 @@
 
 ## 版本
 
-- cjh 版本：v1.5.3（Windows x64）
+- cjh 版本：**v1.6.1**（Windows x64，实测 `/api/health` 回报 `{"status":"ok","version":"1.6.1","web_port":8765}`）
 - 形态：**非单文件**——`cjh.exe` + 3 个同目录 DLL（缺一个的典型症状：
   `TlsException: Can not load openssl library or function`，即「窗口照起、http 照通、只有 https 全灭」）
 
