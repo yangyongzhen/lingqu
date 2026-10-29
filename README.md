@@ -16,11 +16,11 @@
 | 工作台外壳（cj-tauri 2.0，1280×840，桌面 + 鸿蒙双目标骨架） | ✅ 可编译可运行 |
 | 七步流程导航（项目/画像/依赖/改造/构建/验证/报告） | ✅ 结构就位 |
 | **环境体检** `t2h:env` —— Rust / llvm-mingw / OHOS NDK / DevEco / hvigor / ohpm / hdc / cjh 一次查清 | ✅ 已接真数据 |
-| **cjh 引擎接入** `t2h:cjh_probe` / `t2h:cjh_start` —— 探测 8765、复用优先、`launchHidden` 静默拉起 | ✅ 已接真数据 |
+| **cjh 引擎托管**（移植自 ai-chat 的 `cjh_host.cj`） | ✅ 已接真数据 |
 | 迁移画像 / 依赖扫描 / 改造执行 / 构建 / 验证 / 报告 | ⏳ 界面占位，命令待接 |
 
-> 骨架的验收标准很简单：**双击起来，环境体检全绿，点「启动引擎」cjh 能起来并被探测到。**
-> 这三件事不成立，后面的迁移引擎没有意义。
+> 骨架的验收标准很简单：**双击起来，环境体检全绿，引擎能起来并被探测到，关窗口后引擎被收走。**
+> 这几件事不成立，后面的迁移引擎没有意义。
 
 ---
 
@@ -30,7 +30,8 @@
 lingqu/
 ├── cj-tauri.toml            # 应用清单——单一真相（id / 窗口 / 资产 / 能力目录 / 链接选项）
 ├── cjpm.toml                # 业务包（static 库；骨架以 path 依赖引用）
-├── src/main.cj              # 业务装配点 build(): AppSpec（零平台知识）
+├── src/main.cj              # 业务装配点 build(): AppSpec（环境体检 / 命令注册 / 生命周期接线）
+├── src/cjh_host.cj          # cjh 引擎托管（发现 / 健康检查 / 拉起 / 收尾 / 部署），移植自 ai-chat
 ├── assets/
 │   ├── ui/index.html        # 前端工作台（任意 Web 技术栈；当前是原生 HTML/CSS/JS）
 │   └── capabilities/default.json   # 能力白名单（命令 / 事件 / 权限集）
@@ -81,13 +82,44 @@ cd targets/ohos && bash build-hap.sh --install  # 编完装到设备并拉起
 
 ## 与 cjh 的关系：内置引擎，复用优先
 
-- cjh 以 **web 模式**被驱动：`cjh web --port 8765 --bind 127.0.0.1`，对外是 REST（`/api/health`、`/api/sessions`、
-  `/api/models`、`/api/tasks`、`/api/skills`、`/api/mcp`、`/api/workspaces`、`/api/fs/list`）+ WS 流式事件。
-- 拉起走框架的 `launchHidden()`（`std.process.launch` 会让 GUI 子系统的应用蹦出黑窗口）。
-- **复用优先**：8765 上已有用户自己的 cjh 就直接用，不抢、不杀；只有本应用拉起的那份才归本应用收尾。
-- cjh 路径优先级：`LINGQU_CJH` 环境变量 → `vendor/cjh/win-x64/cjh.exe`（工作目录=工程根）
-  → 同上上跳一层 → 开发期本机兜底路径。全无则如实报「引擎缺失」，其余功能照常（手动模式）。
-- 仓内自带一份 cjh（`vendor/cjh/`，含 `SHA256SUMS`），开箱即用；更新用 `tools/vendor-cjh.ps1`。
+cjh 以 **web 模式**被驱动：`cjh web --port 8765 --bind 127.0.0.1`，对外是 REST（`/api/health`、`/api/sessions`、
+`/api/models`、`/api/tasks`、`/api/skills`、`/api/mcp`、`/api/workspaces`、`/api/fs/list`）+ WS 流式事件。
+生命周期托管整体移植自 cj-tauri `examples/ai-chat` 的成熟实现（`src/cjh_host.cj`）。
+
+### 三条运维命令
+
+| 命令 | 做什么 | 副作用 |
+|---|---|---|
+| `t2h:cjh_status` | 三态：`running`（已验证就绪）/ `ready`（找得到二进制，可拉起）/ `missing` | 无（纯读，可轮询） |
+| `t2h:cjh_deploy` | 校验随包产物 → 必要时按安装包部署 → 拉起 → 健康检查 | 会起进程 |
+| `t2h:cjh_start` | 按指定路径拉起（`{path:"..."}`） | 会起进程 |
+
+**判定就一条**：`GET /api/health` 收到 200。没有"看着像起来了"这种模糊态。
+
+### 生命周期
+
+- **复用优先**：8765 上已有 cjh（可能是你自己的）就直接用，不抢、不杀、退出时不动它；
+  只有本应用拉起的（`gCjhOwned=true`）才由本应用收尾。
+- **拉起用 `launchHidden()`**：本应用是 GUI 子系统，`std.process.launch` 会让 Windows 给子进程
+  单配一个控制台黑窗口。
+- **退出收尾**：新形态 `AppSpec` 没有 onExit 钩子，所以用一条守护线程 `app.waitForExit()` 等窗口
+  全退出后收；`t2h:quit` 命令则先收 cjh 再退窗口。收尾跑 5 轮（200ms 间隔）以覆盖"用户秒关窗口、
+  后台拉起还在途中"的抢跑。
+- **就绪等待**：100ms 一步、最多 10 秒（cjh web 要装 Agent 栈，秒级是正常量级）；超时不算成功。
+- **只绑回环**：cjh web 默认绑 `0.0.0.0` 且默认不带鉴权 token，等于把「能跑 shell、能读写工作区、
+  能调 LLM」的整套 API 摆到局域网上——我们自己拉起的实例一律 `--bind 127.0.0.1`。
+
+### 二进制来源与校验
+
+优先级：`LINGQU_CJH` 环境变量 → 已部署目录（`%LOCALAPPDATA%\lingqu\cjh`）→ **仓内 `vendor/cjh/win-x64/`**
+（后者要过 SHA256 逐个比对 4 个文件：`cjh.exe` + `libcangjie-runtime.dll` + `libssl-3-x64.dll` + `libcrypto-3-x64.dll`）。
+全都没有就如实报「引擎缺失」，AI 面板不可用但其余功能照常——不假装连上了。
+
+校验不过**绝不解包也不执行**：这份二进制是能跑 shell 的 agent 引擎。若 vendor 不可用，可设
+`LINGQU_CJH_BUNDLE` 指到一份 zip，由系统 bsdtar（`%SystemRoot%\System32\tar.exe`，绝对路径调用，
+别写裸 `tar`——Git Bash 的 GNU tar 不认 zip）解包到安装目录后再拉起。
+
+环境变量：`LINGQU_CJH` / `LINGQU_CJH_PORT`（默认 8765）/ `LINGQU_CJH_BUNDLE`。
 
 ---
 

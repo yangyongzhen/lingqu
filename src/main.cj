@@ -1,38 +1,21 @@
 package lingqu
 
 import cjTauri.*
+import cjTauri.plugins.log.*
 import std.env.*
 import std.fs.*
-import std.net.*
 import stdx.encoding.json.*
 
 /*
  * 灵渠迁移台 · 业务装配点（RFC-002 §4.1）
  *
- * 本文件只负责「灵渠」这个应用自己的业务：
- *   ① 环境体检（doctor）：把「这台机器还缺什么」算清楚，一次说清；
- *   ② cjh 引擎接入：探测 / 拉起内置的 cjh（AI 引擎），对应 ai-chat 的 cjh_host 思路；
- *   ③ 迁移相关命令的注册点（后续 scan/port/build/deploy 在这里挂）。
+ * 分工：
+ *   - 本文件：环境体检（doctor）+ 命令注册 + 生命周期接线
+ *   - cjh_host.cj：cjh 引擎托管（发现 / 健康检查 / 拉起 / 收尾 / 部署），移植自 ai-chat
  *
  * 平台知识为零：窗口、页面、资产、能力目录都由清单 cj-tauri.toml 决定，
  * 桌面 launcher 与鸿蒙 entry 各自覆盖——同一份业务代码编出两端。
  */
-
-// ============================================================
-// 常量：开发期默认值（生产由配置/环境变量覆盖）
-// ============================================================
-
-/** 内置 cjh 的仓内位置（相对工程根；vendor 那份与本机开发期的兜底路径同优先级链） */
-let VENDOR_CJH_REL_WIN = "vendor\\cjh\\win-x64\\cjh.exe"
-
-/** 本机开发期的兜底路径（最后才用；换机器请用 vendor 或 LINGQU_CJH） */
-let DEFAULT_CJH_PATH = "E:\\test\\rust\\test1\\cjh\\cjh.exe"
-
-/** cjh web 服务端口：与 cjh / ai-chat 的既有约定一致，复用优先 */
-let CJH_PORT: Int64 = 8765
-
-/** cjh web 服务监听地址：只绑本机回环，不对外暴露 */
-let CJH_BIND = "127.0.0.1"
 
 // ============================================================
 // 小工具
@@ -88,56 +71,13 @@ func addCheck(arr: JsonArray, id: String, label: String, found: String, hint: St
     arr.add(o)
 }
 
-/**
- * cjh 可执行文件的实际路径，按优先级找：
- *   ① LINGQU_CJH 环境变量（部署后可覆盖）
- *   ② 仓内 vendor/cjh/win-x64/cjh.exe（工程根为工作目录时）
- *   ③ 同上，工程根上跳一层（在 targets/desktop 下启动时）
- *   ④ 本机开发期兜底路径
- * 全都没有返回空串 —— 上层据此报告「引擎缺失」，而不是猜一个路径去执行。
- */
-func cjhPath(): String {
-    let fromEnv = envOr("LINGQU_CJH", "")
-    return firstExisting([
-        fromEnv,
-        VENDOR_CJH_REL_WIN,
-        "..\\" + VENDOR_CJH_REL_WIN,
-        DEFAULT_CJH_PATH
-    ])
-}
-
-/** 端口探测：能建立 TCP 连接就算「在跑」（不依赖 cjh 的 HTTP 实现细节） */
-func probePort(host: String, port: Int64): Bool {
-    try {
-        let sock = TcpSocket(host, UInt16(port))
-        sock.connect(timeout: Duration.millisecond * 800)
-        sock.close()
-        return true
-    } catch (e: Exception) {
-        return false
-    }
-}
-
-/** 取 arg 里的字符串字段（前端 invoke 传进来的都在这） */
-func argString(args: JsonObject, key: String, fallback: String): String {
-    match (args.get(key)) {
-        case Some(v) =>
-            match (v.kind()) {
-                case JsonKind.JsString => return v.asString().getValue()
-                case _ => return fallback
-            }
-        case None => return fallback
-    }
-}
-
 // ============================================================
 // ① 环境体检（t2h:env）
 // ============================================================
 
 /**
  * 把迁移所需的工具链一次性体检出来。
- * 判定口径：路径存在 = 就绪。版本号等「能跑起来才知道」的检查留给后续
- * t2h:doctor（会真的执行 --version），骨架阶段先保证「缺什么一眼看见」。
+ * 判定口径：路径存在 = 就绪。版本号等「能跑起来才知道」的检查留给后续 t2h:doctor。
  */
 public class EnvCommand <: CommandHandler {
     public init() {}
@@ -195,84 +135,80 @@ public class EnvCommand <: CommandHandler {
             ]),
             "它随 SDK 走；部署到鸿蒙 PC 真机靠它")
 
-        addCheck(arr, "cjh", "AI 引擎 cjh（内置）",
-            firstExisting([cjhPath()]),
-            "把 cjh.exe 放到应用目录或用 LINGQU_CJH 指向它；缺了 AI 面板不可用（其余功能照常）")
+        // cjh 复用 cjh_host 的解析（env → 已部署 → 仓内 vendor，vendor 还要过 SHA256）
+        addCheck(arr, "cjh", "AI 引擎 cjh（内置）", cjhBinPath(),
+            "把 cjh.exe 放到 vendor/cjh/win-x64/ 或用 LINGQU_CJH 指向它；缺了 AI 面板不可用（其余功能照常）")
 
         var res = JsonObject()
         res.put("items", arr)
-        res.put("cjh_port", JsonInt(CJH_PORT))
-        res.put("platform", JsonString("desktop"))
+        res.put("cjhPort", JsonInt(cjhPort()))
         return res
     }
 }
 
 // ============================================================
-// ② cjh 引擎接入（t2h:cjh_*）
+// ② 退出（t2h:quit）：先收 cjh，再退窗口
 // ============================================================
-
-/** 探测 cjh web 是否在跑（前端每次进界面都问一次） */
-public class CjhProbeCommand <: CommandHandler {
-    public init() {}
-
-    public func handle(_: String, _: JsonObject, _: IpcContext): JsonValue {
-        let alive = probePort(CJH_BIND, CJH_PORT)
-        var res = JsonObject()
-        res.put("alive", JsonBool(alive))
-        res.put("endpoint", JsonString("http://${CJH_BIND}:${CJH_PORT}"))
-        return res
-    }
-}
 
 /**
- * 拉起内置 cjh：`cjh web --port 8765 --bind 127.0.0.1`。
- *
- * 用 launchHidden 而不是 std.process.launch：本应用产物是 GUI 子系统，
- * 直接拉一个控制台程序在 Windows 上会蹦出黑窗口（框架已把这条下沉到 C 桥）。
- *
- * 语义对齐 ai-chat：**复用优先**——已在跑就直接复用，不抢用户的实例；
- * 只有本命令拉起的那一份才由本应用收尾。
+ * 前端主动退应用。顺序有意为之：**先收我们自己拉起的 cjh，再退窗口**——
+ * 反过来的话窗口一关事件循环就返回，收尾只能靠守护线程兜底（那条路也留着，见 startLifecycleWaiter）。
  */
-public class CjhStartCommand <: CommandHandler {
-    public init() {}
+public class QuitCommand <: CommandHandler {
+    private let app: TauriApp
 
-    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        var res = JsonObject()
+    public init(app: TauriApp) {
+        this.app = app
+    }
 
-        // ① 复用优先
-        if (probePort(CJH_BIND, CJH_PORT)) {
-            res.put("ok", JsonBool(true))
-            res.put("reused", JsonBool(true))
-            res.put("pid", JsonInt(-1))
-            res.put("endpoint", JsonString("http://${CJH_BIND}:${CJH_PORT}"))
-            res.put("detail", JsonString("8765 上已有 cjh 在跑，直接复用"))
-            return res
+    public func handle(_: String, _: JsonObject, _: IpcContext): JsonValue {
+        eprintln("[lingqu] 前端请求退出")
+        shutdownCjh()
+        this.app.quit()
+        return JsonBool(true)
+    }
+}
+
+// ============================================================
+// ③ 生命周期接线
+// ============================================================
+
+/**
+ * 退出收尾的守护线程。
+ *
+ * 为什么需要它：新形态 AppSpec 没有 onExit 钩子，业务拿不到「run 之后」那一行——
+ * ai-chat 是 `app.run(html)` 之后直接调 shutdownCjh()，这里改成用 waitForExit() 等窗口全退出。
+ *
+ * 两个前提：① wire 在 run 之前执行，此刻窗口还没登记，得先等主窗出现，
+ * 否则 allWindowsExited() 立刻为真、收尾会在拉起 cjh 之前就跑完（等于没收）；
+ * ② 只收自己拉起的（shutdownCjh 内部按 gCjhOwned 判定）。
+ */
+func startLifecycleWaiter(app: TauriApp): Unit {
+    spawn {
+        var spins: Int64 = 0
+        var registered = false
+        while (!registered && spins < 300) {
+            match (app.hostOf("main")) {
+                case Some(_) => registered = true
+                case None =>
+                    sleep(Duration.millisecond * 100)
+                    spins += 1
+            }
         }
-
-        // ② 没有就拉起（前端可传 path 覆盖）
-        let path = argString(args, "path", cjhPath())
-        if (!exists(path)) {
-            res.put("ok", JsonBool(false))
-            res.put("reused", JsonBool(false))
-            res.put("pid", JsonInt(-1))
-            res.put("detail", JsonString("找不到 cjh 可执行文件：${path}"))
-            return res
+        if (!registered) {
+            eprintln("[lingqu] 主窗 30s 内没登记——退出收尾不挂载（cjh 不会被自动收回）")
+            return
         }
-
-        match (launchHidden(path, ["web", "--port", "${CJH_PORT}", "--bind", CJH_BIND])) {
-            case Some(p) =>
-                res.put("ok", JsonBool(true))
-                res.put("reused", JsonBool(false))
-                res.put("pid", JsonInt(p.processId()))
-                res.put("endpoint", JsonString("http://${CJH_BIND}:${CJH_PORT}"))
-                res.put("detail", JsonString("已拉起 cjh（pid ${p.processId()}），等待健康检查"))
-            case None =>
-                res.put("ok", JsonBool(false))
-                res.put("reused", JsonBool(false))
-                res.put("pid", JsonInt(-1))
-                res.put("detail", JsonString("cjh 启动失败：${path}（看 stderr / 杀软拦截）"))
+        app.waitForExit()
+        eprintln("[lingqu] 窗口已全部退出，开始收尾")
+        // 收尾跑几轮：自动拉起引擎在后台线程里，可能与"用户秒关窗口"抢跑——
+        // 单次 shutdownCjh 有可能在 gCjhOwned 变 true 之前就跑完，等于没收
+        var i: Int64 = 0
+        while (i < 5) {
+            shutdownCjh()
+            sleep(Duration.millisecond * 200)
+            i += 1
         }
-        return res
     }
 }
 
@@ -281,16 +217,36 @@ public class CjhStartCommand <: CommandHandler {
 // ============================================================
 
 /**
- * 骨架阶段只装三条命令（环境体检 + cjh 探测/拉起）。
- * 下一步按迁移引擎的规划挂载：t2h:scan / t2h:deps / t2h:port / t2h:build / t2h:deploy / t2h:verify。
+ * 装配：命令注册 + 引擎接线。
  * 新命令记得同步 assets/capabilities/default.json，否则前端拿到 command not allowed。
  */
 public func build(): AppSpec {
     return AppSpec()
         .window(WindowConfig("lingqu", 1280, 840))
+        // 日志落盘：GUI 产物双击没控制台，报障时一个文件看全
+        .plugin(LogPlugin())
         .wire({ app =>
+            // 日志落盘：GUI 产物双击没控制台，报障时一个文件看全（C 桥 + 仓颉 + 页面 log:write）
+            let _ = app.setLogToDefaultFile("lingqu")
+
             app.register("t2h:env", EnvCommand())
-            app.register("t2h:cjh_probe", CjhProbeCommand())
-            app.register("t2h:cjh_start", CjhStartCommand())
+            app.register("t2h:quit", QuitCommand(app))
+
+            // cjh 三条运维命令（status 纯读 / start 按路径 / deploy 校验+部署+拉起）
+            let cjhCmds = CjhCommands()
+            app.register("t2h:cjh_status", cjhCmds)
+            app.register("t2h:cjh_start", cjhCmds)
+            app.register("t2h:cjh_deploy", cjhCmds)
+
+            // 退出收尾（窗口关掉也生效）
+            startLifecycleWaiter(app)
+
+            // 引擎随窗口一起起来：放后台线程，别让 cjh 的 10s 就绪等待挡住窗口出现
+            spawn {
+                let ok = ensureCjhWeb()
+                if (ok) {
+                    eprintln("[lingqu] AI 引擎就绪：127.0.0.1:${cjhPort()}")
+                }
+            }
         })
 }

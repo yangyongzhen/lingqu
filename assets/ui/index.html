@@ -115,6 +115,7 @@ body{background:var(--bg);color:var(--fg);
     <div class="spacer"></div>
     <div class="chip"><span class="dot" id="dot-env"></span><span id="txt-env">环境检查中…</span></div>
     <div class="chip"><span class="dot" id="dot-cjh"></span><span id="txt-cjh">cjh 状态未知</span></div>
+    <button class="btn sm ghost" id="btn-quit" title="退出（会同时收尾本应用拉起的 cjh）">退出</button>
   </header>
 
   <div class="body">
@@ -239,8 +240,9 @@ body{background:var(--bg);color:var(--fg);
         </div>
       </div>
       <div class="composer">
-        <button class="btn primary" id="btn-cjh" style="justify-content:center">启动引擎（cjh web）</button>
-        <div class="inp">对话面板将在引擎就绪后接入 WS（/api/* + 流式事件）</div>
+        <button class="btn primary" id="btn-cjh" style="justify-content:center">一键部署并启动引擎</button>
+        <button class="btn" id="btn-cjh-path" style="justify-content:center">用指定路径启动</button>
+        <div class="inp" id="cjh-hint">校验随包产物（SHA256）→ 拉起 cjh web → 健康检查</div>
       </div>
     </aside>
 
@@ -297,12 +299,24 @@ body{background:var(--bg);color:var(--fg);
     setDot('dot-env', miss === 0 ? 'ok' : 'warn');
   }
 
-  function renderCjh(alive) {
-    document.getElementById('dot-cjh').className = 'dot ' + (alive ? 'ok' : 'err');
-    document.getElementById('txt-cjh').textContent = alive ? 'cjh 已连接 :8765' : 'cjh 未启动';
-    document.getElementById('dot-dock').className = 'dot ' + (alive ? 'ok' : 'err');
-    document.getElementById('dot-agent').className = 'dot ' + (alive ? 'ok' : '');
-    document.getElementById('txt-agent').textContent = alive ? 'AI 引擎已就绪 · 127.0.0.1:8765' : 'AI 引擎未连接';
+  function renderCjh(st) {
+    // st: { state: running|ready|missing, port, apiUrl?, wsUrl?, binPath?, owned? }
+    var running = st && st.state === 'running';
+    var ready = st && st.state === 'ready';
+    document.getElementById('dot-cjh').className = 'dot ' + (running ? 'ok' : (ready ? 'warn' : 'err'));
+    document.getElementById('txt-cjh').textContent =
+      running ? ('cjh 已连接 :' + st.port) : (ready ? 'cjh 可拉起' : 'cjh 未就绪');
+    document.getElementById('dot-dock').className = 'dot ' + (running ? 'ok' : (ready ? 'warn' : 'err'));
+    document.getElementById('dot-agent').className = 'dot ' + (running ? 'ok' : '');
+    document.getElementById('txt-agent').textContent =
+      running ? ('AI 引擎已就绪 · 127.0.0.1:' + st.port + (st.owned ? '（本应用托管）' : '（复用已有实例）'))
+              : (ready ? 'AI 引擎待拉起' : 'AI 引擎缺失');
+    if (st && st.binPath) { document.getElementById('cjh-hint').textContent = '二进制：' + st.binPath; }
+    else if (st && st.state === 'missing') {
+      document.getElementById('cjh-hint').textContent =
+        '找不到可用 cjh（也不在 ' + (st.vendorDir || 'vendor/cjh') + '）—— 用 LINGQU_CJH 指定，或放一份 vendor 产物';
+    }
+    return running;
   }
 
   withBridge(function (tauri) {
@@ -318,43 +332,64 @@ body{background:var(--bg);color:var(--fg);
     loadEnv();
     document.getElementById('btn-env').onclick = loadEnv;
 
-    // cjh 探测
-    function probe() {
-      tauri.invoke('t2h:cjh_probe')
-        .then(function (d) { renderCjh(!!d.alive); })
-        .catch(function () { renderCjh(false); });
+    // cjh 状态（三态，纯读，可随便轮询）
+    function status() {
+      return tauri.invoke('t2h:cjh_status')
+        .then(function (d) { renderCjh(d); return d; })
+        .catch(function () { renderCjh({ state: 'missing' }); return { state: 'missing' }; });
     }
-    probe();
-    setInterval(probe, 5000);
+    status();
+    setInterval(status, 5000);
 
-    // 拉起 cjh
-    document.getElementById('btn-cjh').onclick = function () {
+    // 拉起后轮询到 running 为止（cjh web 启动要装 Agent 栈，秒级正常）
+    function waitRunning(times) {
       var box = document.getElementById('cjh-result');
+      var n = 0;
+      var t = setInterval(function () {
+        n++;
+        status().then(function (d) {
+          if (d.state === 'running') {
+            clearInterval(t);
+            box.textContent = box.textContent + '\n健康检查通过：' + d.apiUrl;
+            document.getElementById('agent-msg').textContent =
+              '引擎已就绪（' + d.apiUrl + '）。下一步我先接 /api/sessions 与迁移技能包，然后就能开始扫描工程。';
+          }
+        });
+        if (n > (times || 20)) { clearInterval(t); }
+      }, 800);
+    }
+
+    function report(prefix, d) {
+      var box = document.getElementById('cjh-result');
+      box.textContent = prefix + (d.ok ? 'OK' : 'FAIL') +
+        (d.detail ? '\n' + d.detail : '') +
+        (d.error ? '\n' + d.error : '') +
+        (d.endpoint || d.apiUrl ? '\nendpoint: ' + (d.apiUrl || d.endpoint) : '') +
+        (d.deployed ? '\nbin: ' + d.deployed : '') +
+        (d.reused ? '\n（复用已有实例，退出时不会终止）' : '');
+    }
+
+    // 一键部署并启动（校验 → 部署（必要时）→ 拉起 → 健康检查）
+    document.getElementById('btn-cjh').onclick = function () {
+      document.getElementById('cjh-result').textContent = '正在部署并拉起…';
+      tauri.invoke('t2h:cjh_deploy')
+        .then(function (d) { report('deploy · ', d); if (d.ok) { waitRunning(20); } })
+        .catch(function (e) { document.getElementById('cjh-result').textContent = 'FAIL · ' + e.message; });
+    };
+
+    // 用指定路径启动
+    document.getElementById('btn-cjh-path').onclick = function () {
       var path = document.getElementById('cjh-path').value.trim();
-      var args = {};
-      if (path) { args.path = path; }
-      box.textContent = '正在拉起…';
-      tauri.invoke('t2h:cjh_start', args)
-        .then(function (d) {
-          box.textContent = (d.ok ? 'OK · ' : 'FAIL · ') + (d.detail || '') +
-            (d.endpoint ? '\nendpoint: ' + d.endpoint : '') +
-            (d.pid > 0 ? '\npid: ' + d.pid : '');
-          // 拉起后轮询健康
-          var n = 0;
-          var t = setInterval(function () {
-            n++;
-            tauri.invoke('t2h:cjh_probe').then(function (r) {
-              renderCjh(!!r.alive);
-              if (r.alive) {
-                clearInterval(t);
-                document.getElementById('agent-msg').textContent =
-                  '引擎已就绪（127.0.0.1:8765）。下一步我会接入 /api/sessions 与技能包，然后就能开始扫描工程。';
-              }
-            });
-            if (n > 20) { clearInterval(t); }
-          }, 800);
-        })
-        .catch(function (e) { box.textContent = 'FAIL · ' + e.message; });
+      if (!path) { document.getElementById('cjh-result').textContent = '请先填 cjh 可执行文件路径'; return; }
+      document.getElementById('cjh-result').textContent = '正在拉起…';
+      tauri.invoke('t2h:cjh_start', { path: path })
+        .then(function (d) { report('start · ', d); if (d.ok) { waitRunning(20); } })
+        .catch(function (e) { document.getElementById('cjh-result').textContent = 'FAIL · ' + e.message; });
+    };
+
+    // 退出：后端先收尾本应用拉起的 cjh，再退窗口
+    document.getElementById('btn-quit').onclick = function () {
+      tauri.invoke('t2h:quit').catch(function () {});
     };
   });
 </script>
