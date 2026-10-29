@@ -34,7 +34,10 @@ lingqu/
 ├── assets/
 │   ├── ui/index.html        # 前端工作台（任意 Web 技术栈；当前是原生 HTML/CSS/JS）
 │   └── capabilities/default.json   # 能力白名单（命令 / 事件 / 权限集）
-├── docs/                    # 方案、技术思路、需求、UI 效果图
+├── vendor/cjh/              # 内置 AI 引擎产物（cjh.exe + 3 DLL + SHA256SUMS）
+├── scripts/run-dev.ps1      # 一条命令配齐全部运行前提并启动
+├── tools/vendor-cjh.ps1     # 更新 vendor 里的 cjh 并重算校验
+├── docs/                    # 方案、技术思路、需求、开发环境、UI 效果图
 └── targets/                 # `cj-tauri sync` 派生（.gitignore 忽略；勿手改，check 会判漂移）
     ├── desktop/             #   桌面可执行（launcher 调 lingqu.build()）
     └── ohos/                #   鸿蒙 HAP 工程（DevEco + build-hap.sh）
@@ -46,19 +49,22 @@ lingqu/
 
 ## 构建与运行
 
-前置：仓颉 SDK（`cjpm` / `cjc` 在 PATH）、[cj-tauri 框架仓](https://atomgit.com/qq8864/cj-tauri)、stdx。
-**环境变量一个都不能少**，详见 [`docs/开发环境.md`](docs/开发环境.md)。
+前置：仓颉 SDK（`cjpm` / `cjc`）、[cj-tauri 框架仓](https://atomgit.com/qq8864/cj-tauri)（含 `native\libcjtbridge.dll`
+与 `native\webview2\WebView2Loader.dll`）、stdx。**这些路径都在一个脚本里配好**，详见 [`docs/开发环境.md`](docs/开发环境.md)。
 
 ```powershell
-# 1) 派生骨架（首次 / 改了 cj-tauri.toml 之后；幂等）
-cj-tauri sync desktop          # 只派生桌面端；不带参数则 desktop + ohos 都派生
-cj-tauri check                 # 校验清单 + 检测骨架漂移
-
-# 2) 编译 + 运行
-cd targets/desktop
-cjpm build                     # 产出 target/release/bin/main.exe
-.\target\release\bin\main.exe
+.\scripts\run-dev.ps1 -Sync -Build -Cjh
 ```
+
+| 开关 | 作用 |
+|---|---|
+| `-Sync` | 先 `cj-tauri sync`（改了 `cj-tauri.toml` 之后要重跑） |
+| `-Build` | 先 `cd targets\desktop && cjpm build` |
+| `-Cjh` | 顺带把 `vendor/cjh/win-x64/cjh.exe` 拉起来（8765 上已有实例则复用） |
+
+脚本做的事（少一条就跑不起来，全是实测报错换来的）：PATH 加**四段**——仓颉运行时、stdx、
+框架 `native`、框架 `native\webview2`；**工作目录切到工程根**（launcher 用相对路径读 `assets/`）；
+`LINGQU_CJH` 指向仓内 cjh。
 
 鸿蒙端（PC / 2in1）：
 
@@ -79,8 +85,9 @@ cd targets/ohos && bash build-hap.sh --install  # 编完装到设备并拉起
   `/api/models`、`/api/tasks`、`/api/skills`、`/api/mcp`、`/api/workspaces`、`/api/fs/list`）+ WS 流式事件。
 - 拉起走框架的 `launchHidden()`（`std.process.launch` 会让 GUI 子系统的应用蹦出黑窗口）。
 - **复用优先**：8765 上已有用户自己的 cjh 就直接用，不抢、不杀；只有本应用拉起的那份才归本应用收尾。
-- cjh 路径优先级：`LINGQU_CJH` 环境变量 > `src/main.cj` 里的开发期默认值。
-- cjh 不在也不影响其余功能：工作台进「手动模式」，AI 面板显示未连接并给一键修复入口。
+- cjh 路径优先级：`LINGQU_CJH` 环境变量 → `vendor/cjh/win-x64/cjh.exe`（工作目录=工程根）
+  → 同上上跳一层 → 开发期本机兜底路径。全无则如实报「引擎缺失」，其余功能照常（手动模式）。
+- 仓内自带一份 cjh（`vendor/cjh/`，含 `SHA256SUMS`），开箱即用；更新用 `tools/vendor-cjh.ps1`。
 
 ---
 

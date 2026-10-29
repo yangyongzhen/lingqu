@@ -22,7 +22,10 @@ import stdx.encoding.json.*
 // 常量：开发期默认值（生产由配置/环境变量覆盖）
 // ============================================================
 
-/** 内置 cjh 的默认位置（开发期）；实际使用 LINGQU_CJH 环境变量优先 */
+/** 内置 cjh 的仓内位置（相对工程根；vendor 那份与本机开发期的兜底路径同优先级链） */
+let VENDOR_CJH_REL_WIN = "vendor\\cjh\\win-x64\\cjh.exe"
+
+/** 本机开发期的兜底路径（最后才用；换机器请用 vendor 或 LINGQU_CJH） */
 let DEFAULT_CJH_PATH = "E:\\test\\rust\\test1\\cjh\\cjh.exe"
 
 /** cjh web 服务端口：与 cjh / ai-chat 的既有约定一致，复用优先 */
@@ -85,9 +88,22 @@ func addCheck(arr: JsonArray, id: String, label: String, found: String, hint: St
     arr.add(o)
 }
 
-/** cjh 可执行文件的实际路径：环境变量优先，其次开发期默认值 */
+/**
+ * cjh 可执行文件的实际路径，按优先级找：
+ *   ① LINGQU_CJH 环境变量（部署后可覆盖）
+ *   ② 仓内 vendor/cjh/win-x64/cjh.exe（工程根为工作目录时）
+ *   ③ 同上，工程根上跳一层（在 targets/desktop 下启动时）
+ *   ④ 本机开发期兜底路径
+ * 全都没有返回空串 —— 上层据此报告「引擎缺失」，而不是猜一个路径去执行。
+ */
 func cjhPath(): String {
-    return envOr("LINGQU_CJH", DEFAULT_CJH_PATH)
+    let fromEnv = envOr("LINGQU_CJH", "")
+    return firstExisting([
+        fromEnv,
+        VENDOR_CJH_REL_WIN,
+        "..\\" + VENDOR_CJH_REL_WIN,
+        DEFAULT_CJH_PATH
+    ])
 }
 
 /** 端口探测：能建立 TCP 连接就算「在跑」（不依赖 cjh 的 HTTP 实现细节） */
