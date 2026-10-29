@@ -5,6 +5,7 @@ import cjTauri.plugins.log.*
 import cjTauri.plugins.ws.*
 import lingqu.scanner.*
 import lingqu.deps.*
+import lingqu.port.*
 import std.env.*
 import std.fs.*
 import stdx.encoding.json.*
@@ -337,6 +338,168 @@ public class ScanCommand <: CommandHandler {
 // ============================================================
 
 /**
+ * 定位工程的 src-tauri/Cargo.toml（没有就退回工程根 Cargo.toml）。
+ * 两个都不存在时返回 ""（由命令层给 outError，D-013 不静默）。
+ */
+func cargoTomlPathOf(projectDir: String): String {
+    let a = projectDir + "/src-tauri/Cargo.toml"
+    let b = projectDir + "/Cargo.toml"
+    if (exists(Path(a))) {
+        return a
+    }
+    if (exists(Path(b))) {
+        return b
+    }
+    return ""
+}
+
+/**
+ * t2h:port —— 规则改造（P4 第一刀：只改 Cargo.toml，六条规则）。
+ *   dryRun=true（默认）：只算不动文件，返回逐条 outcome + afterText 摘要
+ *   apply=true：先备份原文件到 .lingqu/port/<工程>-Cargo.toml.bak 再落盘
+ * 幂等：已迁移的工程再跑，六条规则全部 applied=false。
+ */
+public class PortCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:port 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
+            return res
+        }
+        if (!exists(Path(path))) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("路径不存在：${path}"))
+            return res
+        }
+        let tomlPath = cargoTomlPathOf(path)
+        if (tomlPath == "") {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("未找到 Cargo.toml（找过 ${path}/src-tauri/Cargo.toml 与 ${path}/Cargo.toml）"))
+            return res
+        }
+
+        var before = ""
+        try {
+            before = String.fromUtf8(File.readFrom(tomlPath))
+        } catch (e: Exception) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("读 ${tomlPath} 失败：${e}"))
+            return res
+        }
+
+        let result = applyCargoTomlRules(before)
+        let apply = argBool(args, "apply", false)
+
+        var backupPath = ""
+        var outErr = ""
+        if (apply && result.appliedCount() > 0) {
+            var name = projectNameOf(path)
+            if (name.size == 0) {
+                name = "project"
+            }
+            backupPath = ".lingqu/port/${sanitizeFileName(name)}-Cargo.toml.bak"
+            try {
+                if (!exists(Path(".lingqu"))) {
+                    Directory.create(Path(".lingqu"))
+                }
+                if (!exists(Path(".lingqu/port"))) {
+                    Directory.create(Path(".lingqu/port"))
+                }
+                File.writeTo(backupPath, before.toArray())
+                File.writeTo(tomlPath, result.afterText.toArray())
+            } catch (e: Exception) {
+                outErr = "${e}"
+                eprintln("[lingqu][port] 落盘失败（原文件未动）：${e}")
+            }
+        } else if (!apply && result.appliedCount() > 0) {
+            // dry-run 也落一份预览：UI 的 diff 预览与实测对照都要用（可断言、可复核）
+            var name = projectNameOf(path)
+            if (name.size == 0) {
+                name = "project"
+            }
+            try {
+                if (!exists(Path(".lingqu"))) {
+                    Directory.create(Path(".lingqu"))
+                }
+                if (!exists(Path(".lingqu/port"))) {
+                    Directory.create(Path(".lingqu/port"))
+                }
+                File.writeTo(".lingqu/port/${sanitizeFileName(name)}-Cargo.toml.preview", result.afterText.toArray())
+            } catch (e: Exception) {
+                eprintln("[lingqu][port] 预览落档失败：${e}")
+            }
+        }
+
+        res.put("ok", JsonBool(outErr == ""))
+        res.put("toml", JsonString(tomlPath))
+        res.put("apply", JsonBool(apply))
+        res.put("applied", JsonInt(result.appliedCount()))
+        res.put("idempotent", JsonBool(isIdempotent(result)))
+        res.put("rules", result.outcomesJson())
+        res.put("afterPreview", JsonString(result.afterText))
+        res.put("backup", JsonString(backupPath))
+        res.put("outError", JsonString(outErr))
+        eprintln("[lingqu][port] ${tomlPath}: applied=${result.appliedCount()} apply=${apply}")
+        return res
+    }
+}
+
+/**
+ * t2h:revert —— 回滚 t2h:port 的落盘改动（把备份写回去，T4-6 的另一半）。
+ */
+public class RevertCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:revert 需要参数 path"))
+            return res
+        }
+        var name = projectNameOf(path)
+        if (name.size == 0) {
+            name = "project"
+        }
+        let backup = ".lingqu/port/${sanitizeFileName(name)}-Cargo.toml.bak"
+        if (!exists(Path(backup))) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("没有备份可回滚：${backup}（先跑 apply 过的 t2h:port）"))
+            return res
+        }
+        let tomlPath = cargoTomlPathOf(path)
+        if (tomlPath == "") {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("找不到要回滚的 Cargo.toml（工程路径变了？）"))
+            return res
+        }
+        try {
+            let bak = String.fromUtf8(File.readFrom(backup))
+            File.writeTo(tomlPath, bak.toArray())
+            res.put("ok", JsonBool(true))
+            res.put("restored", JsonString(tomlPath))
+            res.put("from", JsonString(backup))
+            eprintln("[lingqu][revert] ${tomlPath} ← ${backup}")
+        } catch (e: Exception) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("回滚失败：${e}"))
+        }
+        return res
+    }
+}
+
+/**
  * t2h:deps —— Cargo 依赖树 OHOS 兼容性扫描（P3）。
  * 数据源：src-tauri/Cargo.lock（整树）+ Cargo.toml 的 [patch.*] 段（fork 是否已落）。
  * 结果落 `.lingqu/deps/<工程名>.json`（lingqu/deps/v1），失败原因进 outError（D-013）。
@@ -471,6 +634,10 @@ public class UiReportCommand <: CommandHandler {
         o.put("depsRows", JsonInt(argInt(args, "depsRows", 0)))
         o.put("depsOut", JsonString(argStr(args, "depsOut", "")))
         o.put("depsError", JsonString(argStr(args, "depsError", "")))
+        // P4 改造执行指标（t2h:port 回投；applied=6 为全量，0 表示已迁移/无可改）
+        o.put("portApplied", JsonInt(argInt(args, "portApplied", 0)))
+        o.put("portRules", JsonInt(argInt(args, "portRules", 0)))
+        o.put("portError", JsonString(argStr(args, "portError", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         let text = o.toJsonString()
         // 落文件而不是只打日志：GUI 的 stderr 去向受框架日志重定向影响（见 AGENTS §4 第 14 条），
@@ -558,6 +725,8 @@ public func build(): AppSpec {
             app.register("t2h:ui_report", UiReportCommand())
             app.register("t2h:scan", ScanCommand())
             app.register("t2h:deps", DepsCommand())
+            app.register("t2h:port", PortCommand())
+            app.register("t2h:revert", RevertCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

@@ -5,6 +5,54 @@
 
 ---
 
+## [0.10.0] - 2026-10-30
+
+**主题**：P4 第一刀 —— 规则引擎 + Cargo.toml 文本变换（路线图 T4-1 / T4-2 / T4-6），
+`t2h:port` / `t2h:revert` 命令上线，④ 改造执行屏接真数据。
+
+### Added
+
+- **`src/port/port.cj`（新，`lingqu.port` 包）**：
+  - 规则模型（T4-1）：每条规则 = id + 适用条件 + 变换 + `RuleOutcome`
+    （applied / note / before / after——evidence 载体，UI 与报告直接展示）
+  - 六条 Cargo.toml 规则（T4-2），**逐条对应 habit-tree `main→ohos` 分支的真实 diff**：
+    R2-PORT-001 `[lib]` crate-type 补 cdylib（`["rlib"]` → `["staticlib", "cdylib", "rlib"]`）、
+    002 tauri 钉 `=2.11.5` + features 合并 custom-protocol/protocol-asset（已有 features 原样保留）、
+    003 tauri-build 钉 `=2.6.3`、004 wry 钉 `=0.56.0` + `default-features=false`（仅当存在 tauri 依赖）、
+    005 追加 OHOS target 段（napi-ohos / openharmony-ability 桥）、006 追加 `[patch.crates-io]`
+    与 ability patch 段（git URL + rev 固定）
+  - 幂等与回滚（T4-6）：追加块带 `# === lingqu: <rule-id> ===` 标记；原地改写看目标状态判定
+    （钉没钉/有没有该段）；`isIdempotent` 可断言"再跑一遍 applied=0"；
+    **apply 前自动备份原文件到 `.lingqu/port/<工程>-Cargo.toml.bak`，`t2h:revert` 一键写回**
+  - dry-run 落预览 `.lingqu/port/<工程>-Cargo.toml.preview`——UI diff 预览与实测对照的载体
+- **命令 `t2h:port` / `t2h:revert`**（三处联动齐全）；④ 改造执行屏新增规则改造卡
+  （预览/应用/回滚三按钮 + 逐条 outcome 表 + `portApplied/portRules/portError` 自检字段，
+  服务端白名单同批补放行）
+- **7 例新单测**（总 63）：六条全应用 / 变换内容逐项断言 / 幂等二次跑 /
+  已迁移工程逐字节不变 / 非 Tauri 工程跳过钉版 / 行级工具边界
+
+### Fixed
+
+- `spliceLines` 死循环：`count=0` 且 `i==at` 时 `i += 0` 后 `continue`，无限插入直到
+  OutOfMemoryError（单测二进制直跑抓到的栈）。修法：`inserted` 标志位
+- 行模型纪律：规则内禁止往单个行元素塞 `\n`——ruleTauriPin 曾把注释与代码并进一个元素，
+  导致后续规则按行扫 `tauri` 时命中的是注释行、误判成非 Tauri 工程。抽 `spliceLines` 统一处理
+
+### 验证证据（habit-tree 迁移前 Cargo.toml 实测，Xvfb + `ui_report`）
+
+| 断言项 | 值 |
+|---|---|
+| portApplied | **6 / 6**（六条规则在未迁移文件上全部应用） |
+| **规则产物 vs 真实迁移 diff** | **功能性代码行全部一致**（crate-type / 钉版 / features / OHOS target 段 / 两段 patch 的 rev 与 URL 逐字符吻合）；差异仅：注释措辞、人工按需加的 `image-png` feature、上游版本号演进——**规则覆盖了该工程 Cargo.toml 迁移的全部机械改动** |
+| 幂等 | `idempotent=true`（二次跑 applied=0，文本逐字节不变） |
+| 门禁 | 四道闸全绿，**63 例单测** |
+
+**未做（如实标注）**：T4-3（工具链落盘）/ T4-4（cfg 分支注入）/ T4-5（ArkWeb 兼容层）/
+T4-8（三档审批与人工计数）留给 P4 第二刀；T4-7（Agent 兜底）按砍单顺序最后；
+`cargo check --target aarch64-unknown-linux-ohos` 出口判据需 P5 交叉编译环境。
+
+---
+
 ## [0.9.0] - 2026-10-30
 
 **主题**：P3 `t2h:deps` —— Cargo 依赖树 OHOS 兼容性矩阵 + 替代建议库（路线图 T3-1～T3-5），

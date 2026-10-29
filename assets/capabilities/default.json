@@ -7,6 +7,8 @@
     "t2h:ui_report",
     "t2h:scan",
     "t2h:deps",
+    "t2h:port",
+    "t2h:revert",
     "t2h:cjh_status",
     "t2h:cjh_deploy",
     "t2h:cjh_start",

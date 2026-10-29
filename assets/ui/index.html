@@ -468,7 +468,22 @@ body.ai-hidden .ai-show{display:block}
       <section class="screen" data-screen="port">
         <div class="whead">
           <div><h1>改造执行</h1><p>规则优先、AI 兜底；每一步都带验证探针，人工介入逐次计数（验收 A3 线 ≤5 处）。</p></div>
-          <div class="acts"><button class="btn">暂停</button><button class="btn">回滚本次</button><button class="btn primary">继续执行</button></div>
+          <div class="acts"><input id="portPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_SCAN_PATH）" style="width:260px"><button class="btn" id="btnPortPreview">预览改造</button><button class="btn primary" id="btnPortApply">应用（落盘）</button><button class="btn" id="btnPortRevert">回滚</button></div>
+        </div>
+        <div class="card" style="margin-bottom:12px;padding:10px 14px" id="portCard">
+          <div class="legend" style="margin:0">
+            <span>规则改造（Cargo.toml · 6 条）：<b id="portApplied">—</b></span>
+            <span>幂等：<b id="portIdem">—</b></span>
+            <span id="portNote" class="muted">先「预览改造」看逐条 outcome，确认后「应用」落盘（自动备份，可回滚）</span>
+          </div>
+        </div>
+        <div class="card" style="margin-top:0;margin-bottom:12px">
+          <table>
+            <thead><tr><th style="width:14%">规则</th><th style="width:10%">状态</th><th style="width:34%">改动</th><th>before → after</th></tr></thead>
+            <tbody id="portRows">
+              <tr><td colspan="4" class="muted">还没有数据——填工程路径点「预览改造」。</td></tr>
+            </tbody>
+          </table>
         </div>
         <div class="grid4">
           <div class="stat"><div class="k">自动完成</div><div class="v" style="color:var(--ok)">9</div></div>
@@ -1616,6 +1631,66 @@ withBridge(function(tauri){
     });
   });
 
+  /* ===== ④ 改造执行：t2h:port 真数据（P4 第一刀：Cargo.toml 六条规则）===== */
+  function renderPort(r){
+    var rules = (r && r.rules) || [];
+    var tb = $('portRows');
+    $('portApplied').textContent = (r && r.applied !== undefined) ? (r.applied + ' / 6') : '—';
+    $('portIdem').textContent = r && r.idempotent ? '是（再跑一遍 applied=0）' : '—';
+    var note = $('portNote');
+    if (r && r.outError) {
+      note.style.color = 'var(--err)';
+      note.textContent = r.outError;
+    } else if (r && r.error) {
+      note.style.color = 'var(--err)';
+      note.textContent = r.error;
+    } else if (r && r.backup) {
+      note.style.color = 'var(--ok)';
+      note.textContent = '已落盘（备份 ' + r.backup + '，可回滚）';
+    } else {
+      note.style.color = '';
+      note.textContent = r && r.toml ? ('预览：' + r.toml + '（未落盘）') : note.textContent;
+    }
+    var html = '';
+    rules.forEach(function(it){
+      html += '<tr><td class="mono"><b>' + esc(it.id) + '</b></td>'
+        + '<td>' + (it.applied ? '<span class="pill warn">已改</span>' : '<span class="pill ok">跳过</span>') + '</td>'
+        + '<td class="muted small">' + esc(it.note || '') + '</td>'
+        + '<td class="muted mono small">' + esc(it.before || '（新增）') + '<br>→ ' + esc((it.after || '').slice(0, 160)) + '</td></tr>';
+    });
+    tb.innerHTML = html || '<tr><td colspan="4" class="muted">该工程无规则可应用（可能已迁移）。</td></tr>';
+    window.__port = { applied: (r && r.applied) || 0, rules: rules.length, idempotent: !!(r && r.idempotent),
+      backup: (r && r.backup) || '', error: (r && (r.outError || r.error)) || '' };
+  }
+  function portInvoke(apply){
+    var p = ($('portPath').value || '').trim();
+    if (!p) { $('portNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_SCAN_PATH）。'; return; }
+    $('portNote').textContent = apply ? '应用中：' + p : '预览中：' + p;
+    invoke('t2h:port', { path: p, apply: apply }).then(function(r){
+      renderPort(r || {});
+      reportUi(apply ? 'port-applied' : 'port-preview');
+    }).catch(function(e){
+      renderPort({ error: e && e.message ? e.message : 'invoke error' });
+      reportUi('port-error');
+    });
+  }
+  $('btnPortPreview').addEventListener('click', function(){ portInvoke(false); });
+  $('btnPortApply').addEventListener('click', function(){ portInvoke(true); });
+  $('btnPortRevert').addEventListener('click', function(){
+    var p = ($('portPath').value || '').trim();
+    if (!p) { $('portNote').textContent = '请先填 Tauri 工程路径。'; return; }
+    invoke('t2h:revert', { path: p }).then(function(r){
+      renderPort({ rules: [], applied: 0 });
+      $('portNote').style.color = 'var(--ok)';
+      $('portNote').textContent = '已回滚：' + (r.restored || '') + ' ← ' + (r.from || '');
+      reportUi('port-reverted');
+    }).catch(function(e){
+      $('portNote').style.color = 'var(--err)';
+      $('portNote').textContent = '回滚失败：' + (e && e.message ? e.message : e);
+      reportUi('port-revert-error');
+    });
+  });
+
   /* ===== 扫描探针：给了路径就立刻跑一次 t2h:scan 并渲染，把指标回投自检 ===== */
   function runScanProbe(path){
     $('scanPath').value = path;
@@ -1629,6 +1704,15 @@ withBridge(function(tauri){
       DEPS.error = e && e.message ? e.message : 'invoke error';
       renderDeps({});
       reportUi('deps-error');
+    });
+    // 依赖/改造探针：同一路径把 t2h:port 的 dry-run 也跑一遍（不落盘），
+    // portApplied 等 ④ 屏指标单独回投，可独立断言
+    invoke('t2h:port', { path: path, apply: false }).then(function(r){
+      renderPort(r || {});
+      reportUi('port-done');
+    }).catch(function(e){
+      renderPort({ error: e && e.message ? e.message : 'invoke error' });
+      reportUi('port-error');
     });
     invoke('t2h:scan', { path: path }).then(function(r){
       renderScan(r || {});
@@ -1694,6 +1778,9 @@ withBridge(function(tauri){
       depsRows: (window.__deps && window.__deps.rows) || 0,
       depsOut: (window.__deps && window.__deps.out) || '',
       depsError: (window.__deps && window.__deps.error) || '',
+      portApplied: (window.__port && window.__port.applied) || 0,
+      portRules: (window.__port && window.__port.rules) || 0,
+      portError: (window.__port && window.__port.error) || '',
       errorCount: window.__uiErrors.length
     }).catch(function(){});
     if (tag) { console.log('[ui-report] ' + tag); }
