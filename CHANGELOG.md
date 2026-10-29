@@ -5,6 +5,56 @@
 
 ---
 
+## [0.7.0] - 2026-10-30
+
+**主题**：②「迁移画像」界面接真数据（`t2h:scan` 驱动），并把参考资源写进开发契约。
+
+### Added
+
+- **② 迁移画像改成数据驱动**：`assets/ui/index.html` 的整屏由 `lingqu/scan/v1` 渲染——
+  评分环（`--v` = 后端总分）、五维条（未扫描维如实显示 `—`，不编造 100）、
+  R/D/H/U 与 C1/C3、五类清单表（处置 pill / 规则 / 出现点 / 依据）、阻塞项列表
+  （未知 = hard 红条、人工 = soft 黄条）；页签切换即换数据源
+- **扫描入口**：右上角工程路径输入 + 「扫描」按钮（`t2h:scan`），失败原因直接显示在提示行
+- **自检扩展**：`ui_report` 新增 `scanKind / scanRows / scanBlockers / scanOutError / scanKindRows`；
+  `LINGQU_SCAN_PATH` 探针扫完会**把五类页签逐个切一遍并逐次回投**
+- **`AGENTS.md` §8 参考资源**：**CangjieSkills 地址**
+  （https://atomgit.com/Cangjie-SIG/CangjieSkills ）+ 本机克隆路径 + `search_docs.py` 用法，
+  以及 cj-tauri / cjh 本地仓位置——写仓颉卡住时的第一查阅点，防止后续会话遗忘
+- **`projectNameOf` / `sanitizeFileName`**（`lingqu.scanner`，公开纯函数，各带测试）
+
+### Fixed
+
+- **`.lingqu/scan/<工程>.json` 从来没写成功过（0.6.0 就在丢证据）**：
+  工程名只按 `/` 取末段，Windows 路径 `E:\test\rust\habit-tree` 整条被当名字 →
+  落档路径非法 → `FSException: The input path 'parent' … does not exist`；
+  而 `eprintln` 在 GUI 里被框架日志接管（AGENTS §4 第 14 条），**失败是静默的**。
+  处置：路径末段 `(`/` 与 `\` 取最后出现者）+ 非法字符转 `_` + **写档失败原因进返回值 `outError`
+  并由页面显示**——同类静默失败以后看得见
+- **`docs/仓颉资源地址.md` 编码**：原文件是 GBK 粘贴稿（`read` 报 "invalid UTF-8 text"）→
+  显式按 936 解码转 UTF-8，并重排成五节表格
+
+### Changed
+
+- 版本号 0.6.0 → 0.7.0（`cjpm.toml` / `cj-tauri.toml` / 本文件三处一致），`cj-tauri sync` 重派生骨架
+
+### 验证范围
+
+| 断言项（habit-tree 实测） | 值 |
+|---|---|
+| R / D / H / U | 20 / 20 / 1 / 0 |
+| C1 / total | 100% / 68（partial） |
+| `scanOut` | `.lingqu/scan/habit-tree.json`，8606 B（**本轮才真的写出来**） |
+| `scanKindRows` | `commands:12,events:0,plugins:0,frontend:4,platform:4` |
+| 逐页签 `scanRows` | 12 / 0 / 0 / 4 / 4 |
+| JS 错误数 | 0 |
+
+- ✅ 四道闸全绿；**33 例单测**（新增 2 例：路径末段 + 文件名净化）
+- ⚠️ **未做**：C2 发现置信度（需人工基线双向 diff）；鸿蒙端 HAP 未开始；
+  五维里 build/deps/dist 仍为 `-1`（待 P3/P5）
+
+---
+
 ## [0.6.0] - 2026-10-30
 
 **主题**：P2 `t2h:scan` 扫描器（五类清单 + 覆盖率 + 评分），口径按 `docs/P2-scan-口径草案.md` 落地。

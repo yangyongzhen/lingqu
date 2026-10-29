@@ -851,6 +851,43 @@ public func cargoDepVersion(cargoText: String, dep: String): String {
     return ""
 }
 
+/**
+ * 从工程路径取末段名字（落档文件名用）。
+ *
+ * 坑：Windows 路径是 `E:\test\rust\habit-tree` 这种**反斜杠**形式，只按 `/` 切会把整条路径
+ * 当成名字，拼出来的落档路径 `.lingqu/scan/E:\test\rust\habit-tree.json` 非法 →
+ * `FSException: The input path 'parent' ... does not exist`（写档静默失败，v0.6.0 一直在丢证据）。
+ * 所以两种分隔符都要认，取**最后出现的那个**。
+ * 末尾带分隔符时返回空串，由调用方回退到默认名。
+ */
+public func projectNameOf(path: String): String {
+    var cut: Int64 = -1
+    match (path.lastIndexOf("/")) {
+        case Some(i) => cut = i
+        case None => ()
+    }
+    match (path.lastIndexOf("\\")) {
+        case Some(i) => if (i > cut) { cut = i }
+        case None => ()
+    }
+    if (cut < 0) {
+        return path
+    }
+    return path[(cut + 1)..path.size]
+}
+
+/**
+ * 把名字里在 Windows 文件名中非法的字符换成 `_`（`: * ? " < > |`）。
+ * 只管「能不能当文件名」，不改变可读性：`habit-tree` 这类正常名原样返回。
+ */
+public func sanitizeFileName(name: String): String {
+    var s = name
+    for (bad in [":", "*", "?", "\"", "<", ">", "|"]) {
+        s = s.replace(bad, "_")
+    }
+    return s
+}
+
 public func scanProject(root: String): ScanResult {
     let res = ScanResult()
 

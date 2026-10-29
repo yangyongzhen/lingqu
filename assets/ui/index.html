@@ -384,58 +384,49 @@ body.ai-hidden .ai-show{display:block}
       <!-- ② 迁移画像 -->
       <section class="screen" data-screen="profile">
         <div class="whead">
-          <div><h1>迁移画像</h1><p>五类清单 + 可迁移度评分。每一条都要有处置结论，覆盖率 = 有结论项 ÷ 识别项。</p></div>
-          <div class="acts"><button class="btn">导出 JSON</button><button class="btn primary">生成迁移计划 →</button></div>
+          <div><h1>迁移画像</h1><p>五类清单 + 可迁移度评分。每一项都有处置结论；覆盖率 C1 = 有结论 ÷ 识别（口径见 <span class="mono">docs/P2-scan-口径草案.md</span>）。</p></div>
+          <div class="acts">
+            <div style="width:240px;flex:0 0 auto"><input class="setinput" id="scanPath" placeholder="Tauri 工程路径，如 E:/test/rust/habit-tree"></div>
+            <button class="btn primary" id="btnScan">扫描</button>
+          </div>
         </div>
         <div class="grid2">
           <div class="card" style="margin-top:0">
-            <div class="card-h"><h3>可迁移度</h3><span class="right">基于 4 个已完成样本校准</span></div>
+            <div class="card-h"><h3>可迁移度</h3><span class="right" id="scoreNote">尚未扫描</span></div>
             <div class="score">
-              <div class="ring" style="--v:78"><div class="v"><b>78</b><span>/ 100</span></div></div>
-              <div class="dims">
-                <div class="dim"><span class="t">构建链</span><span class="bar"><i style="width:92%"></i></span><span class="n">92</span></div>
-                <div class="dim"><span class="t">依赖</span><span class="bar"><i style="width:70%"></i></span><span class="n">70</span></div>
-                <div class="dim"><span class="t">运行时</span><span class="bar"><i class="warn" style="width:55%"></i></span><span class="n">55</span></div>
-                <div class="dim"><span class="t">平台 API</span><span class="bar"><i class="warn" style="width:64%"></i></span><span class="n">64</span></div>
-                <div class="dim"><span class="t">分发</span><span class="bar"><i style="width:85%"></i></span><span class="n">85</span></div>
-              </div>
+              <div class="ring" id="scoreRing" style="--v:0"><div class="v"><b id="scoreTotal">—</b><span>/ 100</span></div></div>
+              <div class="dims" id="scoreDims"></div>
             </div>
           </div>
           <div class="card" style="margin-top:0">
-            <div class="card-h"><h3>分析覆盖率</h3><span class="right">验收 A2</span></div>
+            <div class="card-h"><h3>分析覆盖率</h3><span class="right">验收 A2 · 口径 A3</span></div>
             <div class="grid2" style="gap:10px">
-              <div class="stat"><div class="k">已识别</div><div class="v">128<small>项</small></div></div>
-              <div class="stat"><div class="k">已有结论</div><div class="v" style="color:var(--ok)">128<small>项</small></div></div>
-              <div class="stat"><div class="k">硬阻塞</div><div class="v" style="color:var(--err)">4<small>项</small></div></div>
-              <div class="stat"><div class="k">预计剩余人工</div><div class="v">≈3<small>处</small></div></div>
+              <div class="stat"><div class="k">识别项 R</div><div class="v" id="mR">—<small>项</small></div></div>
+              <div class="stat"><div class="k">有结论 D</div><div class="v" id="mD" style="color:var(--ok)">—<small>项</small></div></div>
+              <div class="stat"><div class="k">人工 H</div><div class="v" id="mH" style="color:var(--warn)">—<small>项</small></div></div>
+              <div class="stat"><div class="k">未知 U</div><div class="v" id="mU" style="color:var(--err)">—<small>项</small></div></div>
             </div>
-            <div class="legend"><span><i class="dot ok"></i>覆盖率 <b style="color:var(--fg)">100%</b></span><span><i class="dot warn"></i>待人工 5</span><span><i class="dot err"></i>硬阻塞 4</span></div>
+            <div class="legend"><span><i class="dot ok"></i>C1 结论覆盖 <b id="mC1" style="color:var(--fg)">—</b></span><span><i class="dot warn"></i>C3 人工占比 <b id="mC3">—</b></span><span><i class="dot err"></i>U 必须为 0</span></div>
+            <div class="sethint" id="scanNote" style="margin-top:6px">点右上「扫描」选一个 Tauri 工程；也可置 LINGQU_SCAN_PATH 自动扫。</div>
           </div>
         </div>
         <div class="card">
-          <div class="card-h"><h3>清单</h3><span class="right">占位示意 · 待 t2h:scan 接入</span></div>
-          <div class="tabs">
-            <button class="tab on">命令 <span class="c">23</span></button>
-            <button class="tab">事件 <span class="c">7</span></button>
-            <button class="tab">插件 <span class="c">6</span></button>
-            <button class="tab">前端资源 <span class="c">31</span></button>
-            <button class="tab">平台 API <span class="c">61</span></button>
+          <div class="card-h"><h3>清单</h3><span class="right" id="itemsNote">尚未扫描</span></div>
+          <div class="tabs" id="scanTabs">
+            <button class="tab on" data-k="commands">命令 <span class="c" id="cntCommands">0</span></button>
+            <button class="tab" data-k="events">事件 <span class="c" id="cntEvents">0</span></button>
+            <button class="tab" data-k="plugins">插件 <span class="c" id="cntPlugins">0</span></button>
+            <button class="tab" data-k="frontend">前端资源 <span class="c" id="cntFrontend">0</span></button>
+            <button class="tab" data-k="platform">平台 API <span class="c" id="cntPlatform">0</span></button>
           </div>
           <table>
-            <thead><tr><th>条目</th><th>位置</th><th>处置结论</th><th>依据 / 规则</th></tr></thead>
-            <tbody>
-              <tr><td class="mono">get_version</td><td class="mono muted">src/commands.rs:14</td><td><span class="pill ok">直接可用</span></td><td class="muted">无平台依赖</td></tr>
-              <tr><td class="mono">pick_folder</td><td class="mono muted">src/commands.rs:112</td><td><span class="pill err">硬阻塞</span></td><td class="muted">rfd → 鸿蒙无原生对话框（R3-004）</td></tr>
-              <tr><td class="mono">localStorage 直读</td><td class="mono muted">src/store/theme.ts:18</td><td><span class="pill info">自动改造</span></td><td class="muted">ArkWeb 下为 null → 透明桥（R5-001）</td></tr>
-              <tr><td class="mono">confirm / prompt ×5</td><td class="mono muted">src/ui/*.ts</td><td><span class="pill info">自动改造</span></td><td class="muted">ArkWeb 未接回调 → polyfill（R5-002）</td></tr>
-            </tbody>
+            <thead><tr><th>条目</th><th>处置结论</th><th>规则</th><th class="num">出现点</th><th>依据 / 证据</th></tr></thead>
+            <tbody id="scanRows"><tr><td colspan="5" class="muted">尚未扫描。</td></tr></tbody>
           </table>
         </div>
         <div class="card">
-          <div class="card-h"><h3>阻塞项</h3><span class="right">按严重度排序</span></div>
-          <div class="blocker"><span class="sev"></span><div class="b"><div class="t">B-01 原生文件夹选择器（rfd）<span class="pill err">硬阻塞</span></div><div class="d mono">src/commands.rs:112 · 影响 2 处调用 · 鸿蒙能力位 0</div></div><div class="aside"><span class="pill warn">需人工 5 min</span></div></div>
-          <div class="blocker"><span class="sev"></span><div class="b"><div class="t">B-02 依赖 openssl 的 https 客户端<span class="pill err">硬阻塞</span></div><div class="d mono">Cargo.toml:57 · reqwest 默认 features 在 OHOS 下无 stdx TLS</div></div><div class="aside"><span class="pill info">自动改造</span></div></div>
-          <div class="blocker"><span class="sev warn"></span><div class="b"><div class="t">B-03 系统托盘图标<span class="pill warn">需降级</span></div><div class="d mono">tauri.conf.json · 鸿蒙能力位 0，降级为普通最小化</div></div><div class="aside"><span class="pill info">自动改造</span></div></div>
+          <div class="card-h"><h3>阻塞项</h3><span class="right">未知(hard) + 人工(soft)</span></div>
+          <div id="blockList"><div class="muted" style="padding:6px 2px">尚未扫描。</div></div>
         </div>
       </section>
 
@@ -1327,23 +1318,190 @@ withBridge(function(tauri){
   /* ===== 退出 ===== */
   $('btnQuit').onclick = function(){ invoke('t2h:quit').catch(function(){}); };
 
-  /* ===== 扫描探针：给了路径就立刻跑一次 t2h:scan，把指标回投自检 ===== */
+  /* ===== ② 迁移画像：把 t2h:scan 的真数据渲染进版面 =====
+   * 之前这块是静态示意（写死 78 分 / 128 项），现在全部由 lingqu/scan/v1 驱动：
+   * 评分环 + 五维条 + R/D/H/U/C1/C3 + 五类清单表 + 阻塞项。
+   * 口径：一项 = 迁移单元（docs/P2-scan-口径草案.md）；未扫描的维度如实显示「—」。 */
+  var SCAN = { res: null, kind: 'commands' };
+  var VERDICT_CLS = { '改造':'info', '降级':'warn', '不适用':'ok', '人工':'warn', '未知':'err' };
+  var DIMS = [['build','构建链'],['deps','依赖'],['runtime','运行时'],['api','平台 API'],['dist','分发']];
+  var KIND_CN = { commands:'命令', events:'事件', plugins:'插件', frontend:'前端资源', platform:'平台 API' };
+
+  function escHtml(s){
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+      return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' })[c];
+    });
+  }
+
+  function renderScan(res){
+    res = res || {};
+    SCAN.res = res;
+    var note = $('scanNote');
+    if (!res.ok) {
+      window.__scan = { error: res.error || 'scan failed' };
+      window.__scanRows = 0;
+      $('scoreNote').textContent = '未扫描';
+      $('scoreTotal').textContent = '—';
+      $('scoreRing').style.setProperty('--v', 0);
+      note.style.color = 'var(--err)';
+      note.textContent = '扫描失败：' + (res.error || '未知原因');
+      return;
+    }
+    var sc = res.scan || {};
+    var m = res.metrics || sc.metrics || {};
+    var s = res.score || sc.score || {};
+    var items = sc.items || {};
+    var blockers = sc.blockers || [];
+
+    window.__scan = {
+      path: res.project || '', out: res.out || '', outError: res.outError || '',
+      R: m.R, D: m.D, H: m.H, U: m.U, C1: m.C1, C3: m.C3,
+      total: s.total, partial: s.partial
+    };
+
+    // 评分环
+    var total = (typeof s.total === 'number') ? s.total : 0;
+    $('scoreTotal').textContent = String(total);
+    $('scoreRing').style.setProperty('--v', total);
+    $('scoreNote').textContent = s.partial
+      ? '已扫描维度：' + (s.scannedDims || 'runtime,api')
+      : '五维全扫描';
+
+    // 五维条：未扫描（-1）显示「—」且条为空
+    $('scoreDims').innerHTML = DIMS.map(function(d){
+      var v = s[d[0]];
+      var scanned = (typeof v === 'number' && v >= 0);
+      var cls = scanned ? (v < 70 ? 'warn' : '') : '';
+      return '<div class="dim"><span class="t">' + d[1] + '</span>'
+        + '<span class="bar"><i class="' + cls + '" style="width:' + (scanned ? v : 0) + '%"></i></span>'
+        + '<span class="n">' + (scanned ? String(v) : '—') + '</span></div>';
+    }).join('');
+
+    // 覆盖率指标
+    function put(id, val){ $(id).innerHTML = String(val) + '<small>项</small>'; }
+    put('mR', m.R || 0); put('mD', m.D || 0); put('mH', m.H || 0); put('mU', m.U || 0);
+    $('mC1').textContent = (typeof m.C1 === 'number' ? m.C1.toFixed(1) : '—') + '%';
+    $('mC3').textContent = (typeof m.C3 === 'number' ? m.C3.toFixed(1) : '—') + '%';
+
+    // 页签计数
+    var n = function(k){ return (items[k] || []).length; };
+    $('cntCommands').textContent = n('commands');
+    $('cntEvents').textContent = n('events');
+    $('cntPlugins').textContent = n('plugins');
+    $('cntFrontend').textContent = n('frontend');
+    $('cntPlatform').textContent = n('platform');
+    $('itemsNote').textContent = '共 ' + (m.R || 0) + ' 项 · 按迁移单元计';
+    // 五类各自的行数：切页签只是换数据源，这里先把「五张表都真有数据」留下可断言证据
+    window.__scanKindRows = ['commands','events','plugins','frontend','platform'].map(function(k){
+      return k + ':' + n(k);
+    }).join(',');
+
+    note.style.color = '';
+    note.textContent = '已扫描 ' + (res.project || '') + '：R=' + (m.R || 0) + ' 项，'
+      + '人工 ' + (m.H || 0) + ' 项，未知 ' + (m.U || 0) + ' 项。'
+      + (res.out ? '留档 ' + res.out : '')
+      + (res.outError ? '（留档失败：' + res.outError + '）' : '');
+
+    renderScanRows();
+    renderScanBlockers();
+  }
+
+  function renderScanRows(){
+    var tb = $('scanRows');
+    var res = SCAN.res;
+    var items = (res && res.scan && res.scan.items) || {};
+    var arr = items[SCAN.kind] || [];
+    if (!arr.length) {
+      tb.innerHTML = '<tr><td colspan="5" class="muted">该类未识别到条目（可能工程里确实没有，也可能是识别规则待补——记进 P2 收尾）。</td></tr>';
+      window.__scanRows = 0;
+      return;
+    }
+    tb.innerHTML = arr.map(function(it){
+      var cls = VERDICT_CLS[it.verdict] || 'warn';
+      var site = (it.sites && it.sites.length) ? it.sites[0] : '';
+      var more = (it.siteCount > 1) ? ' 等 ' + it.siteCount + ' 处' : '';
+      return '<tr>'
+        + '<td class="mono">' + escHtml(it.name) + '</td>'
+        + '<td><span class="pill ' + cls + '">' + escHtml(it.verdict) + '</span></td>'
+        + '<td class="mono muted" style="font-size:11px">' + escHtml(it.rule) + '</td>'
+        + '<td class="mono muted">' + (it.siteCount || 0) + '</td>'
+        + '<td class="muted"><span class="mono">' + escHtml(site) + '</span>' + more
+        + '<div style="margin-top:2px">' + escHtml(it.evidence) + '</div></td>'
+        + '</tr>';
+    }).join('');
+    window.__scanRows = arr.length;
+  }
+
+  function renderScanBlockers(){
+    var res = SCAN.res;
+    var bl = (res && res.scan && res.scan.blockers) || [];
+    var box = $('blockList');
+    if (!bl.length) {
+      box.innerHTML = '<div class="muted" style="padding:6px 2px">没有阻塞项（未知 0 / 人工 0）。</div>';
+      window.__scanBlockers = 0;
+      return;
+    }
+    box.innerHTML = bl.map(function(b){
+      var hard = (b.severity === 'hard');
+      return '<div class="blocker"><span class="sev' + (hard ? '' : ' warn') + '"></span>'
+        + '<div class="b"><div class="t">' + escHtml(b.id) + ' ' + escHtml(b.name)
+        + '<span class="pill ' + (hard ? 'err' : 'warn') + '">' + (hard ? '硬阻塞(未知)' : '待人工') + '</span></div>'
+        + '<div class="d mono">' + escHtml(b.site) + (b.evidence ? ' · ' + escHtml(b.evidence) : '') + '</div></div>'
+        + '<div class="aside"><span class="pill info">' + escHtml(b.kind) + '</span></div></div>';
+    }).join('');
+    window.__scanBlockers = bl.length;
+  }
+
+  // 页签切换：只切数据源，视觉高亮由上面那个通用 .tabs 处理器负责
+  $('scanTabs').addEventListener('click', function(ev){
+    var t = ev.target && ev.target.closest ? ev.target.closest('.tab') : null;
+    if (!t) { return; }
+    var k = t.getAttribute('data-k');
+    if (!k || k === SCAN.kind) { return; }
+    SCAN.kind = k;
+    renderScanRows();
+    reportUi('scan-tab-' + k);
+  });
+
+  // 手动扫描入口
+  $('btnScan').onclick = function(){
+    var p = ($('scanPath').value || '').trim();
+    var note = $('scanNote');
+    if (!p) {
+      note.style.color = 'var(--warn)';
+      note.textContent = '请先填 Tauri 工程路径（或置 LINGQU_SCAN_PATH）。';
+      return;
+    }
+    $('btnScan').disabled = true;
+    note.style.color = '';
+    note.textContent = '扫描中：' + p;
+    invoke('t2h:scan', { path: p }).then(function(r){
+      $('btnScan').disabled = false;
+      renderScan(r);
+      reportUi('scan-manual');
+    }).catch(function(e){
+      $('btnScan').disabled = false;
+      note.style.color = 'var(--err)';
+      note.textContent = '调用失败：' + (e && e.message ? e.message : e);
+      reportUi('scan-manual-error');
+    });
+  };
+
+  /* ===== 扫描探针：给了路径就立刻跑一次 t2h:scan 并渲染，把指标回投自检 ===== */
   function runScanProbe(path){
+    $('scanPath').value = path;
     invoke('t2h:scan', { path: path }).then(function(r){
-      r = r || {};
-      if (!r.ok) {
-        window.__scan = { path: path, error: r.error || 'scan failed' };
-      } else {
-        var m = r.metrics || {};
-        var s = r.score || {};
-        window.__scan = {
-          path: path, out: r.out || '',
-          R: m.R, D: m.D, H: m.H, U: m.U,
-          C1: m.C1, C3: m.C3,
-          total: s.total, partial: s.partial
-        };
-      }
+      renderScan(r || {});
       reportUi('scan-done');
+      // 五类页签逐个切一遍：每次切完回投一行（scanKind + scanRows），
+      // 这样「页签真的在换数据源」也是可断言的，而不只是「命令列表画出来了」
+      ['events','plugins','frontend','platform','commands'].forEach(function(k, i){
+        setTimeout(function(){
+          SCAN.kind = k;
+          renderScanRows();
+          reportUi('scan-kind-' + k);
+        }, 500 + i * 400);
+      });
     }).catch(function(e){
       window.__scan = { path: path, error: e && e.message ? e.message : 'invoke error' };
       reportUi('scan-error');
@@ -1380,6 +1538,11 @@ withBridge(function(tauri){
       scanTotal: (window.__scan && window.__scan.total) || 0,
       scanOut: (window.__scan && window.__scan.out) || '',
       scanError: (window.__scan && window.__scan.error) || '',
+      scanOutError: (window.__scan && window.__scan.outError) || '',
+      scanKindRows: window.__scanKindRows || '',
+      scanKind: SCAN.kind,
+      scanRows: window.__scanRows || 0,
+      scanBlockers: window.__scanBlockers || 0,
       errorCount: window.__uiErrors.length
     }).catch(function(){});
     if (tag) { console.log('[ui-report] ' + tag); }

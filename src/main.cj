@@ -251,18 +251,19 @@ public class ScanCommand <: CommandHandler {
         let scan = scanProject(path)
         let json = scan.toJson()
 
-        // 工程名取路径末段
-        var name = path
-        match (path.lastIndexOf("/")) {
-            case Some(i) => name = path[(i + 1)..path.size]
-            case None => ()
-        }
+        // 工程名取路径末段（"/" 与 "\" 都认——Windows 路径只按 "/" 切会把整条路径当名字）
+        var name = projectNameOf(path)
         if (name.size == 0) {
             name = "project"
         }
+        // 兜底：个别字符（`:` 等）在文件名里不合法，统一替换成 `_`
+        name = sanitizeFileName(name)
         let outDir = ".lingqu/scan"
         let outFile = "${outDir}/${name}.json"
         var wrote = false
+        // 写盘失败必须能被看见：eprintln 在 GUI 里会被框架日志接管（AGENTS §4 第 14 条），
+        // 只打日志等于没证据 —— 所以把原因塞进返回值，页面和 ui_report 都能断言。
+        var outErr = ""
         try {
             if (!exists(Path(".lingqu"))) {
                 Directory.create(Path(".lingqu"))
@@ -273,12 +274,14 @@ public class ScanCommand <: CommandHandler {
             File.writeTo(outFile, json.toJsonString().toArray())
             wrote = true
         } catch (e: Exception) {
+            outErr = "${e}"
             eprintln("[lingqu][scan] 写扫描结果失败：${e}")
         }
 
         res.put("ok", JsonBool(true))
         res.put("project", JsonString(name))
         res.put("out", JsonString(if (wrote) { outFile } else { "" }))
+        res.put("outError", JsonString(outErr))
         res.put("metrics", scan.metricsJson())
         res.put("score", scan.scoreJson())
         res.put("scan", json)
@@ -332,6 +335,11 @@ public class UiReportCommand <: CommandHandler {
         o.put("scanTotal", JsonInt(argInt(args, "scanTotal", 0)))
         o.put("scanOut", JsonString(argStr(args, "scanOut", "")))
         o.put("scanError", JsonString(argStr(args, "scanError", "")))
+        o.put("scanOutError", JsonString(argStr(args, "scanOutError", "")))
+        o.put("scanKindRows", JsonString(argStr(args, "scanKindRows", "")))
+        o.put("scanKind", JsonString(argStr(args, "scanKind", "")))
+        o.put("scanRows", JsonInt(argInt(args, "scanRows", 0)))
+        o.put("scanBlockers", JsonInt(argInt(args, "scanBlockers", 0)))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         let text = o.toJsonString()
         // 落文件而不是只打日志：GUI 的 stderr 去向受框架日志重定向影响（见 AGENTS §4 第 14 条），

@@ -17,6 +17,27 @@ func src(rel: String, text: String): Source {
     return Source(rel, text)
 }
 
+// ---------------- 落档文件名：路径末段（回归 v0.6.0 的静默写档失败） ----------------
+
+@Test
+public func testProjectNameOfHandlesWindowsSeparator(): Unit {
+    // 只用 "/" 切会把整条 Windows 路径当名字 → `.lingqu/scan/E:\test\rust\x.json` 非法
+    @Expect(projectNameOf("E:\\test\\rust\\habit-tree"), "habit-tree")
+    @Expect(projectNameOf("E:/test/rust/habit-tree"), "habit-tree")
+    @Expect(projectNameOf("/home/u/cc-switch"), "cc-switch")
+    // 没有分隔符：整串就是名字
+    @Expect(projectNameOf("habit-tree"), "habit-tree")
+    // 末尾带分隔符：末段为空，由调用方回退到默认名
+    @Expect(projectNameOf("E:\\test\\habit-tree\\"), "")
+}
+
+@Test
+public func testSanitizeFileNameReplacesIllegalChars(): Unit {
+    @Expect(sanitizeFileName("habit-tree"), "habit-tree")
+    @Expect(sanitizeFileName("c:app"), "c_app")
+    @Expect(sanitizeFileName("a?b*c"), "a_b_c")
+}
+
 // ---------------- 命令清单：以函数为一项 ----------------
 
 @Test
