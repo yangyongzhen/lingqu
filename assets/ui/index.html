@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>灵渠迁移台 · Lingqu</title>
+<style>
+/* 设计令牌：与 cj-tauri / ai-chat 同一套，鸿蒙 ArkWeb 也稳（无阴影、1px 描边、12px 圆角） */
+:root{
+  --bg:#0f1117; --panel:#161a23; --panel2:#1c2130; --line:#262c3b;
+  --fg:#e8eaf0; --dim:#8b93a7; --acc:#6c8cff; --acc2:#8a6cff;
+  --ok:#7ee2a8; --err:#ff7b72; --warn:#ffb86b; --info:#5fd7c5;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
+.app{height:100%;display:grid;grid-template-rows:46px 1fr}
+.titlebar{display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.logo{display:flex;align-items:center;gap:8px;font-weight:650}
+.logo .mark{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;font-size:12px;color:#fff;font-weight:700;
+  background:linear-gradient(135deg,var(--acc),var(--acc2))}
+.logo small{color:var(--dim);font-weight:400;font-size:11px}
+.spacer{flex:1}
+.chip{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim)}
+.dot.ok{background:var(--ok)} .dot.err{background:var(--err)} .dot.warn{background:var(--warn)} .dot.info{background:var(--acc)}
+.btn{appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--fg);padding:7px 12px;border-radius:9px;
+  font-size:12.5px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:var(--acc);color:var(--acc)}
+.btn.primary{background:linear-gradient(135deg,var(--acc),var(--acc2));border-color:transparent;color:#fff;font-weight:600}
+.btn.primary:hover{color:#fff;filter:brightness(1.08)}
+.btn.sm{padding:4px 9px;font-size:11.5px;border-radius:7px}
+.body{display:grid;grid-template-columns:236px 1fr 340px;min-height:0}
+
+/* 左栏 */
+.rail{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.rail-h{padding:14px 14px 8px;font-size:11px;letter-spacing:.12em;color:var(--dim)}
+.steps{display:flex;flex-direction:column;gap:2px;padding:0 8px;overflow:auto;flex:1}
+.step{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer;border:1px solid transparent;
+  color:var(--dim);font-size:13px;background:transparent;text-align:left;font-family:inherit;width:100%}
+.step:hover{background:var(--panel2);color:var(--fg)}
+.step .n{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;font-size:11px;font-weight:600;
+  background:var(--panel2);color:var(--dim);border:1px solid var(--line);flex:0 0 auto}
+.step.active{background:rgba(108,140,255,.14);border-color:rgba(108,140,255,.42);color:var(--fg);font-weight:600}
+.step.active .n{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border-color:transparent}
+.step .badge{margin-left:auto;font-size:10.5px;padding:1px 6px;border-radius:999px;background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
+.rail-f{padding:10px 12px;border-top:1px solid var(--line);font-size:11.5px;color:var(--dim);display:flex;flex-direction:column;gap:6px}
+.rail-f .row{display:flex;align-items:center;gap:7px}
+
+/* 中栏 */
+.work{overflow:auto;padding:18px 20px 28px;min-width:0}
+.whead{display:flex;align-items:flex-start;gap:14px;margin-bottom:16px}
+.whead h1{font-size:19px;margin:0;font-weight:650}
+.whead p{margin:3px 0 0;color:var(--dim);font-size:12.5px}
+.whead .acts{margin-left:auto;display:flex;gap:8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+.card + .card{margin-top:12px}
+.card-h{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.card-h h3{margin:0;font-size:13.5px;font-weight:600}
+.card-h .right{margin-left:auto;color:var(--dim);font-size:11.5px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.stat .k{font-size:11px;color:var(--dim)}
+.stat .v{font-size:19px;font-weight:700;margin-top:3px}
+.stat .v small{font-size:11.5px;font-weight:500;color:var(--dim);margin-left:4px}
+.checkrow{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid rgba(38,44,59,.6)}
+.checkrow:last-child{border-bottom:0}
+.checkrow .t{font-size:13px;font-weight:600}
+.checkrow .d{font-size:11.5px;color:var(--dim);font-family:var(--mono);word-break:break-all;margin-top:2px}
+.checkrow .d.hint{color:var(--warn);font-family:inherit}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:11px;
+  border:1px solid var(--line);background:var(--panel2);white-space:nowrap;flex:0 0 auto}
+.pill.ok{color:var(--ok);border-color:rgba(126,226,168,.38);background:rgba(126,226,168,.10)}
+.pill.err{color:var(--err);border-color:rgba(255,123,114,.38);background:rgba(255,123,114,.10)}
+.pill.warn{color:var(--warn);border-color:rgba(255,184,107,.38);background:rgba(255,184,107,.10)}
+.pill.info{color:var(--acc);border-color:rgba(108,140,255,.38);background:rgba(108,140,255,.10)}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--dim)}
+.note{font-size:11.5px;color:var(--dim);background:var(--panel2);border:1px dashed var(--line);border-radius:10px;padding:9px 12px;margin-top:12px}
+.todo{display:flex;flex-direction:column;gap:8px;font-size:12.5px;color:var(--dim)}
+.todo code{font-family:var(--mono);color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+
+/* 右栏 */
+.dock{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.dock-h{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:9px}
+.dock-h .t{font-size:12.5px;font-weight:600}
+.dock-h .m{margin-left:auto;font-size:11px;color:var(--dim);font-family:var(--mono)}
+.chat{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px;min-height:0}
+.msg{display:flex;gap:9px}
+.av{width:24px;height:24px;border-radius:8px;flex:0 0 auto;display:grid;place-items:center;font-size:10.5px;font-weight:700;
+  background:var(--panel2);border:1px solid var(--line);color:var(--dim)}
+.av.ai{background:linear-gradient(135deg,var(--acc),var(--acc2));border-color:transparent;color:#fff}
+.bubble{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:12.8px;line-height:1.65}
+.field{display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:var(--dim)}
+.field input{font-family:var(--mono);font-size:11.5px;background:var(--panel);border:1px solid var(--line);color:var(--fg);
+  border-radius:8px;padding:7px 9px}
+.composer{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.composer .inp{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 11px;font-size:12.5px;color:var(--dim)}
+.screen{display:none}
+.screen.on{display:block}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="titlebar">
+    <div class="logo"><span class="mark">灵</span>灵渠迁移台<small>Lingqu · Tauri → 鸿蒙 PC</small></div>
+    <div class="spacer"></div>
+    <div class="chip"><span class="dot" id="dot-env"></span><span id="txt-env">环境检查中…</span></div>
+    <div class="chip"><span class="dot" id="dot-cjh"></span><span id="txt-cjh">cjh 状态未知</span></div>
+  </header>
+
+  <div class="body">
+
+    <nav class="rail">
+      <div class="rail-h">迁移流程</div>
+      <div class="steps" id="steps">
+        <button class="step active" data-s="env"><span class="n">①</span>项目 / 环境</button>
+        <button class="step" data-s="profile"><span class="n">②</span>迁移画像<span class="badge">待接入</span></button>
+        <button class="step" data-s="deps"><span class="n">③</span>依赖扫描<span class="badge">待接入</span></button>
+        <button class="step" data-s="port"><span class="n">④</span>改造执行<span class="badge">待接入</span></button>
+        <button class="step" data-s="build"><span class="n">⑤</span>构建打包<span class="badge">待接入</span></button>
+        <button class="step" data-s="verify"><span class="n">⑥</span>真机验证<span class="badge">待接入</span></button>
+        <button class="step" data-s="report"><span class="n">⑦</span>迁移报告<span class="badge">待接入</span></button>
+      </div>
+      <div class="rail-f">
+        <div class="row"><span class="dot" id="dot-agent"></span><span id="txt-agent">AI 引擎未连接</span></div>
+        <div class="row"><span class="dot"></span>骨架版本 0.1.0 · cj-tauri 2.0.0</div>
+      </div>
+    </nav>
+
+    <main class="work">
+
+      <!-- ① 环境体检（本轮唯一接真的屏） -->
+      <section class="screen on" data-screen="env">
+        <div class="whead">
+          <div>
+            <h1>环境体检</h1>
+            <p>迁移这条链路上的每个工具都在不在、在哪里。缺什么会直接给出「怎么补」，不是只报个红叉。</p>
+          </div>
+          <div class="acts"><button class="btn" id="btn-env">重新体检</button></div>
+        </div>
+
+        <div class="grid3">
+          <div class="stat"><div class="k">体检项</div><div class="v" id="s-total">—</div></div>
+          <div class="stat"><div class="k">就绪</div><div class="v" id="s-ok" style="color:var(--ok)">—</div></div>
+          <div class="stat"><div class="k">缺失</div><div class="v" id="s-missing" style="color:var(--err)">—</div></div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <div class="card-h"><h3>工具链</h3><span class="right" id="env-time">—</span></div>
+          <div id="env-list"><div class="muted" style="font-size:12.5px">正在检查…</div></div>
+        </div>
+
+        <div class="note">
+          说明：骨架阶段判定口径是「路径存在」。下一步 <code>t2h:doctor</code> 会真的执行
+          <code>rustc --version</code> / <code>hvigorw --version</code>，把「装了但版本不对」也查出来。
+        </div>
+      </section>
+
+      <!-- ②~⑦ 占位屏：结构先定死，数据后接 -->
+      <section class="screen" data-screen="profile">
+        <div class="whead"><div><h1>迁移画像</h1><p>五类清单（命令 / 事件 / 插件 / 前端资源 / 平台 API）+ 可迁移度评分。这是「分析覆盖率 100%」的载体。</p></div></div>
+        <div class="card"><div class="card-h"><h3>待接入</h3></div><div class="todo">
+          <div>扫描器：<code>t2h:scan &lt;项目路径&gt;</code> 产出 <code>migration.json</code>（五类清单 + 评分 + 阻塞项）</div>
+          <div>每一条清单项都必须落一个处置结论：改造 / 降级 / 不适用 / 人工 —— 覆盖率 = 有结论项 ÷ 识别项</div>
+          <div>评分口径：hard 阻塞一项封顶扣 20 分、soft 扣 5 分（不是营销数字，反推剩余人时）</div>
+        </div></div>
+      </section>
+
+      <section class="screen" data-screen="deps">
+        <div class="whead"><div><h1>依赖扫描</h1><p>Cargo 依赖树的 OHOS 兼容性矩阵，逐 crate 判定并给替代方案。</p></div></div>
+        <div class="card"><div class="card-h"><h3>待接入</h3></div><div class="todo">
+          <div>数据源：<code>cargo metadata --format-version 1</code> + 规则库 R2（fork patch / 版本钉 / crate-type）</div>
+          <div>判定依据要能点开：源码特征、平台 syscall、已知 issue、真机实测结论</div>
+          <div>已知硬阻塞样例：<code>rfd</code>（无原生对话框）、<code>reqwest</code>（TLS）、<code>dirs</code>（无 HOME）</div>
+        </div></div>
+      </section>
+
+      <section class="screen" data-screen="port">
+        <div class="whead"><div><h1>改造执行</h1><p>规则优先、AI 兜底；每一步都带验证探针，人工介入逐次计数（验收线 ≤5 处）。</p></div></div>
+        <div class="card"><div class="card-h"><h3>待接入</h3></div><div class="todo">
+          <div>规则引擎：<code>when → transform → verify → evidence</code> 四元组，改动带标记、幂等可回滚</div>
+          <div>ArkWeb 兼容层注入：localStorage 透明桥 / confirm·prompt polyfill / type=color 降级</div>
+          <div>审批卡：每处人工决策都要有 diff 预览与「为什么需要你」</div>
+        </div></div>
+      </section>
+
+      <section class="screen" data-screen="build">
+        <div class="whead"><div><h1>构建打包</h1><p>交叉编译 .so → 前端指纹校验 → HAP 装配 → 签名 → 安装。</p></div></div>
+        <div class="card"><div class="card-h"><h3>待接入</h3></div><div class="todo">
+          <div>关键校验：<code>.so</code> 内嵌前端指纹（AssetKey 明文 grep）对不对 —— 防止「改了前端真机还是旧界面」</div>
+          <div>关键校验：HAP 里是否残留死资源 <code>rawfile</code>（tauri 运行时只读 .so 内嵌资源）</div>
+          <div>签名两态：真机调试用 debug profile，上架前必须切回 release</div>
+        </div></div>
+      </section>
+
+      <section class="screen" data-screen="verify">
+        <div class="whead"><div><h1>真机验证</h1><p>功能清单 + 证据（截图 / hilog / 探针）。没有证据不算通过。</p></div></div>
+        <div class="card"><div class="card-h"><h3>待接入</h3></div><div class="todo">
+          <div>部署：<code>hdc file send</code> + <code>bm install</code>（注意 send 会保留目录结构的老坑）</div>
+          <div>取证：<code>hdc shell hilog</code> 关键字、<code>panic.log</code>、ArkWeb console 转发</div>
+          <div>可用率 = 通过项 ÷ 功能清单项（验收线 ≥80%）</div>
+        </div></div>
+      </section>
+
+      <section class="screen" data-screen="report">
+        <div class="whead"><div><h1>迁移报告</h1><p>三段式：做了什么 / 没做什么（已知限制）/ 需要你做什么（上架清单）。</p></div></div>
+        <div class="card"><div class="card-h"><h3>待接入</h3></div><div class="todo">
+          <div>导出 HTML / Markdown / JSON，附证据索引</div>
+          <div>风险分级 + 人工介入逐条记录（验收要审计这个）</div>
+          <div>断点续迁：<code>.lingqu/tasks.json</code> 记任务状态机与 cjh 会话 id</div>
+        </div></div>
+      </section>
+
+    </main>
+
+    <aside class="dock">
+      <div class="dock-h"><span class="dot" id="dot-dock"></span><span class="t">迁移助手 · cjh</span><span class="m" id="dock-ep">:8765</span></div>
+      <div class="chat">
+        <div class="msg">
+          <div class="av ai">AI</div>
+          <div class="bubble" id="agent-msg">骨架已就绪。先点下面的「启动引擎」，我就能接手迁移分析。</div>
+        </div>
+        <div class="field" style="padding:0 2px">
+          <div>cjh 可执行文件路径</div>
+          <input id="cjh-path" placeholder="LINGQU_CJH 环境变量或默认路径">
+        </div>
+        <div class="msg">
+          <div class="av">你</div>
+          <div class="bubble mono" id="cjh-result" style="font-size:11.5px;color:var(--dim)">尚未拉起</div>
+        </div>
+      </div>
+      <div class="composer">
+        <button class="btn primary" id="btn-cjh" style="justify-content:center">启动引擎（cjh web）</button>
+        <div class="inp">对话面板将在引擎就绪后接入 WS（/api/* + 流式事件）</div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+  // 桥注入是异步的（document start 注入），统一等它出现
+  function withBridge(cb) {
+    if (window.__CJ_TAURI__) { cb(window.__CJ_TAURI__); return; }
+    setTimeout(function () { withBridge(cb); }, 50);
+  }
+
+  // 左栏切屏
+  document.querySelectorAll('.step').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('.step').forEach(function (x) { x.classList.remove('active'); });
+      b.classList.add('active');
+      var name = b.getAttribute('data-s');
+      document.querySelectorAll('.screen').forEach(function (s) {
+        s.classList.toggle('on', s.getAttribute('data-screen') === name);
+      });
+      document.querySelector('.work').scrollTop = 0;
+    });
+  });
+
+  function setDot(id, cls) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'dot' + (cls ? ' ' + cls : '');
+  }
+
+  function renderEnv(data) {
+    var list = document.getElementById('env-list');
+    list.innerHTML = '';
+    var ok = 0, miss = 0;
+    (data.items || []).forEach(function (it) {
+      if (it.ok) { ok++; } else { miss++; }
+      var row = document.createElement('div');
+      row.className = 'checkrow';
+      row.innerHTML =
+        '<span class="pill ' + (it.ok ? 'ok' : 'err') + '">' + (it.ok ? '就绪' : '缺失') + '</span>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="t">' + it.label + '</div>' +
+          '<div class="d' + (it.ok ? '' : ' hint') + '">' + (it.ok ? (it.path || '') : it.hint) + '</div>' +
+        '</div>';
+      list.appendChild(row);
+    });
+    document.getElementById('s-total').textContent = (data.items || []).length;
+    document.getElementById('s-ok').textContent = ok;
+    document.getElementById('s-missing').textContent = miss;
+    document.getElementById('env-time').textContent = new Date().toLocaleTimeString();
+    document.getElementById('txt-env').textContent = miss === 0 ? '环境就绪' : ('缺 ' + miss + ' 项');
+    setDot('dot-env', miss === 0 ? 'ok' : 'warn');
+  }
+
+  function renderCjh(alive) {
+    document.getElementById('dot-cjh').className = 'dot ' + (alive ? 'ok' : 'err');
+    document.getElementById('txt-cjh').textContent = alive ? 'cjh 已连接 :8765' : 'cjh 未启动';
+    document.getElementById('dot-dock').className = 'dot ' + (alive ? 'ok' : 'err');
+    document.getElementById('dot-agent').className = 'dot ' + (alive ? 'ok' : '');
+    document.getElementById('txt-agent').textContent = alive ? 'AI 引擎已就绪 · 127.0.0.1:8765' : 'AI 引擎未连接';
+  }
+
+  withBridge(function (tauri) {
+    // 环境体检
+    function loadEnv() {
+      tauri.invoke('t2h:env')
+        .then(renderEnv)
+        .catch(function (e) {
+          document.getElementById('env-list').innerHTML =
+            '<div class="pill err">体检失败：' + e.message + '</div>';
+        });
+    }
+    loadEnv();
+    document.getElementById('btn-env').onclick = loadEnv;
+
+    // cjh 探测
+    function probe() {
+      tauri.invoke('t2h:cjh_probe')
+        .then(function (d) { renderCjh(!!d.alive); })
+        .catch(function () { renderCjh(false); });
+    }
+    probe();
+    setInterval(probe, 5000);
+
+    // 拉起 cjh
+    document.getElementById('btn-cjh').onclick = function () {
+      var box = document.getElementById('cjh-result');
+      var path = document.getElementById('cjh-path').value.trim();
+      var args = {};
+      if (path) { args.path = path; }
+      box.textContent = '正在拉起…';
+      tauri.invoke('t2h:cjh_start', args)
+        .then(function (d) {
+          box.textContent = (d.ok ? 'OK · ' : 'FAIL · ') + (d.detail || '') +
+            (d.endpoint ? '\nendpoint: ' + d.endpoint : '') +
+            (d.pid > 0 ? '\npid: ' + d.pid : '');
+          // 拉起后轮询健康
+          var n = 0;
+          var t = setInterval(function () {
+            n++;
+            tauri.invoke('t2h:cjh_probe').then(function (r) {
+              renderCjh(!!r.alive);
+              if (r.alive) {
+                clearInterval(t);
+                document.getElementById('agent-msg').textContent =
+                  '引擎已就绪（127.0.0.1:8765）。下一步我会接入 /api/sessions 与技能包，然后就能开始扫描工程。';
+              }
+            });
+            if (n > 20) { clearInterval(t); }
+          }, 800);
+        })
+        .catch(function (e) { box.textContent = 'FAIL · ' + e.message; });
+    };
+  });
+</script>
+</body>
+</html>

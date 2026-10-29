@@ -1,0 +1,33 @@
+# cj-tauri 应用清单——整个工程的单一真相（RFC-002 §7）。
+# cj-tauri sync 从这里派生 targets/ 骨架（desktop/ohos）；cj-tauri check 校验它并检测骨架漂移。
+[app]
+  name = "lingqu"
+  version = "0.1.0"
+  # 应用标识：桌面是安装 ID，鸿蒙直接是 bundleName（每段须字母开头、只含字母数字下划线）
+  id = "com.lingqu.migrator"
+  # 业务包名（cjpm 约束①：toml 模块名必须等于源包名）
+  package = "lingqu"
+
+[[windows]]
+  label = "main"
+  title = "灵渠迁移台 · Lingqu"
+  # 工作台形态：左栏流程 + 中栏工作区 + 右栏 Agent，1280 是最小可用宽度
+  width = 1280
+  height = 840
+
+[assets]
+  # 骨架 launcher 加载的页面（相对资产根 assets/）；dev 模式自动改写到 Vite dev server
+  page = "ui/index.html"
+
+[capabilities]
+  dir = "assets/capabilities"
+
+[links]
+  # 各目标端**追加**的链接选项（拼在框架默认值之后；留空 = 只用默认）。
+  # 什么时候需要它：要调的原生能力在仓颉 SDK 里没有绑定，只能 FFI 直连系统库——
+  # 符号必须出现在最终链接那一侧，而那份 cjpm.toml 是 sync 生成的、不能手改。
+  # 例：鸿蒙读设备电量走系统 C API（ohbattery_info.h），写 ohos = "-lohbattery_info"
+  # 三端分开写是因为同一个库在三端上名字通常不同（-lfoo / foo.lib / -lfoo_ndk.z）。
+  desktop-linux = ""
+  desktop-windows = ""
+  ohos = ""

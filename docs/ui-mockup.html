@@ -1,0 +1,901 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>灵渠迁移台 · UI 效果图（Tauri → 鸿蒙 PC 迁移工具）</title>
+<style>
+/* ============ 设计令牌（与 cj-tauri / ai-chat 一致） ============ */
+:root[data-theme="dark"]{
+  --bg:#0f1117; --panel:#161a23; --panel2:#1c2130; --line:#262c3b;
+  --fg:#e8eaf0; --dim:#8b93a7; --acc:#6c8cff; --acc2:#8a6cff;
+  --ok:#7ee2a8; --err:#ff7b72; --warn:#ffb86b; --info:#5fd7c5;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+:root[data-theme="light"]{
+  --bg:#f6f7fb; --panel:#ffffff; --panel2:#eef0f6; --line:#dfe3ec;
+  --fg:#1c2130; --dim:#6b7280; --acc:#4f6ef7; --acc2:#7c5cff;
+  --ok:#1a8f4c; --err:#c8372d; --warn:#b45309; --info:#0f766e;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ============ 布局 ============ */
+.app{height:100%;display:grid;grid-template-rows:46px 1fr}
+.titlebar{
+  display:flex;align-items:center;gap:12px;padding:0 14px;
+  background:var(--panel);border-bottom:1px solid var(--line);
+}
+.logo{display:flex;align-items:center;gap:8px;font-weight:650;letter-spacing:.2px}
+.logo .mark{
+  width:22px;height:22px;border-radius:7px;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));
+  display:grid;place-items:center;font-size:12px;color:#fff;font-weight:700
+}
+.logo small{color:var(--dim);font-weight:400;font-size:11px;margin-left:2px}
+.tb-proj{
+  display:flex;align-items:center;gap:8px;padding:4px 10px;border-radius:999px;
+  background:var(--panel2);border:1px solid var(--line);font-size:12px;color:var(--dim)
+}
+.tb-proj b{color:var(--fg);font-weight:600}
+.spacer{flex:1}
+.tb-chip{
+  display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--dim);white-space:nowrap
+}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim);flex:0 0 auto}
+.dot.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+.dot.warn{background:var(--warn)}
+.dot.err{background:var(--err)}
+.dot.info{background:var(--acc)}
+.btn{
+  appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--fg);
+  padding:7px 12px;border-radius:9px;font-size:12.5px;cursor:pointer;font-family:inherit;
+  display:inline-flex;align-items:center;gap:6px;transition:.15s
+}
+.btn:hover{border-color:var(--acc);color:var(--acc)}
+.btn.primary{background:linear-gradient(135deg,var(--acc),var(--acc2));border-color:transparent;color:#fff;font-weight:600}
+.btn.primary:hover{filter:brightness(1.08);color:#fff}
+.btn.ghost{background:transparent}
+.btn.sm{padding:4px 9px;font-size:11.5px;border-radius:7px}
+
+.body{display:grid;grid-template-columns:236px 1fr 372px;min-height:0}
+
+/* ============ 左栏 ============ */
+.rail{
+  background:var(--panel);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0;
+}
+.rail-h{padding:14px 14px 8px;font-size:11px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase}
+.steps{display:flex;flex-direction:column;gap:2px;padding:0 8px;overflow:auto;flex:1}
+.step{
+  display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;
+  cursor:pointer;border:1px solid transparent;color:var(--dim);font-size:13px;
+  background:transparent;text-align:left;font-family:inherit;width:100%
+}
+.step:hover{background:var(--panel2);color:var(--fg)}
+.step .n{
+  width:22px;height:22px;border-radius:7px;display:grid;place-items:center;
+  font-size:11px;font-weight:600;background:var(--panel2);color:var(--dim);border:1px solid var(--line);flex:0 0 auto
+}
+.step.active{background:color-mix(in srgb,var(--acc) 14%,transparent);border-color:color-mix(in srgb,var(--acc) 40%,transparent);color:var(--fg);font-weight:600}
+.step.active .n{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border-color:transparent}
+.step.done .n{background:color-mix(in srgb,var(--ok) 20%,transparent);color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+.step .badge{margin-left:auto;font-size:10.5px;padding:1px 6px;border-radius:999px;background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
+.step .badge.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+.rail-f{padding:10px 12px;border-top:1px solid var(--line);font-size:11.5px;color:var(--dim);display:flex;flex-direction:column;gap:6px}
+.rail-f .row{display:flex;align-items:center;gap:7px}
+
+/* ============ 中栏 ============ */
+.work{overflow:auto;padding:18px 20px 28px;min-width:0}
+.whead{display:flex;align-items:flex-start;gap:14px;margin-bottom:16px}
+.whead h1{font-size:19px;margin:0;font-weight:650;letter-spacing:.2px}
+.whead p{margin:3px 0 0;color:var(--dim);font-size:12.5px}
+.whead .acts{margin-left:auto;display:flex;gap:8px;flex:0 0 auto}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+.card + .card{margin-top:12px}
+.card-h{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.card-h h3{margin:0;font-size:13.5px;font-weight:600}
+.card-h .sub{color:var(--dim);font-size:11.5px}
+.card-h .right{margin-left:auto;color:var(--dim);font-size:11.5px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+
+/* 评分环 */
+.score{display:flex;gap:18px;align-items:center}
+.ring{
+  --v:78; width:112px;height:112px;border-radius:50%;flex:0 0 auto;
+  background:conic-gradient(var(--acc) calc(var(--v)*1%), var(--panel2) 0);
+  display:grid;place-items:center;position:relative
+}
+.ring::after{
+  content:"";position:absolute;inset:9px;border-radius:50%;background:var(--panel)
+}
+.ring .v{position:relative;text-align:center;line-height:1.15}
+.ring .v b{font-size:27px;font-weight:700;letter-spacing:-.5px}
+.ring .v span{display:block;font-size:10.5px;color:var(--dim)}
+.dims{flex:1;display:flex;flex-direction:column;gap:9px;min-width:0}
+.dim{display:grid;grid-template-columns:78px 1fr 34px;align-items:center;gap:9px;font-size:12px}
+.dim .t{color:var(--dim)}
+.bar{height:6px;border-radius:99px;background:var(--panel2);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--acc),var(--acc2))}
+.bar i.warn{background:linear-gradient(90deg,var(--warn),#ff9d4d)}
+.bar i.err{background:linear-gradient(90deg,var(--err),#ff9d8a)}
+.dim .n{text-align:right;font-variant-numeric:tabular-nums;color:var(--dim)}
+
+/* 统计小块 */
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.stat .k{font-size:11px;color:var(--dim);display:flex;align-items:center;gap:6px}
+.stat .v{font-size:19px;font-weight:700;margin-top:3px;letter-spacing:-.3px}
+.stat .v small{font-size:11.5px;font-weight:500;color:var(--dim);margin-left:4px}
+
+/* 标签页 */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:12px;flex-wrap:wrap}
+.tab{
+  appearance:none;background:transparent;border:0;border-bottom:2px solid transparent;
+  color:var(--dim);padding:8px 12px;font-size:13px;cursor:pointer;font-family:inherit;border-radius:8px 8px 0 0
+}
+.tab:hover{color:var(--fg);background:var(--panel2)}
+.tab.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
+.tab .c{font-size:10.5px;color:var(--dim);margin-left:5px}
+
+/* 表格 */
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{
+  text-align:left;font-weight:600;font-size:11px;letter-spacing:.04em;color:var(--dim);
+  padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap
+}
+td{padding:9px 10px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);vertical-align:middle}
+tr:hover td{background:var(--panel2)}
+td.mono,.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--dim)}
+
+/* 状态 pill */
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--line);background:var(--panel2);white-space:nowrap}
+.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 38%,transparent);background:color-mix(in srgb,var(--ok) 10%,transparent)}
+.pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 38%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+.pill.err{color:var(--err);border-color:color-mix(in srgb,var(--err) 38%,transparent);background:color-mix(in srgb,var(--err) 10%,transparent)}
+.pill.info{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 38%,transparent);background:color-mix(in srgb,var(--acc) 10%,transparent)}
+
+/* 阻塞项 */
+.blocker{display:flex;gap:11px;padding:11px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
+.blocker:last-child{border-bottom:0}
+.blocker .sev{width:3px;border-radius:3px;background:var(--err);flex:0 0 auto}
+.blocker .sev.warn{background:var(--warn)}
+.blocker .sev.info{background:var(--acc)}
+.blocker .b{flex:1;min-width:0}
+.blocker .t{font-weight:600;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.blocker .d{color:var(--dim);font-size:11.5px;margin-top:3px}
+.blocker .aside{flex:0 0 auto;text-align:right;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+
+/* 时间线 */
+.time{display:flex;flex-direction:column;gap:0}
+.tstep{display:grid;grid-template-columns:26px 1fr;gap:12px;position:relative;padding-bottom:14px}
+.tstep:last-child{padding-bottom:0}
+.tstep::before{
+  content:"";position:absolute;left:12px;top:24px;bottom:0;width:1px;
+  background:var(--line)
+}
+.tstep:last-child::before{display:none}
+.tstep .i{
+  width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:11px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--dim);z-index:1;flex:0 0 auto
+}
+.tstep.done .i{background:color-mix(in srgb,var(--ok) 18%,transparent);border-color:color-mix(in srgb,var(--ok) 45%,transparent);color:var(--ok)}
+.tstep.run .i{background:linear-gradient(135deg,var(--acc),var(--acc2));border-color:transparent;color:#fff}
+.tstep.wait .i{opacity:.65}
+.tstep .c{padding-top:1px;min-width:0}
+.tstep .t{font-size:13px;font-weight:600;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tstep .d{font-size:11.5px;color:var(--dim);margin-top:2px}
+
+/* 日志 */
+.log{
+  font-family:var(--mono);font-size:11.5px;line-height:1.75;background:color-mix(in srgb,var(--bg) 60%,var(--panel));
+  border:1px solid var(--line);border-radius:10px;padding:11px 13px;max-height:250px;overflow:auto;white-space:pre-wrap;word-break:break-word
+}
+.log .ts{color:var(--dim)}
+.log .ok{color:var(--ok)}
+.log .err{color:var(--err)}
+.log .warn{color:var(--warn)}
+.log .ag{color:var(--acc2)}
+.log .cmd{color:var(--info)}
+
+/* 构建阶段 */
+.stages{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.stage{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 11px;position:relative;overflow:hidden
+}
+.stage .k{font-size:11px;color:var(--dim);display:flex;align-items:center;gap:6px}
+.stage .v{font-size:12.5px;font-weight:600;margin-top:5px;font-family:var(--mono)}
+.stage.ok{border-color:color-mix(in srgb,var(--ok) 35%,transparent);background:color-mix(in srgb,var(--ok) 7%,transparent)}
+.stage.run{border-color:color-mix(in srgb,var(--acc) 45%,transparent);background:color-mix(in srgb,var(--acc) 9%,transparent)}
+.stage.fail{border-color:color-mix(in srgb,var(--err) 40%,transparent);background:color-mix(in srgb,var(--err) 8%,transparent)}
+
+/* 证据/复选框 */
+.evi{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
+.evi:last-child{border-bottom:0}
+.chk{
+  width:17px;height:17px;border-radius:5px;flex:0 0 auto;display:grid;place-items:center;
+  border:1px solid var(--line);background:var(--panel2);font-size:11px;color:transparent
+}
+.chk.on{background:color-mix(in srgb,var(--ok) 22%,transparent);border-color:color-mix(in srgb,var(--ok) 55%,transparent);color:var(--ok)}
+.chk.na{background:var(--panel2);color:var(--dim)}
+.evi .t{font-size:13px;flex:1;min-width:0}
+.evi .chips{display:flex;gap:6px;flex:0 0 auto}
+.thumb{
+  width:86px;height:56px;border-radius:8px;border:1px solid var(--line);flex:0 0 auto;
+  background:repeating-linear-gradient(135deg,var(--panel2) 0 7px,transparent 7px 14px);
+  display:grid;place-items:center;font-size:10px;color:var(--dim);text-align:center;line-height:1.3
+}
+
+/* ============ 右栏 Agent ============ */
+.dock{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.dock-h{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:9px}
+.dock-h .t{font-size:12.5px;font-weight:600}
+.dock-h .m{margin-left:auto;font-size:11px;color:var(--dim);font-family:var(--mono)}
+.chat{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:13px;min-height:0}
+.msg{display:flex;gap:9px}
+.av{
+  width:24px;height:24px;border-radius:8px;flex:0 0 auto;display:grid;place-items:center;
+  font-size:10.5px;font-weight:700;background:var(--panel2);border:1px solid var(--line);color:var(--dim)
+}
+.av.ai{background:linear-gradient(135deg,var(--acc),var(--acc2));border-color:transparent;color:#fff}
+.msg .b{min-width:0;flex:1}
+.msg .who{font-size:11px;color:var(--dim);margin-bottom:3px;display:flex;gap:7px;align-items:center}
+.bubble{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;
+  font-size:12.8px;line-height:1.65
+}
+.msg.me .bubble{background:color-mix(in srgb,var(--acc) 13%,transparent);border-color:color-mix(in srgb,var(--acc) 30%,transparent)}
+.tool{
+  border:1px solid var(--line);border-radius:10px;overflow:hidden;background:color-mix(in srgb,var(--bg) 45%,var(--panel))
+}
+.tool .th{
+  display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:11.5px;
+  background:var(--panel2);border-bottom:1px solid var(--line)
+}
+.tool .th .nm{font-family:var(--mono);font-weight:600;color:var(--acc)}
+.tool .th .st{margin-left:auto;font-size:10.5px}
+.tool .tb{padding:9px 10px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;color:var(--dim);line-height:1.7}
+.tool .tb b{color:var(--fg);font-weight:600}
+.approve{
+  border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);
+  background:color-mix(in srgb,var(--warn) 8%,transparent);border-radius:10px;padding:11px
+}
+.approve .h{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--warn)}
+.approve .q{font-size:12.3px;margin:7px 0 9px;line-height:1.6}
+.approve .diff{
+  font-family:var(--mono);font-size:11px;background:color-mix(in srgb,var(--bg) 55%,var(--panel));
+  border:1px solid var(--line);border-radius:8px;padding:8px 9px;white-space:pre-wrap;margin-bottom:9px
+}
+.approve .diff .a{color:var(--ok)}
+.approve .diff .d{color:var(--err)}
+.approve .btns{display:flex;gap:7px}
+.composer{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.composer .inp{
+  display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:10px;padding:8px 11px;font-size:12.5px;color:var(--dim)
+}
+.composer .foot{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--dim)}
+.composer .foot .spacer{flex:1}
+
+/* 工具条 */
+.filter{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:12px}
+.seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{
+  appearance:none;border:0;background:transparent;color:var(--dim);font-family:inherit;
+  font-size:11.5px;padding:5px 10px;cursor:pointer
+}
+.seg button.on{background:color-mix(in srgb,var(--acc) 22%,transparent);color:var(--fg);font-weight:600}
+
+.note{
+  font-size:11.5px;color:var(--dim);background:var(--panel2);border:1px dashed var(--line);
+  border-radius:10px;padding:9px 12px;margin-top:12px
+}
+.screen{display:none}
+.screen.on{display:block}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--dim);flex-wrap:wrap;margin-top:10px}
+.legend span{display:flex;align-items:center;gap:5px}
+.kbd{font-family:var(--mono);font-size:10.5px;padding:1px 5px;border:1px solid var(--line);border-radius:5px;background:var(--panel2);color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ==================== 顶栏 ==================== -->
+  <header class="titlebar">
+    <div class="logo"><span class="mark">灵</span>灵渠迁移台<small>Lingqu · Tauri → 鸿蒙 PC</small></div>
+    <div class="tb-proj"><span class="dot info"></span>当前项目 <b>cc-switch</b> <span class="muted">· v3.4.1 · Vue3 + Rust</span></div>
+    <div class="spacer"></div>
+    <div class="tb-chip"><span class="dot ok"></span>hdc：2in1 已连接</div>
+    <div class="tb-chip"><span class="dot ok"></span>cjh：127.0.0.1:8765</div>
+    <div class="tb-chip">OHOS SDK 5.0.0(12)</div>
+    <button class="btn sm" id="themeBtn" title="切换深浅色">◐ 主题</button>
+    <button class="btn sm ghost">帮助 / 指南</button>
+  </header>
+
+  <div class="body">
+
+    <!-- ==================== 左栏：7 步 ==================== -->
+    <nav class="rail">
+      <div class="rail-h">迁移流程</div>
+      <div class="steps" id="steps">
+        <button class="step done"   data-s="project"><span class="n">✓</span>① 项目<span class="badge">已选</span></button>
+        <button class="step done"   data-s="profile"><span class="n">✓</span>② 迁移画像<span class="badge">100%</span></button>
+        <button class="step active" data-s="deps"><span class="n">③</span>③ 依赖扫描<span class="badge warn">4</span></button>
+        <button class="step"        data-s="port"><span class="n">④</span>④ 改造执行<span class="badge warn">3/5</span></button>
+        <button class="step"        data-s="build"><span class="n">⑤</span>⑤ 构建打包</button>
+        <button class="step"        data-s="verify"><span class="n">⑥</span>⑥ 真机验证</button>
+        <button class="step"        data-s="report"><span class="n">⑦</span>⑦ 迁移报告</button>
+      </div>
+      <div class="rail-f">
+        <div class="row"><span class="dot ok"></span>AI 引擎已就绪 · cjh</div>
+        <div class="row"><span class="dot"></span>上下文 42% · 会话 sess_7f3c</div>
+        <div class="row"><span class="dot warn"></span>断点：停在第 ④ 步</div>
+      </div>
+    </nav>
+
+    <!-- ==================== 中栏：主工作区 ==================== -->
+    <main class="work">
+
+      <!-- ---------- ① 项目 ---------- -->
+      <section class="screen" data-screen="project">
+        <div class="whead">
+          <div><h1>选择一个要迁移的 Tauri 工程</h1><p>拖入文件夹，或从最近项目继续。工具会先做静态分析，不改动任何文件。</p></div>
+          <div class="acts"><button class="btn">批量导入</button><button class="btn primary">＋ 打开工程</button></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>最近项目</h3><span class="right">5 个样本 · 验收要求 ≥5 个真实开源应用</span></div>
+          <table>
+            <thead><tr><th>项目</th><th>技术栈</th><th>评分</th><th>进度</th><th>HAP</th><th></th></tr></thead>
+            <tbody>
+              <tr><td><b>cc-switch</b><div class="muted mono" style="font-size:11px">com.jiujiang.ccswitch</div></td><td>Vue3 + Rust</td><td><span class="pill info">72</span></td><td>④ 改造执行</td><td><span class="pill warn">未产出</span></td><td><button class="btn sm">继续</button></td></tr>
+              <tr><td><b>habit-tree</b><div class="muted mono" style="font-size:11px">com.grove.habittrees</div></td><td>原生 TS + Rust</td><td><span class="pill ok">86</span></td><td>⑦ 已完成</td><td><span class="pill ok">12.4 MB</span></td><td><button class="btn sm ghost">报告</button></td></tr>
+              <tr><td><b>tauri-mqtt-client</b><div class="muted mono" style="font-size:11px">com.atommqtt.client</div></td><td>React + Rust</td><td><span class="pill warn">64</span></td><td>② 画像</td><td><span class="pill">—</span></td><td><button class="btn sm">继续</button></td></tr>
+              <tr><td><b>m3u8dl-tauri</b></td><td>Vue3 + Rust</td><td><span class="pill warn">58</span></td><td>① 已选</td><td><span class="pill">—</span></td><td><button class="btn sm">继续</button></td></tr>
+              <tr><td><b>tauri/examples</b>（官方最小样本）</td><td>Vanilla + Rust</td><td><span class="pill ok">91</span></td><td>⑦ 已完成</td><td><span class="pill ok">4.9 MB</span></td><td><button class="btn sm ghost">报告</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid3">
+          <div class="card"><div class="card-h"><h3>拖入即分析</h3></div><div class="muted" style="font-size:12.5px">支持 zip / 目录 / git 地址。导入后 3 秒内出画像，全程只读。</div></div>
+          <div class="card"><div class="card-h"><h3>不改你的 Git</h3></div><div class="muted" style="font-size:12.5px">所有改动以「带标记的补丁集」写入，可一键回滚到迁移前。</div></div>
+          <div class="card"><div class="card-h"><h3>断点续迁</h3></div><div class="muted" style="font-size:12.5px">关闭工具不丢进度；下次从第 N 步继续，Agent 上下文一并恢复。</div></div>
+        </div>
+        <div class="note">示意数据。真实界面中「继续」会直接跳到该项目的当前步骤，并把左侧步骤灯与右栏 Agent 会话一起恢复。</div>
+      </section>
+
+      <!-- ---------- ② 迁移画像 ---------- -->
+      <section class="screen" data-screen="profile">
+        <div class="whead">
+          <div><h1>迁移画像</h1><p>五类清单 + 可迁移度评分。每一项都必须有处置结论（改造 / 降级 / 不适用 / 人工）——这是「分析覆盖率」的分子分母。</p></div>
+          <div class="acts"><button class="btn">导出 JSON</button><button class="btn primary">生成迁移计划 →</button></div>
+        </div>
+
+        <div class="grid2">
+          <div class="card">
+            <div class="card-h"><h3>可迁移度</h3><span class="right">基于 4 个已完成样本校准</span></div>
+            <div class="score">
+              <div class="ring" style="--v:72"><div class="v"><b>72</b><span>/ 100</span></div></div>
+              <div class="dims">
+                <div class="dim"><span class="t">构建链</span><span class="bar"><i style="width:92%"></i></span><span class="n">92</span></div>
+                <div class="dim"><span class="t">依赖</span><span class="bar"><i style="width:70%"></i></span><span class="n">70</span></div>
+                <div class="dim"><span class="t">运行时</span><span class="bar"><i class="warn" style="width:55%"></i></span><span class="n">55</span></div>
+                <div class="dim"><span class="t">平台 API</span><span class="bar"><i class="warn" style="width:64%"></i></span><span class="n">64</span></div>
+                <div class="dim"><span class="t">分发</span><span class="bar"><i style="width:85%"></i></span><span class="n">85</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>分析覆盖率</h3><span class="right">验收标准 ①</span></div>
+            <div class="grid2" style="gap:10px">
+              <div class="stat"><div class="k">已识别</div><div class="v">128<small>项</small></div></div>
+              <div class="stat"><div class="k">已有结论</div><div class="v" style="color:var(--ok)">128<small>项</small></div></div>
+              <div class="stat"><div class="k">硬阻塞</div><div class="v" style="color:var(--err)">4<small>项</small></div></div>
+              <div class="stat"><div class="k">预计剩余人工</div><div class="v">≈3<small>处</small></div></div>
+            </div>
+            <div class="legend"><span><i class="dot ok"></i>覆盖率 <b style="color:var(--fg)">100%</b></span><span><i class="dot warn"></i>待人工 5</span><span><i class="dot err"></i>硬阻塞 4</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>清单</h3><span class="right">点击任一行可跳到源码位置</span></div>
+          <div class="tabs">
+            <button class="tab on">命令 <span class="c">23</span></button>
+            <button class="tab">事件 <span class="c">7</span></button>
+            <button class="tab">插件 <span class="c">6</span></button>
+            <button class="tab">前端资源 <span class="c">31</span></button>
+            <button class="tab">平台 API <span class="c">61</span></button>
+          </div>
+          <table>
+            <thead><tr><th>条目</th><th>位置</th><th>处置结论</th><th>依据 / 规则</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">get_version</td><td class="mono muted">src/commands.rs:14</td><td><span class="pill ok">直接可用</span></td><td class="muted">无平台依赖</td></tr>
+              <tr><td class="mono">pick_folder</td><td class="mono muted">src/commands.rs:112</td><td><span class="pill err">硬阻塞</span></td><td class="muted">rfd → 鸿蒙无原生对话框（R3-004）</td></tr>
+              <tr><td class="mono">open_in_explorer</td><td class="mono muted">src/commands.rs:204</td><td><span class="pill warn">需降级</span></td><td class="muted">explorer.exe → 应用内提示（R3-007）</td></tr>
+              <tr><td class="mono">on_config_changed</td><td class="mono muted">src/events.rs:33</td><td><span class="pill ok">直接可用</span></td><td class="muted">IPC 事件桥三平台闭环</td></tr>
+              <tr><td class="mono">plugin-clipboard-manager</td><td class="mono muted">Cargo.toml:41</td><td><span class="pill ok">直接可用</span></td><td class="muted">鸿蒙走 pasteboard NDK FFI</td></tr>
+              <tr><td class="mono">localStorage 直读</td><td class="mono muted">src/store/theme.ts:18</td><td><span class="pill info">自动改造</span></td><td class="muted">ArkWeb 下为 null → 透明桥（R5-001）</td></tr>
+              <tr><td class="mono">confirm / prompt ×5</td><td class="mono muted">src/ui/*.ts</td><td><span class="pill info">自动改造</span></td><td class="muted">ArkWeb 未接回调 → polyfill（R5-002）</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>阻塞项</h3><span class="right">按严重度排序 · 共 9 条</span></div>
+          <div class="blocker">
+            <span class="sev"></span>
+            <div class="b">
+              <div class="t">B-01 原生文件夹选择器（rfd）<span class="pill err">硬阻塞</span></div>
+              <div class="d"><span class="mono">src/commands.rs:112</span> · 影响 2 处调用 · 鸿蒙能力位 0（无原生对话框）</div>
+            </div>
+            <div class="aside"><span class="pill warn">需人工 5 min</span><button class="btn sm">看补丁</button></div>
+          </div>
+          <div class="blocker">
+            <span class="sev"></span>
+            <div class="b">
+              <div class="t">B-02 依赖 openssl 的 https 客户端<span class="pill err">硬阻塞</span></div>
+              <div class="d"><span class="mono">Cargo.toml:57</span> · reqwest 默认 features 在 OHOS 下无 stdx TLS</div>
+            </div>
+            <div class="aside"><span class="pill info">自动改造</span><button class="btn sm">应用</button></div>
+          </div>
+          <div class="blocker">
+            <span class="sev warn"></span>
+            <div class="b">
+              <div class="t">B-03 system 托盘图标<span class="pill warn">需降级</span></div>
+              <div class="d"><span class="mono">src-tauri/tauri.conf.json</span> · 鸿蒙能力位 0，降级为普通最小化</div>
+            </div>
+            <div class="aside"><span class="pill info">自动改造</span><button class="btn sm">应用</button></div>
+          </div>
+          <div class="blocker">
+            <span class="sev info"></span>
+            <div class="b">
+              <div class="t">B-04 前端 <span class="mono">&lt;input type="color"&gt;</span><span class="pill info">自动改造</span></div>
+              <div class="d">ArkWeb 不支持且会拖垮整块 dialog 绘制 → 必须 <span class="mono">remove()</span> 走应用内色板（R5-005）</div>
+            </div>
+            <div class="aside"><span class="pill info">自动改造</span><button class="btn sm">应用</button></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- ③ 依赖扫描 ---------- -->
+      <section class="screen on" data-screen="deps">
+        <div class="whead">
+          <div><h1>Cargo 依赖树 · OHOS 兼容性扫描</h1><p>逐 crate 判定，并给出替代方案。判定依据可点开看源码特征与已知 issue。</p></div>
+          <div class="acts"><button class="btn">重新扫描</button><button class="btn primary">应用全部建议（4）</button></div>
+        </div>
+
+        <div class="filter">
+          <div class="seg">
+            <button class="on">不兼容 4</button><button>需 patch 3</button><button>全量 87</button>
+          </div>
+          <div class="spacer" style="flex:1"></div>
+          <div class="tb-chip"><span class="dot ok"></span>可用 78</div>
+          <div class="tb-chip"><span class="dot warn"></span>需改造 5</div>
+          <div class="tb-chip"><span class="dot err"></span>不可用 4</div>
+        </div>
+
+        <div class="card">
+          <table>
+            <thead><tr><th style="width:26%">crate</th><th>版本</th><th>状态</th><th style="width:26%">原因 / 依据</th><th style="width:24%">替代 / 改造</th><th></th></tr></thead>
+            <tbody>
+              <tr>
+                <td class="mono"><b>tauri</b><div class="muted" style="font-size:11px">direct</div></td>
+                <td class="mono">2.11.5</td>
+                <td><span class="pill warn">需 patch</span></td>
+                <td class="muted">crates.io 版无 OHOS 后端</td>
+                <td class="muted mono" style="font-size:11.5px">→ feat/open-harmony @rev</td>
+                <td><button class="btn sm">看 diff</button></td>
+              </tr>
+              <tr>
+                <td class="mono"><b>wry</b><div class="muted" style="font-size:11px">transitive</div></td>
+                <td class="mono">0.56.0</td>
+                <td><span class="pill warn">需 patch</span></td>
+                <td class="muted">须与 fork 同源，且 <span class="mono">^</span> 会绕过 patch</td>
+                <td class="muted mono" style="font-size:11.5px">钉 =0.56.0</td>
+                <td><button class="btn sm">看 diff</button></td>
+              </tr>
+              <tr>
+                <td class="mono"><b>rfd</b></td>
+                <td class="mono">0.15.4</td>
+                <td><span class="pill err">不可用</span></td>
+                <td class="muted">依赖原生对话框（鸿蒙能力位 0）</td>
+                <td class="muted">移入 <span class="mono">cfg(not(ohos))</span> 段 + 应用内降级</td>
+                <td><button class="btn sm">看 diff</button></td>
+              </tr>
+              <tr>
+                <td class="mono"><b>reqwest</b></td>
+                <td class="mono">0.12</td>
+                <td><span class="pill err">不可用</span></td>
+                <td class="muted">默认 TLS 在 OHOS 运行时不可用（无 OpenSSL）</td>
+                <td class="muted mono" style="font-size:11.5px">rustls + webpki-roots</td>
+                <td><button class="btn sm">看 diff</button></td>
+              </tr>
+              <tr>
+                <td class="mono"><b>dirs</b></td>
+                <td class="mono">5.0</td>
+                <td><span class="pill err">不可用</span></td>
+                <td class="muted">OHOS 无 <span class="mono">HOME</span> → 返回 None（启动 panic 高发点）</td>
+                <td class="muted">沙箱 <span class="mono">/data/storage/el2/base/files</span> + cfg 分支</td>
+                <td><button class="btn sm">看 diff</button></td>
+              </tr>
+              <tr>
+                <td class="mono"><b>tauri-plugin-clipboard-manager</b></td>
+                <td class="mono">2.x</td>
+                <td><span class="pill ok">可用</span></td>
+                <td class="muted">鸿蒙走 pasteboard NDK FFI（真机验证）</td>
+                <td class="muted">—</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td class="mono"><b>tauri-plugin-notification</b></td>
+                <td class="mono">2.x</td>
+                <td><span class="pill err">不可用</span></td>
+                <td class="muted">鸿蒙能力位 0（未实机）</td>
+                <td class="muted">降级 + 可选开关</td>
+                <td><button class="btn sm">看 diff</button></td>
+              </tr>
+              <tr>
+                <td class="mono"><b>serde / tokio / thiserror …</b></td>
+                <td class="muted">74 个</td>
+                <td><span class="pill ok">可用</span></td>
+                <td class="muted">纯计算或 stdx 可替代</td>
+                <td class="muted">—</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">底部「应用全部建议」不会直接落盘：先进入 <b>④ 改造执行</b> 的动作清单，逐条带 diff 与验证探针，可全选批准。</div>
+      </section>
+
+      <!-- ---------- ④ 改造执行 ---------- -->
+      <section class="screen" data-screen="port">
+        <div class="whead">
+          <div><h1>改造执行</h1><p>规则优先、AI 兜底。每一步都有验证探针，人工介入逐次计数（验收线 ≤5 处）。</p></div>
+          <div class="acts"><button class="btn">暂停</button><button class="btn">回滚本次</button><button class="btn primary">继续执行</button></div>
+        </div>
+
+        <div class="grid4">
+          <div class="stat"><div class="k">自动完成</div><div class="v" style="color:var(--ok)">9</div></div>
+          <div class="stat"><div class="k">待你确认</div><div class="v" style="color:var(--warn)">2</div></div>
+          <div class="stat"><div class="k">人工介入</div><div class="v">3<small>/ 5</small></div></div>
+          <div class="stat"><div class="k">耗时</div><div class="v">6<small>分 12 秒</small></div></div>
+        </div>
+
+        <div class="grid2" style="margin-top:12px">
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3>步骤</h3><span class="right">可从任意步继续</span></div>
+            <div class="time">
+              <div class="tstep done"><div class="i">✓</div><div class="c"><div class="t">环境体检 <span class="pill ok">通过</span></div><div class="d">rustc / target / NDK / llvm-mingw / ohrs / hvigor 全部就绪</div></div></div>
+              <div class="tstep done"><div class="i">✓</div><div class="c"><div class="t">依赖切 fork + 钉版本 <span class="pill ok">R2-001</span></div><div class="d">tauri 2.11.5 / wry 0.56.0 · patch 生效已由 cargo metadata 验证</div></div></div>
+              <div class="tstep done"><div class="i">✓</div><div class="c"><div class="t">工具链与链接器 <span class="pill ok">R1-002 · R1-005</span></div><div class="d">rust-toolchain.toml + .cargo/config.toml + ohos-clang.cmd</div></div></div>
+              <div class="tstep done"><div class="i">✓</div><div class="c"><div class="t">平台路径与 cfg 分支 <span class="pill ok">R3-001</span></div><div class="d">app_data_dir → 沙箱路径；panic hook 落盘</div></div></div>
+              <div class="tstep run"><div class="i">4</div><div class="c"><div class="t">前端兼容层注入 <span class="pill info">进行中</span></div><div class="d">localStorage 透明桥 ✔ · confirm/prompt polyfill ✔ · color 降级 进行中</div></div></div>
+              <div class="tstep wait"><div class="i">5</div><div class="c"><div class="t">能力清单与配置 <span class="muted">等待</span></div><div class="d">capabilities/default.json · withGlobalTauri · assetProtocol</div></div></div>
+              <div class="tstep wait"><div class="i">6</div><div class="c"><div class="t">交叉编译 .so <span class="muted">等待</span></div></div></div>
+              <div class="tstep wait"><div class="i">7</div><div class="c"><div class="t">HAP 装配与签名 <span class="muted">等待</span></div></div></div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3>实时日志</h3><span class="right">全部 / 仅错误 / 仅 AI 动作</span></div>
+            <div class="log"><span class="ts">15:42:01</span> <span class="ok">[R1-002]</span> 生成 src-tauri/rust-toolchain.toml（gnullvm + aarch64-unknown-linux-ohos）
+<span class="ts">15:42:02</span> <span class="ok">[R2-001]</span> Cargo.toml：tauri/wry/tao/openharmony-ability → patch（rev 固定）
+<span class="ts">15:42:03</span> <span class="cmd">$ cargo metadata --format-version 1</span>
+<span class="ts">15:42:06</span> <span class="ok">[verify]</span> tauri.source = feat/open-harmony ✔
+<span class="ts">15:42:07</span> <span class="ok">[R3-001]</span> lib.rs：resolve_app_data_dir() 注入（cfg ohos → 沙箱）
+<span class="ts">15:42:09</span> <span class="ok">[R5-001]</span> index.html：localStorage 透明桥 polyfill 注入
+<span class="ts">15:42:11</span> <span class="ok">[R5-002]</span> ui/*.ts：confirm/prompt → promiseDialog（5 处）
+<span class="ts">15:42:14</span> <span class="ag">[agent]</span> 检测到 3 处 &lt;input type=color&gt;，正在应用 R5-005…
+<span class="ts">15:42:16</span> <span class="warn">[warn]</span> components/ColorPicker.vue：隐藏仍参与合成层 → 改为 remove()
+<span class="ts">15:42:18</span> <span class="cmd">$ cargo check --target aarch64-unknown-linux-ohos</span>
+<span class="ts">15:42:24</span> <span class="ok">[verify]</span> 0 error / 2 warning（warnings 已归类入库）
+<span class="ts">15:42:25</span> <span class="warn">[HITL]</span> 第 3 处人工决策：rfd 是否改走原生文件选择器桥？ → 已弹出审批卡</div>
+            <div class="legend"><span><i class="dot ok"></i>规则 / 验证通过</span><span><i class="dot warn"></i>需人决策</span><span><i class="dot info"></i>AI 动作</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- ⑤ 构建打包 ---------- -->
+      <section class="screen" data-screen="build">
+        <div class="whead">
+          <div><h1>构建打包</h1><p>交叉编译 → 前端一致性校验 → HAP 装配 → 签名 → 安装。失败阶段可直接把证据交给 Agent 诊断。</p></div>
+          <div class="acts"><button class="btn">查看产物目录</button><button class="btn primary">重新构建</button></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>流水线</h3><span class="right">本次耗时 4 分 17 秒</span></div>
+          <div class="stages">
+            <div class="stage ok"><div class="k"><i class="dot ok"></i>交叉编译</div><div class="v">3m12s</div><div class="muted" style="font-size:11px">aarch64 · release</div></div>
+            <div class="stage ok"><div class="k"><i class="dot ok"></i>前端指纹</div><div class="v">匹配 ✔</div><div class="muted" style="font-size:11px">AssetKey ui-9f3a.js</div></div>
+            <div class="stage ok"><div class="k"><i class="dot ok"></i>HAP 装配</div><div class="v">1m05s</div><div class="muted" style="font-size:11px">hvigorw assembleHap</div></div>
+            <div class="stage run"><div class="k"><i class="dot info"></i>签名</div><div class="v">debug</div><div class="muted" style="font-size:11px">上架前需切 release</div></div>
+            <div class="stage"><div class="k"><i class="dot"></i>安装</div><div class="v">—</div><div class="muted" style="font-size:11px">等待</div></div>
+          </div>
+        </div>
+
+        <div class="grid3">
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3>产物 · .so</h3></div>
+            <div class="mono" style="font-size:12px;line-height:2">
+              libccswitch_lib.so<br>
+              <span class="muted">4.71 MB</span><br>
+              <span class="muted">AssetKey：</span><span style="color:var(--ok)">ui-9f3a.js ✔</span>
+            </div>
+            <div class="note" style="margin-top:10px">.so 内嵌前端指纹与 dist 一致 —— 这条校验防止"改了前端但真机还是旧界面"。</div>
+          </div>
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3>产物 · HAP</h3></div>
+            <div class="mono" style="font-size:12px;line-height:2">
+              entry-default-signed.hap<br>
+              <span class="muted">12.4 MB · v3.4.1(30401)</span><br>
+              <span class="muted">无死资源 rawfile ✔</span>
+            </div>
+            <div class="note" style="margin-top:10px">HAP 内若残留 rawfile 说明链路走错：tauri 运行时只读 .so 内嵌资源。</div>
+          </div>
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3>真机</h3></div>
+            <div class="mono" style="font-size:12px;line-height:2">
+              2in1 · HarmonyOS 5.0.0(12)<br>
+              <span class="muted">hdc 已连接 · API 12</span><br>
+              <span style="color:var(--warn)">签名 debug（device-id 白名单）</span>
+            </div>
+            <div class="note" style="margin-top:10px">上架切回 release profile；工具会在导出报告时强提醒。</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>构建输出</h3><span class="right">结构化诊断已归一化为错误指纹</span></div>
+          <div class="log"><span class="ts">15:49:30</span> <span class="cmd">$ cargo build --release --target aarch64-unknown-linux-ohos --message-format=json</span>
+<span class="ts">15:52:42</span> <span class="ok">Finished `release` profile [optimized]</span> target(s) in 3m 12s
+<span class="ts">15:52:42</span> <span class="ok">[artifact]</span> target/aarch64-unknown-linux-ohos/release/libccswitch_lib.so  4,938,240 bytes
+<span class="ts">15:52:44</span> <span class="ok">[verify]</span> grep AssetKey → ui-9f3a.js ✔（与 dist/ 一致）
+<span class="ts">15:53:49</span> <span class="cmd">$ hvigorw assembleHap --mode module -p product=default</span>
+<span class="ts">15:54:49</span> <span class="ok">BUILD SUCCESSFUL</span> · outputs/default/entry-default-signed.hap  13,002,342 bytes
+<span class="ts">15:54:51</span> <span class="ok">[verify]</span> zipfile: 无 rawfile ✔ · versionName=3.4.1 ✔ · signingConfig=default(debug)</div>
+        </div>
+      </section>
+
+      <!-- ---------- ⑥ 真机验证 ---------- -->
+      <section class="screen" data-screen="verify">
+        <div class="whead">
+          <div><h1>真机验证</h1><p>功能清单由画像自动生成；每一项都要有证据（截图 / hilog / 探针），没有证据不算通过。</p></div>
+          <div class="acts"><button class="btn">重装并复跑</button><button class="btn primary">采集全部证据</button></div>
+        </div>
+
+        <div class="grid4">
+          <div class="stat"><div class="k">核心功能可用率</div><div class="v" style="color:var(--ok)">87<small>%</small></div></div>
+          <div class="stat"><div class="k">通过</div><div class="v">13<small>/ 15</small></div></div>
+          <div class="stat"><div class="k">平台限制</div><div class="v" style="color:var(--warn)">2</div></div>
+          <div class="stat"><div class="k">panic / 红条</div><div class="v" style="color:var(--ok)">0</div></div>
+        </div>
+
+        <div class="grid2" style="margin-top:12px">
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3>功能清单</h3><span class="right">验收标准 ③：≥80%</span></div>
+            <div class="evi"><span class="chk on">✓</span><span class="t">应用启动无 panic，主界面渲染</span><span class="chips"><span class="pill ok">截图</span><span class="pill ok">hilog</span></span></div>
+            <div class="evi"><span class="chk on">✓</span><span class="t">配置列表加载 / 搜索 / 排序</span><span class="chips"><span class="pill ok">截图</span></span></div>
+            <div class="evi"><span class="chk on">✓</span><span class="t">新增配置 → 重启后仍在（存储持久化）</span><span class="chips"><span class="pill ok">探针</span><span class="pill ok">日志</span></span></div>
+            <div class="evi"><span class="chk on">✓</span><span class="t">切换主题色即时生效并持久</span><span class="chips"><span class="pill ok">截图</span></span></div>
+            <div class="evi"><span class="chk on">✓</span><span class="t">删除/重命名确认对话框</span><span class="chips"><span class="pill ok">截图</span></span></div>
+            <div class="evi"><span class="chk on">✓</span><span class="t">导入配置文件（文件选择降级路径）</span><span class="chips"><span class="pill ok">截图</span></span></div>
+            <div class="evi"><span class="chk na">–</span><span class="t">托盘图标（鸿蒙能力位 0）<span class="pill warn">平台限制</span></span><span class="chips"><span class="pill">已登记</span></span></div>
+            <div class="evi"><span class="chk na">–</span><span class="t">通知权限（能力位 0）<span class="pill warn">平台限制</span></span><span class="chips"><span class="pill">已登记</span></span></div>
+            <div class="evi"><span class="chk on">✓</span><span class="t">窗口缩放 / 多窗口打开详情</span><span class="chips"><span class="pill ok">截图</span></span></div>
+            <div class="evi"><span class="chk on">✓</span><span class="t">键鼠：hover / 右键菜单 / 快捷键</span><span class="chips"><span class="pill ok">截图</span></span></div>
+          </div>
+
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3>证据</h3><span class="right">保存在 .lingqu/evidence/</span></div>
+            <div class="grid3" style="gap:9px">
+              <div class="thumb">真机截图<br>主界面</div>
+              <div class="thumb">真机截图<br>对话框</div>
+              <div class="thumb">真机截图<br>深色模式</div>
+            </div>
+            <div class="log" style="margin-top:11px;max-height:180px"><span class="ts">15:58:02</span> <span class="cmd">$ hdc shell hilog -x | grep -E "ccswitch|panic"</span>
+<span class="ts">15:58:03</span> I CcSwitch: app_data_dir = /data/storage/el2/base/files
+<span class="ts">15:58:03</span> I CcSwitch: db opened, 42 rows
+<span class="ts">15:58:04</span> <span class="ok">I [WEB] console: app boot ok（无 TypeError）</span>
+<span class="ts">15:58:05</span> I AceWebView: load tauri://localhost/reload
+<span class="ts">15:58:06</span> <span class="ok">[probe]</span> 无 panic.log · 无红色诊断条 ✔</div>
+            <div class="legend"><span><i class="dot ok"></i>有证据才算通过</span><span><i class="dot warn"></i>平台限制要显式登记进报告</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- ⑦ 迁移报告 ---------- -->
+      <section class="screen" data-screen="report">
+        <div class="whead">
+          <div><h1>迁移报告</h1><p>结构化、可导出、带证据索引。三段式：做了什么 / 没做什么 / 需要你做什么。</p></div>
+          <div class="acts"><button class="btn">导出 Markdown</button><button class="btn">导出 JSON</button><button class="btn primary">导出 HTML 报告</button></div>
+        </div>
+
+        <div class="grid4">
+          <div class="stat"><div class="k">应用</div><div class="v" style="font-size:15px">cc-switch 3.4.1</div></div>
+          <div class="stat"><div class="k">总耗时</div><div class="v">38<small>分钟</small></div></div>
+          <div class="stat"><div class="k">人工介入</div><div class="v" style="color:var(--warn)">3<small>处</small></div></div>
+          <div class="stat"><div class="k">核心功能可用率</div><div class="v" style="color:var(--ok)">87<small>%</small></div></div>
+        </div>
+
+        <div class="grid3" style="margin-top:12px">
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3 style="color:var(--ok)">做了什么</h3></div>
+            <div style="font-size:12.5px;line-height:1.9">
+              · 依赖切 OHOS fork 并钉 4 个精确版本<br>
+              · 注入 localStorage 透明桥 / confirm·prompt polyfill / color 降级<br>
+              · 平台路径与 cfg 分支 3 处；panic hook 落盘<br>
+              · 生成 DevEco 壳 + 交叉编译 .so + HAP 装配 + 部署<br>
+              · 采集 13 条真机证据
+            </div>
+          </div>
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3 style="color:var(--warn)">没做什么（已知限制）</h3></div>
+            <div style="font-size:12.5px;line-height:1.9">
+              · 托盘图标 / 系统通知：鸿蒙能力位 0，降级为普通最小化与页内提示<br>
+              · <span class="mono">Blob</span> 下载：ArkWeb 下载桥未接线，导出按钮暂走 Rust 落盘<br>
+              · 原生文件夹选择器：改为应用内目录树
+            </div>
+          </div>
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3 style="color:var(--acc)">需要你做什么</h3></div>
+            <div style="font-size:12.5px;line-height:1.9">
+              · 签名切回 release profile（当前 debug）<br>
+              · <span class="mono">compatibleSdkVersion</span> 确认 ≤ 上架目标 API<br>
+              · 隐私政策公网 URL 填入华为开发者平台<br>
+              · 图标替换为正式 1024×1024 RGBA<br>
+              · 上架自查 5 项（见清单）
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>风险分级</h3><span class="right">总体：中等</span></div>
+          <table>
+            <thead><tr><th>项</th><th>级别</th><th>影响面</th><th>处置</th></tr></thead>
+            <tbody>
+              <tr><td>reqwest TLS 走 rustls 替代</td><td><span class="pill warn">中</span></td><td>所有 https 请求</td><td class="muted">已改造并在真机验证通过</td></tr>
+              <tr><td>托盘能力降级</td><td><span class="pill warn">中</span></td><td>常驻交互</td><td class="muted">已在报告登记为平台限制</td></tr>
+              <tr><td>ArkWeb 版本差异（type=color 合成层）</td><td><span class="pill info">低</span></td><td>取色 UI</td><td class="muted">已 remove() 元素并改应用内色板</td></tr>
+              <tr><td>上游 fork rev 漂移</td><td><span class="pill info">低</span></td><td>构建可复现性</td><td class="muted">rev 已固定并写入 report</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">断点续迁：<span class="kbd">lingqu resume cc-switch</span> —— 任务状态机与 Agent 会话 id 都在 <span class="mono">.lingqu/tasks.json</span> 里，换机器也能接上。</div>
+      </section>
+
+    </main>
+
+    <!-- ==================== 右栏：Agent Dock ==================== -->
+    <aside class="dock">
+      <div class="dock-h">
+        <span class="dot ok"></span>
+        <span class="t">迁移助手 · cjh</span>
+        <span class="m">sess_7f3c · deepseek</span>
+      </div>
+
+      <div class="chat">
+        <div class="msg">
+          <div class="av ai">AI</div>
+          <div class="b">
+            <div class="who">cjh<span class="muted">· 15:41</span></div>
+            <div class="bubble">画像跑完了：<b>128 项全有结论（覆盖率 100%）</b>，4 个硬阻塞。最麻烦的是 <span class="mono">rfd</span> 的文件夹选择器——鸿蒙没有原生对话框。要我现在就把降级补丁打上吗？</div>
+          </div>
+        </div>
+
+        <div class="msg me">
+          <div class="av">你</div>
+          <div class="b">
+            <div class="who">我<span class="muted">· 15:41</span></div>
+            <div class="bubble">先跑依赖改造，rfd 那处留着我看 diff。</div>
+          </div>
+        </div>
+
+        <div class="msg">
+          <div class="av ai">AI</div>
+          <div class="b">
+            <div class="who">cjh<span class="muted">· 15:42</span></div>
+            <div class="tool">
+              <div class="th"><span class="dot ok"></span><span class="nm">t2h.deps</span><span class="st" style="color:var(--ok)">完成 · 1.8s</span></div>
+              <div class="tb">扫描 87 个 crate
+  → 可用 <b>78</b> · 需 patch <b>3</b> · 不可用 <b>6</b>
+  rfd 0.15.4     → 原生对话框（能力位 0）
+  reqwest 0.12   → TLS 不可用 → rustls+webpki
+  dirs 5.0       → 无 HOME，返回 None</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg">
+          <div class="av ai">AI</div>
+          <div class="b">
+            <div class="who">cjh<span class="muted">· 15:42</span></div>
+            <div class="tool">
+              <div class="th"><span class="dot ok"></span><span class="nm">t2h.port</span><span class="st" style="color:var(--ok)">完成 · 11.4s</span></div>
+              <div class="tb">已应用 9 条自动规则
+  <b>R2-001</b> fork + 钉版本 ✔ (cargo metadata 验证)
+  <b>R3-001</b> 沙箱路径 + panic hook ✔
+  <b>R5-001</b> localStorage 透明桥 ✔
+  <b>R5-002</b> confirm/prompt ×5 ✔
+  <b>R5-005</b> color → remove() ✔
+  diff: 12 文件 / +214 −38</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg">
+          <div class="av ai">AI</div>
+          <div class="b">
+            <div class="who">cjh<span class="muted">· 15:42 · 等待你确认</span></div>
+            <div class="approve">
+              <div class="h"><span class="dot warn"></span>需要你批准 · 第 3 处人工介入</div>
+              <div class="q"><span class="mono">rfd::FileDialog::pick_folder</span> 在鸿蒙不可用。我准备改成：<b>调起应用内目录树</b>，并把返回值语义保持不变（取消 → None）。影响 2 处调用。</div>
+              <div class="diff"><span class="d">- let dir = rfd::FileDialog::new().pick_folder();</span>
+<span class="a">+ #[cfg(not(target_env = "ohos"))]</span>
+<span class="a">+ let dir = rfd::FileDialog::new().pick_folder();</span>
+<span class="a">+ #[cfg(target_env = "ohos")]</span>
+<span class="a">+ let dir = pick_folder_inapp(&app).await?;   // 应用内目录树</span></div>
+              <div class="btns"><button class="btn sm primary">允许并继续</button><button class="btn sm">只应用这一处</button><button class="btn sm ghost">拒绝</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="inp">告诉我下一步做什么，或直接说「跑构建」…<span class="spacer" style="flex:1"></span><span class="kbd">Enter</span></div>
+        <div class="foot"><span class="dot ok"></span><span>工具：scan / deps / port / build / deploy / verify</span><span class="spacer"></span><span>上下文 42%</span></div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+  // 屏幕切换
+  const screens = document.querySelectorAll('.screen');
+  const steps = document.querySelectorAll('.step');
+  function go(name){
+    screens.forEach(s => s.classList.toggle('on', s.dataset.screen === name));
+    steps.forEach(b => b.classList.toggle('active', b.dataset.s === name));
+    document.querySelector('.work').scrollTop = 0;
+  }
+  steps.forEach(b => b.addEventListener('click', () => go(b.dataset.s)));
+
+  // 深浅色
+  const root = document.documentElement;
+  document.getElementById('themeBtn').addEventListener('click', () => {
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  });
+
+  // 页面内 tab 演示（画像页清单页签）
+  document.querySelectorAll('.tabs').forEach(tabs => {
+    tabs.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+      tabs.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+      t.classList.add('on');
+    }));
+  });
+  // 分段筛选演示
+  document.querySelectorAll('.seg').forEach(seg => {
+    seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+    }));
+  });
+</script>
+</body>
+</html>

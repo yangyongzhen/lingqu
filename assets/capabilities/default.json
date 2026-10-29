@@ -1,0 +1,14 @@
+{
+  "identifier": "default",
+  "windows": ["main"],
+  "commands": [
+    "t2h:env",
+    "t2h:cjh_probe",
+    "t2h:cjh_start",
+    "system:version",
+    "system:ping",
+    "system:echo",
+    "system:devtools"
+  ],
+  "events": []
+}
