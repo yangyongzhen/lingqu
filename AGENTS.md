@@ -137,10 +137,10 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 21 | `HashMap.put(...)` 不存在 | 仓颉 HashMap 写入是 **`add(k, v)`**（`JsonObject` 才是 `put`）。同理 `contains(k)` / `get(k)` 返回 `Option` |
 | 22 | `String.trimLeftAscii(Byte)` 不存在 | 只有零参 `trimAscii()`；要按引号切片就自己记 `start` 下标再 `s[start..i]` |
 | 23 | 测试函数报 "not top level" 或不被收集 | 仓颉测试必须 **顶层 `public func`** + `@Test`，写进类里不认 |
-| 24 | 不确定某个标准库 API 怎么写 | 查官方 skill 仓（已克隆到 `E:\test\harmonyos\test\CangjieSkills`）：
+| 24 | 不确定某个标准库 API 怎么写 | 查官方 skill 仓 **CangjieSkills**（地址与查法见 §8）：
 `python scripts/search_docs.py --query "HashMap add" --domain std --max-results 1`。**别按别的语言猜** |
 | 25 | 从网页/赛事资料粘进仓的中文文档读不出来（工具报 `invalid UTF-8 text`），末尾还带一堆制表符 | 那是 **GBK/GB2312 粘贴稿**（`docs/仓颉资源地址.md` 就是）。显式按 936 解码再写回 UTF-8：`[Text.Encoding]::GetEncoding(936).GetString($bytes)` → `WriteAllText(..., UTF8Encoding($false))`，**不要**用 `Get-Content/Set-Content`（PS 5.1 会二次误解码） |
-| 26 | 落档路径非法导致**静默丢证据**：`.lingqu/scan/E:\test\rust\habit-tree.json` → `FSException: The input path 'parent' … does not exist` | 从路径取末段必须**两种分隔符都认**（`/` 与 `\` 取最后出现的那个），再净化非法字符。而且**写盘失败的原因要进返回值**（`outError`）给界面显示——只有 `eprintln` 等于没有（见第 14 条），0.6.0 因此丢了整轮扫描证据 |
+| 26 | 落档路径非法导致**静默丢证据**：`.lingqu/scan/E:\work\habit-tree.json` → `FSException: The input path 'parent' … does not exist` | 从路径取末段必须**两种分隔符都认**（`/` 与 `\` 取最后出现的那个），再净化非法字符。而且**写盘失败的原因要进返回值**（`outError`）给界面显示——只有 `eprintln` 等于没有（见第 14 条），0.6.0 因此丢了整轮扫描证据 |
 | 27 | 直接在 PowerShell 里跑 cj-tauri CLI / main.exe 报 `-1073741515`（缺 DLL） | `run-dev.sh`·`test.sh` 会配一整套 PATH，手跑要自己补齐：`$CANGJIE_HOME\runtime\lib\windows_x86_64_cjnative`、`$CANGJIE_HOME\bin`、`tools\bin`、`tools\lib`、`$CANGJIE_STDX`、`<cj-tauri>\native`、`<cj-tauri>\native\webview2`。少任何一段都退 0xC0000135 |
 
 ---
@@ -187,26 +187,36 @@ type 用 `feat` / `fix` / `docs` / `refactor` / `test` / `chore`。
 
 | 资源 | 地址 / 位置 | 什么时候用 |
 |---|---|---|
-| **CangjieSkills**（仓颉官方知识库） | **https://atomgit.com/Cangjie-SIG/CangjieSkills**<br>本地克隆：`E:\test\harmonyos\test\CangjieSkills` | **写仓颉卡在标准库 API 写法时，第一动作就是查它** |
+| **CangjieSkills**（仓颉官方知识库） | **https://atomgit.com/Cangjie-SIG/CangjieSkills** | **写仓颉卡在标准库 API 写法时，第一动作就是查它** |
 | 仓颉官网 / API 文档 | https://cangjie-lang.cn/ · https://cangjie-lang.cn/api.html | 语法与标准库权威定义 |
 | 仓颉中心仓（三方库） | https://pkg.cangjie-lang.cn/index | 找 `stdx` 能力或第三方依赖 |
 
 CangjieSkills 查法（`--domain` 取 `language` / `std` / `stdx` / `tools` / `examples`）：
 
 ```bash
-cd /e/test/harmonyos/test/CangjieSkills
+# 只写地址、不写本机路径——换机器/换环境时 clone 到哪都行
+git clone https://atomgit.com/Cangjie-SIG/CangjieSkills.git
+cd CangjieSkills
 python scripts/search_docs.py --query "HashMap add" --domain std --max-results 1
 python scripts/search_docs.py --query "string 切片" --domain language --view leaves
-# 本机没克隆就先克隆：git clone https://atomgit.com/Cangjie-SIG/CangjieSkills.git
 ```
 
 > 本项目已靠它避开三个坑：`quote` 是关键字、`HashMap` 用 `add` 不是 `put`、只有零参 `trimAscii()`
 > （§4 第 20–22 条）。**这三条都是「按别的语言的习惯写」写出来的错，查一下就不会犯。**
 
-上游框架仓（本地克隆，改这些仓之前先看它们的 AGENTS.md）：
+上游框架仓（**只记远程地址，不记本机路径**——换环境时 clone 到任意目录，再由 `./scripts/setup.sh` 把
+`cjpm.toml` 里的 path 依赖与 `-L<native>` 对齐；改这些仓之前先看它们自己的 AGENTS.md）：
 
-| 仓 | 本地路径 | 说明 |
+| 仓 | 远程地址 | 说明 |
 |---|---|---|
-| cj-tauri | `E:\test\harmonyos\test\cj-tauri` | 外壳/UI 框架；`examples/ai-chat` 是 cjh 托管的参照实现 |
-| cjh | `E:\test\harmonyos\test\cjh` | 内嵌 AI 引擎；WS 协议见 `src/web/protocol.cj` |
+| cj-tauri | **https://atomgit.com/qq8864/cj-tauri** | 外壳/UI 框架；`examples/ai-chat` 是 cjh 托管的参照实现 |
+| cjh | **https://atomgit.com/qq8864/cjh** | 内嵌 AI 引擎；WS 协议见 `src/web/protocol.cj` |
+
+拿到新环境后的一次性动作（路径不需要记，`setup.sh` 会问/给默认值）：
+
+```bash
+git clone https://atomgit.com/qq8864/cj-tauri.git
+git clone https://atomgit.com/qq8864/cjh.git
+CJ_TAURI_ROOT=<你 clone 的 cj-tauri 目录> ./scripts/setup.sh   # 对齐 cjpm.toml 的本机绝对路径
+```
 
