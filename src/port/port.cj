@@ -31,6 +31,10 @@ public let OHOS_TAO_URL = "https://github.com/tauri-apps/tao"
 public let OHOS_ABILITY_URL = "https://github.com/yangyongzhen/openharmony-ability"
 public let OHOS_ABILITY_UPSTREAM = "https://github.com/harmony-contrib/openharmony-ability.git"
 
+/** 动作三档（T4-8）：auto=规则机械完成；guide=给方案留人工（计数进 A3 口径） */
+public let T_AUTO = "auto"
+public let T_GUIDE = "guide"
+
 /** 规则执行结果（evidence 载体：before/after 给 UI 与报告直接展示） */
 public class RuleOutcome {
     public var id: String
@@ -38,6 +42,7 @@ public class RuleOutcome {
     public var note: String
     public var before: String
     public var after: String
+    public var tier: String
 
     public init(id: String, applied: Bool, note: String, before: String, after: String) {
         this.id = id
@@ -45,6 +50,7 @@ public class RuleOutcome {
         this.note = note
         this.before = before
         this.after = after
+        this.tier = T_AUTO
     }
 
     public func toJson(): JsonObject {
@@ -54,6 +60,7 @@ public class RuleOutcome {
         o.put("note", JsonString(this.note))
         o.put("before", JsonString(this.before))
         o.put("after", JsonString(this.after))
+        o.put("tier", JsonString(this.tier))
         return o
     }
 }
@@ -73,6 +80,28 @@ public class PortResult {
         return n
     }
 
+    /** T4-8 人工介入口径：本轮回合里 guide 档（留人工决策）的条数 */
+    public func humanCount(): Int64 {
+        var n: Int64 = 0
+        for (o in this.outcomes) {
+            if (o.tier == T_GUIDE && o.applied) {
+                n += 1
+            }
+        }
+        return n
+    }
+
+    /** auto 档：规则机械完成的条数 */
+    public func autoCount(): Int64 {
+        var n: Int64 = 0
+        for (o in this.outcomes) {
+            if (o.tier != T_GUIDE && o.applied) {
+                n += 1
+            }
+        }
+        return n
+    }
+
     public func outcomesJson(): JsonArray {
         var arr = JsonArray()
         for (o in this.outcomes) {
@@ -80,11 +109,18 @@ public class PortResult {
         }
         return arr
     }
+
+    public func countersJson(): JsonObject {
+        var o = JsonObject()
+        o.put("auto", JsonInt(this.autoCount()))
+        o.put("guide", JsonInt(this.humanCount()))
+        return o
+    }
 }
 
 // ===== 行级工具（不引 regex 的字面量操作）=====
 
-func indexOfOr(text: String, ch: String): Int64 {
+public func indexOfOr(text: String, ch: String): Int64 {
     match (text.indexOf(ch)) {
         case Some(i) => return i
         case None => return -1

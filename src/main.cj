@@ -353,11 +353,23 @@ func cargoTomlPathOf(projectDir: String): String {
     return ""
 }
 
+/** 宿主平台判定（工具链 channel 二选一用；@When 编译期门禁，镜像 cj-tauri host 层写法） */
+@When[os == "Windows"]
+func hostIsWindows(): Bool {
+    return true
+}
+@When[os != "Windows"]
+func hostIsWindows(): Bool {
+    return false
+}
+
 /**
- * t2h:port —— 规则改造（P4 第一刀：只改 Cargo.toml，六条规则）。
- *   dryRun=true（默认）：只算不动文件，返回逐条 outcome + afterText 摘要
- *   apply=true：先备份原文件到 .lingqu/port/<工程>-Cargo.toml.bak 再落盘
- * 幂等：已迁移的工程再跑，六条规则全部 applied=false。
+ * t2h:port —— 规则改造（P4：Cargo.toml 六条 + 工具链两条 + lib.rs 注入 + 前端兼容层）。
+ *   dryRun=true（默认）：只算不动文件，返回逐条 outcome；Cargo.toml 预览落 preview 文件
+ *   apply=true：每个被改文件先备份到 .lingqu/port/<工程>/<文件名>.bak 再落盘
+ * 幂等：已迁移的工程再跑，全部 applied=false。
+ * 分档（T4-8）：auto=规则机械完成；guide=给方案留人工（confirm/prompt、type=color），
+ * guide 计数进人工介入（验收 A3 ≤5 口径）。
  */
 public class PortCommand <: CommandHandler {
     public init() {}
@@ -384,6 +396,11 @@ public class PortCommand <: CommandHandler {
             res.put("error", JsonString("未找到 Cargo.toml（找过 ${path}/src-tauri/Cargo.toml 与 ${path}/Cargo.toml）"))
             return res
         }
+        let srcTauriDir = if (tomlPath.endsWith("/Cargo.toml")) {
+            tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+        } else {
+            path
+        }
 
         var before = ""
         try {
@@ -394,44 +411,110 @@ public class PortCommand <: CommandHandler {
             return res
         }
 
-        let result = applyCargoTomlRules(before)
         let apply = argBool(args, "apply", false)
+        let result = applyCargoTomlRules(before)
+
+        // ---- P4 第二刀：工具链（T4-3）+ lib.rs 注入（T4-4）+ 前端兼容层（T4-5）----
+        var sdkNative = envOr("NATIVE_OHOS_SDK", "")
+        let toolchain = toolchainOutcomes(srcTauriDir, sdkNative, hostIsWindows())
+        let libRs = "${srcTauriDir}/src/lib.rs"
+        var libOutcome = libRsOutcome(libRs)
+        if (!exists(Path(libRs))) {
+            // 单 bin 工程：退回 main.rs
+            libOutcome = libRsOutcome("${srcTauriDir}/src/main.rs")
+        }
+        for (o in toolchain) {
+            result.outcomes.add(o)
+        }
+        result.outcomes.add(libOutcome)
+        let frontend = "${srcTauriDir}/.."
+        result.outcomes.add(localStorageOutcome("${frontend}/index.html"))
+        let guides = frontendGuideOutcomes(frontend)
+        for (g in guides) {
+            result.outcomes.add(g)
+        }
+        // 未设 SDK 路径时 008 没法生成可用链接器配置——降级为提示（不写坏文件）
+        if (sdkNative.size == 0) {
+            for (o in result.outcomes) {
+                if (o.id == "R2-PORT-008") {
+                    o.applied = false
+                    o.tier = T_GUIDE
+                    o.note = "未设 NATIVE_OHOS_SDK 环境变量——链接器路径留人工填写（模板见 after）"
+                }
+            }
+        }
+        var name = projectNameOf(path)
+        if (name.size == 0) {
+            name = "project"
+        }
+        let safeName = sanitizeFileName(name)
 
         var backupPath = ""
         var outErr = ""
-        if (apply && result.appliedCount() > 0) {
-            var name = projectNameOf(path)
-            if (name.size == 0) {
-                name = "project"
-            }
-            backupPath = ".lingqu/port/${sanitizeFileName(name)}-Cargo.toml.bak"
+        if (apply) {
+            // 逐文件备份 + 落盘：Cargo.toml / rust-toolchain.toml / .cargo/config.toml / lib.rs / index.html
             try {
-                if (!exists(Path(".lingqu"))) {
-                    Directory.create(Path(".lingqu"))
+                ensurePortDirs()
+                backupPath = ".lingqu/port/${safeName}"
+                var wroteAny = false
+                if (result.appliedCount() > 0) {
+                    File.writeTo("${backupPath}/Cargo.toml.bak", before.toArray())
+                    File.writeTo(tomlPath, result.afterText.toArray())
+                    wroteAny = true
                 }
-                if (!exists(Path(".lingqu/port"))) {
-                    Directory.create(Path(".lingqu/port"))
+                for (o in result.outcomes) {
+                    if (o.id == "R2-PORT-007" && o.applied) {
+                        let p = "${srcTauriDir}/rust-toolchain.toml"
+                        backupFile(p, "${backupPath}/rust-toolchain.toml.bak")
+                        File.writeTo(p, o.after.toArray())
+                        wroteAny = true
+                    }
+                    if (o.id == "R2-PORT-008" && o.applied) {
+                        let dir = "${srcTauriDir}/.cargo"
+                        if (!exists(Path(dir))) {
+                            Directory.create(Path(dir))
+                        }
+                        let p = "${dir}/config.toml"
+                        backupFile(p, "${backupPath}/cargo-config.toml.bak")
+                        File.writeTo(p, o.after.toArray())
+                        wroteAny = true
+                    }
+                    if (o.id == "R2-PORT-009" && o.applied) {
+                        let p = if (exists(Path("${srcTauriDir}/src/lib.rs"))) { "${srcTauriDir}/src/lib.rs" } else { "${srcTauriDir}/src/main.rs" }
+                        backupFile(p, "${backupPath}/lib.rs.bak")
+                        let old = String.fromUtf8(File.readFrom(p))
+                        File.writeTo(p, (old + o.after).toArray())
+                        wroteAny = true
+                    }
+                    if (o.id == "R2-PORT-011" && o.applied) {
+                        let p = "${frontend}/index.html"
+                        backupFile(p, "${backupPath}/index.html.bak")
+                        let old = String.fromUtf8(File.readFrom(p))
+                        // 注到 <head> 之后（业务 script 之前）——habit-tree 同位置
+                        let headEnd = indexOfOr(old, "</head>")
+                        var newText = old
+                        if (headEnd >= 0) {
+                            let at = headEnd + "</head>".size
+                            newText = old[0..at] + "\n" + o.after + old[at..]
+                        } else {
+                            newText = o.after + old
+                        }
+                        File.writeTo(p, newText.toArray())
+                        wroteAny = true
+                    }
                 }
-                File.writeTo(backupPath, before.toArray())
-                File.writeTo(tomlPath, result.afterText.toArray())
+                if (!wroteAny) {
+                    eprintln("[lingqu][port] apply 但无可写改动（工程可能已迁移）")
+                }
             } catch (e: Exception) {
                 outErr = "${e}"
-                eprintln("[lingqu][port] 落盘失败（原文件未动）：${e}")
+                eprintln("[lingqu][port] 落盘失败（已备份的原文件未动）：${e}")
             }
-        } else if (!apply && result.appliedCount() > 0) {
+        } else if (result.appliedCount() > 0) {
             // dry-run 也落一份预览：UI 的 diff 预览与实测对照都要用（可断言、可复核）
-            var name = projectNameOf(path)
-            if (name.size == 0) {
-                name = "project"
-            }
             try {
-                if (!exists(Path(".lingqu"))) {
-                    Directory.create(Path(".lingqu"))
-                }
-                if (!exists(Path(".lingqu/port"))) {
-                    Directory.create(Path(".lingqu/port"))
-                }
-                File.writeTo(".lingqu/port/${sanitizeFileName(name)}-Cargo.toml.preview", result.afterText.toArray())
+                ensurePortDirs()
+                File.writeTo(".lingqu/port/${safeName}-Cargo.toml.preview", result.afterText.toArray())
             } catch (e: Exception) {
                 eprintln("[lingqu][port] 预览落档失败：${e}")
             }
@@ -441,13 +524,30 @@ public class PortCommand <: CommandHandler {
         res.put("toml", JsonString(tomlPath))
         res.put("apply", JsonBool(apply))
         res.put("applied", JsonInt(result.appliedCount()))
+        res.put("counters", result.countersJson())
         res.put("idempotent", JsonBool(isIdempotent(result)))
         res.put("rules", result.outcomesJson())
         res.put("afterPreview", JsonString(result.afterText))
         res.put("backup", JsonString(backupPath))
         res.put("outError", JsonString(outErr))
-        eprintln("[lingqu][port] ${tomlPath}: applied=${result.appliedCount()} apply=${apply}")
+        eprintln("[lingqu][port] ${tomlPath}: applied=${result.appliedCount()} apply=${apply} counters=${result.countersJson().toJsonString()}")
         return res
+    }
+}
+
+func ensurePortDirs(): Unit {
+    if (!exists(Path(".lingqu"))) {
+        Directory.create(Path(".lingqu"))
+    }
+    if (!exists(Path(".lingqu/port"))) {
+        Directory.create(Path(".lingqu/port"))
+    }
+}
+
+/** 备份单文件（目标存在才备；备份路径是 .lingqu/port 下的绝对工程外位置） */
+func backupFile(src: String, dst: String): Unit {
+    if (exists(Path(src)) && !exists(Path(dst))) {
+        File.writeTo(dst, File.readFrom(src))
     }
 }
 
@@ -637,6 +737,8 @@ public class UiReportCommand <: CommandHandler {
         // P4 改造执行指标（t2h:port 回投；applied=6 为全量，0 表示已迁移/无可改）
         o.put("portApplied", JsonInt(argInt(args, "portApplied", 0)))
         o.put("portRules", JsonInt(argInt(args, "portRules", 0)))
+        o.put("portAuto", JsonInt(argInt(args, "portAuto", 0)))
+        o.put("portGuide", JsonInt(argInt(args, "portGuide", 0)))
         o.put("portError", JsonString(argStr(args, "portError", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         let text = o.toJsonString()

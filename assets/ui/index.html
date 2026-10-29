@@ -472,8 +472,9 @@ body.ai-hidden .ai-show{display:block}
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="portCard">
           <div class="legend" style="margin:0">
-            <span>规则改造（Cargo.toml · 6 条）：<b id="portApplied">—</b></span>
+            <span>规则改造（Cargo.toml 6 + 工具链 2 + lib.rs 1 + 前端 3）：<b id="portApplied">—</b></span>
             <span>幂等：<b id="portIdem">—</b></span>
+            <span>人工介入：<b id="portHuman">—</b><small>/5</small></span>
             <span id="portNote" class="muted">先「预览改造」看逐条 outcome，确认后「应用」落盘（自动备份，可回滚）</span>
           </div>
         </div>
@@ -1631,12 +1632,14 @@ withBridge(function(tauri){
     });
   });
 
-  /* ===== ④ 改造执行：t2h:port 真数据（P4 第一刀：Cargo.toml 六条规则）===== */
+  /* ===== ④ 改造执行：t2h:port 真数据（Cargo.toml 6 + 工具链 2 + lib.rs 1 + 前端 3）===== */
   function renderPort(r){
     var rules = (r && r.rules) || [];
     var tb = $('portRows');
-    $('portApplied').textContent = (r && r.applied !== undefined) ? (r.applied + ' / 6') : '—';
+    $('portApplied').textContent = (r && r.applied !== undefined) ? String(r.applied) : '—';
     $('portIdem').textContent = r && r.idempotent ? '是（再跑一遍 applied=0）' : '—';
+    var c = (r && r.counters) || {};
+    $('portHuman').textContent = String(c.guide || 0);
     var note = $('portNote');
     if (r && r.outError) {
       note.style.color = 'var(--err)';
@@ -1646,20 +1649,24 @@ withBridge(function(tauri){
       note.textContent = r.error;
     } else if (r && r.backup) {
       note.style.color = 'var(--ok)';
-      note.textContent = '已落盘（备份 ' + r.backup + '，可回滚）';
+      note.textContent = '已落盘（备份 ' + r.backup + '/，可回滚）';
     } else {
       note.style.color = '';
       note.textContent = r && r.toml ? ('预览：' + r.toml + '（未落盘）') : note.textContent;
     }
     var html = '';
     rules.forEach(function(it){
+      var pill = it.applied
+        ? (it.tier === 'guide' ? '<span class="pill warn">人工</span>' : '<span class="pill warn">已改</span>')
+        : '<span class="pill ok">跳过</span>';
       html += '<tr><td class="mono"><b>' + esc(it.id) + '</b></td>'
-        + '<td>' + (it.applied ? '<span class="pill warn">已改</span>' : '<span class="pill ok">跳过</span>') + '</td>'
+        + '<td>' + pill + '</td>'
         + '<td class="muted small">' + esc(it.note || '') + '</td>'
-        + '<td class="muted mono small">' + esc(it.before || '（新增）') + '<br>→ ' + esc((it.after || '').slice(0, 160)) + '</td></tr>';
+        + '<td class="muted mono small">' + esc((it.before || '（新增）').slice(0, 120)) + '<br>→ ' + esc((it.after || '').slice(0, 160)) + '</td></tr>';
     });
     tb.innerHTML = html || '<tr><td colspan="4" class="muted">该工程无规则可应用（可能已迁移）。</td></tr>';
     window.__port = { applied: (r && r.applied) || 0, rules: rules.length, idempotent: !!(r && r.idempotent),
+      auto: c.auto || 0, guide: c.guide || 0,
       backup: (r && r.backup) || '', error: (r && (r.outError || r.error)) || '' };
   }
   function portInvoke(apply){
@@ -1780,6 +1787,8 @@ withBridge(function(tauri){
       depsError: (window.__deps && window.__deps.error) || '',
       portApplied: (window.__port && window.__port.applied) || 0,
       portRules: (window.__port && window.__port.rules) || 0,
+      portAuto: (window.__port && window.__port.auto) || 0,
+      portGuide: (window.__port && window.__port.guide) || 0,
       portError: (window.__port && window.__port.error) || '',
       errorCount: window.__uiErrors.length
     }).catch(function(){});

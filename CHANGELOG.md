@@ -5,6 +5,49 @@
 
 ---
 
+## [0.11.0] - 2026-10-30
+
+**主题**：P4 第二刀 —— 工具链落盘（T4-3）+ 平台 cfg 分支注入（T4-4）+ ArkWeb 兼容层（T4-5）
++ 三档动作与人工介入计数（T4-8），`t2h:port` 从"Cargo.toml 改造"扩展为完整规则面。
+
+### Added
+
+- **`src/port/toolchain.cj`（新）**——T4-3 工具链落盘：
+  - R2-PORT-007 `rust-toolchain.toml`：Windows 走 `gnullvm`（llvm-mingw 缺 `-lgcc_eh` 的实测结论）、
+    Linux 走默认 GNU；targets 统一加 `aarch64-unknown-linux-ohos`
+  - R2-PORT-008 `.cargo/config.toml`：NDK clang 直作链接器（自带 clang 包装是 Unix shell 脚本）
+    + sysroot rustflags + cc 环境变量；SDK 路径从 `NATIVE_OHOS_SDK` 读取，
+    **未设时如实降级为 guide 提示，不写坏文件**
+- **`src/port/shim.cj`（新）**——T4-4 / T4-5：
+  - R2-PORT-009 `lib.rs` 注入 `resolve_app_data_dir()`（OHOS 沙箱 `/data/storage/el2/base/files`）
+    + `install_panic_hook()`（panic 落盘 `panic.log`——鸿蒙 hilog 不捕获 Rust stderr）
+  - R2-PORT-011 `index.html` 注入 localStorage 内存 polyfill（ArkWeb 自定义 scheme 下
+    `window.localStorage` 为 null；桌面原生可用时不生效，业务零改动）
+  - R2-PORT-012 / 013（**guide 档**）：探测裸 `confirm(`/`prompt(` 调用点与
+    `<input type="color">`——只给位置与处置方案（Promise 化对话框 / 应用内色板），
+    **不机械替换**（会改坏代码）；计数进人工介入（验收 A3 可审计）
+- **T4-8 分档计数**：`RuleOutcome` 增加 `tier`（auto/guide），`PortResult.countersJson()`
+  输出 auto/guide 两计数；④ 屏显示"人工介入 n/5"；`ui_report` 新增 `portAuto/portGuide`
+- **t2h:port apply 扩展**：逐文件备份到 `.lingqu/port/<工程>/`（Cargo.toml / rust-toolchain /
+  cargo config / lib.rs / index.html），备份不覆盖（首次为准）
+- **8 例新单测**（总 64）：两套工具链模板、SDK 路径替换、注入块形态、分档计数、
+  guide 探测（正向 fixture + 迁移后样本应为 false）
+
+### 验证证据（habit-tree 迁移前文件实测，Xvfb + `ui_report`）
+
+| 断言项 | 值 |
+|---|---|
+| portRules / portApplied | 12 / 9（auto 8 + guide 1） |
+| guide 1 条 | 本机未设 `NATIVE_OHOS_SDK` → R2-PORT-008 如实降级提示（不编造链接器路径） |
+| errorCount | 0 |
+| 门禁 | 四道闸全绿，**64 例单测** |
+
+**未做（如实标注）**：注入函数的 setup 接线（`install_panic_hook(app)` 调用点）涉及语义，留 guide；
+confirm/prompt 的应用内对话框实现属 P4 第三刀（跟 T4-8 审批卡一起）；
+`cargo check --target ohos` 出口判据需 P5 交叉编译环境。
+
+---
+
 ## [0.10.0] - 2026-10-30
 
 **主题**：P4 第一刀 —— 规则引擎 + Cargo.toml 文本变换（路线图 T4-1 / T4-2 / T4-6），
