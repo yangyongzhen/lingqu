@@ -137,6 +137,7 @@ cjh 以 **web 模式**被驱动：`cjh web --port 8765 --bind 127.0.0.1`，对�
 |---|---|
 | [`docs/实施路线图.md`](docs/实施路线图.md) | **可执行任务拆解**：P0–P8 阶段、每阶段的出口判据与证据、里程碑日历 |
 | [`docs/案例素材.md`](docs/案例素材.md) | **素材清单**：6 个本地 Tauri 样本、框架/引擎仓库、文档与文章链接、素材→阶段映射 |
+| [`docs/P2-scan-口径草案.md`](docs/P2-scan-口径草案.md) | **度量口径**：覆盖率（C1/C2/C3）、处置四值域、评分扣分规则、scan schema |
 | [`AGENTS.md`](AGENTS.md) | **开发契约**：交付门禁、架构契约、编码规范、已踩坑清单、文档与提交纪律 |
 | [`CHANGELOG.md`](CHANGELOG.md) | 版本更新日志（Keep a Changelog 风格） |
 | [`docs/需求.md`](docs/需求.md) | 课题原始需求与验收标准（三条硬指标） |
