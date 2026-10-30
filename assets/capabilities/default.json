@@ -9,6 +9,7 @@
     "t2h:deps",
     "t2h:port",
     "t2h:revert",
+    "t2h:decisions",
     "t2h:cjh_status",
     "t2h:cjh_deploy",
     "t2h:cjh_start",

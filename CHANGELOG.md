@@ -5,6 +5,45 @@
 
 ---
 
+## [0.12.0] - 2026-10-30
+
+**主题**：P4 第三刀 —— setup 接线机械化（R2-PORT-010）+ 对话框资源生成（R2-PORT-014）
++ 人工决策记录可审计（`t2h:decisions`，T4-8 收口）。
+
+### Added
+
+- **`src/port/resolve.cj`（新）**：
+  - **R2-PORT-010**（auto）：`.setup(|app| {` 块内接线 `install_panic_hook(app)` 与
+    沙箱目录调用（4 行，形态照 habit-tree 迁移后 lib.rs）；幂等——二次 apply 文本不变；
+    已接线/无 setup 块分别走跳过与 guide（不猜）
+  - **R2-PORT-014**（auto）：生成 `lingqu-dialog.js` + `lingqu-dialog.css`——应用内
+    Promise 化 `confirmDialog`/`promptDialog` 模块（单层 `.dialog`、z-index 80、
+    颜色跟随页面 CSS 变量）；**confirm/prompt 调用点替换仍归 012 guide**（改控制流，
+    机械替换会改坏代码——边界不移）
+- **`t2h:decisions` 命令**（三处联动）：`action=record`（同 rule 覆盖最新决策，防重复条目）
+  / `action=list`；落 `.lingqu/port/<工程>/decisions.json`（`lingqu/decisions/v1`）。
+  A3 口径：guide 采纳 = 一次人工介入；忽略也要留痕
+- **④ 屏 guide 项待确认卡**：guide 行标"待你确认"，行内采纳/忽略按钮；
+  已决策显示"人工·已采纳/已忽略"；顶部计数变为"已决策 n，待决策 m"；
+  `ui_report` 新增 `portDecided` 字段（服务端白名单同批放行）
+- **5 例新单测**（总 74）：接线插入位置与幂等、无 setup 块 guide、对话框资源形态、
+  不存在目录 outcome
+
+### 验证证据（habit-tree 迁移前文件实测，Xvfb + `ui_report`）
+
+| 断言项 | 值 |
+|---|---|
+| portRules / portApplied | **14 / 11**（auto 10 + guide 1） |
+| guide 1 条 | 本机未设 `NATIVE_OHOS_SDK` → R2-PORT-008 如实降级（同 0.11.0 行为） |
+| portDecided | 0（决策记录链路已通，端到端点选待实机） |
+| errorCount | 0 |
+| 门禁 | 四道闸全绿，**74 例单测** |
+
+**未做（如实标注）**：决策记录的端到端点选（Xvfb 下无指针交互，命令层逻辑已编译验证）；
+confirm/prompt 调用点替换仍 guide（设计边界）；`cargo check --target ohos` 需 P5。
+
+---
+
 ## [0.11.0] - 2026-10-30
 
 **主题**：P4 第二刀 —— 工具链落盘（T4-3）+ 平台 cfg 分支注入（T4-4）+ ArkWeb 兼容层（T4-5）

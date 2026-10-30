@@ -333,6 +333,139 @@ public class ScanCommand <: CommandHandler {
     }
 }
 
+/**
+ * 取 JsonValue（对象）里的字符串字段；缺失/类型不符回空串。
+ * （嵌套 match 的 case 块里只能放 return 式表达式，不能放 let/语句——故抽函数）
+ */
+func jsonStrField(v: JsonValue, key: String): String {
+    match (v.kind()) {
+        case JsonKind.JsObject =>
+            match (v.asObject().get(key)) {
+                case Some(sv) =>
+                    match (sv.kind()) {
+                        case JsonKind.JsString => return sv.asString().getValue()
+                        case _ => return ""
+                    }
+                case None => return ""
+            }
+        case _ => return ""
+    }
+}
+
+/**
+ * t2h:decisions —— 人工决策记录（T4-8 可审计的另一半）。
+ *   action=record：{path, rule, decision: accepted|ignored, note?}
+ *     → 追加/覆盖写 `.lingqu/port/<工程>/decisions.json`（lingqu/decisions/v1）
+ *   action=list：{path} → 返回该工程的决策记录
+ * A3 口径：guide 项被"采纳"即一次人工介入；被"忽略"也要留痕（说明为什么不需要）。
+ */
+public class DecisionsCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:decisions 需要参数 path"))
+            return res
+        }
+        var name = projectNameOf(path)
+        if (name.size == 0) {
+            name = "project"
+        }
+        let dir = ".lingqu/port/${sanitizeFileName(name)}"
+        let file = "${dir}/decisions.json"
+        let action = argStr(args, "action", "list")
+
+        // 读现有记录（不存在则空表）
+        var items = JsonArray()
+        try {
+            if (exists(Path(file))) {
+                let root = JsonValue.fromStr(String.fromUtf8(File.readFrom(file)))
+                match (root.kind()) {
+                    case JsonKind.JsObject =>
+                        match (root.asObject().get("items")) {
+                            case Some(v) => items = v.asArray()
+                            case None => ()
+                        }
+                    case _ => ()
+                }
+            }
+        } catch (e: Exception) {
+            // 坏文件按空表起（record 会重写覆盖）；list 时如实带 outError
+            if (action == "list") {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString("决策记录文件损坏：${e}"))
+                return res
+            }
+        }
+
+        if (action == "record") {
+            let rule = argStr(args, "rule", "")
+            let decision = argStr(args, "decision", "")
+            if (rule.size == 0 || (decision != "accepted" && decision != "ignored")) {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString("record 需要 rule 与 decision（accepted|ignored）"))
+                return res
+            }
+            // 同 rule 覆盖最新决策（重复点采纳/忽略不产生重复条目）
+            var newItems = JsonArray()
+            for (i in 0..items.size()) {
+                let it = items.get(i).getOrThrow()
+                if (jsonStrField(it, "rule") == rule) {
+                    continue // 旧条目被新决策覆盖
+                }
+                newItems.add(it)
+            }
+            var item = JsonObject()
+            item.put("rule", JsonString(rule))
+            item.put("decision", JsonString(decision))
+            item.put("note", JsonString(argStr(args, "note", "")))
+            newItems.add(item)
+            var root = JsonObject()
+            root.put("schema", JsonString("lingqu/decisions/v1"))
+            root.put("project", JsonString(name))
+            root.put("items", newItems)
+            try {
+                ensurePortDirs()
+                if (!exists(Path(dir))) {
+                    Directory.create(Path(dir))
+                }
+                File.writeTo(file, root.toJsonString().toArray())
+            } catch (e: Exception) {
+                res.put("ok", JsonBool(false))
+                res.put("outError", JsonString("${e}"))
+                eprintln("[lingqu][decisions] 写决策记录失败：${e}")
+                return res
+            }
+            res.put("total", JsonInt(newItems.size()))
+        }
+
+        res.put("ok", JsonBool(true))
+        res.put("project", JsonString(name))
+        res.put("file", JsonString(file))
+        res.put("items", items)
+        var accepted: Int64 = 0
+        var ignored: Int64 = 0
+        for (i in 0..items.size()) {
+            let dv = jsonStrField(items.get(i).getOrThrow(), "decision")
+            if (dv == "accepted") {
+                accepted += 1
+            } else if (dv == "ignored") {
+                ignored += 1
+            }
+        }
+        res.put("accepted", JsonInt(accepted))
+        res.put("ignored", JsonInt(ignored))
+        eprintln("[lingqu][decisions] ${name}: action=${action} accepted=${accepted} ignored=${ignored}")
+        return res
+    }
+}
+
 // ============================================================
 // 业务装配点
 // ============================================================
@@ -427,8 +560,14 @@ public class PortCommand <: CommandHandler {
             result.outcomes.add(o)
         }
         result.outcomes.add(libOutcome)
+        let libPath = if (exists(Path(libRs))) { libRs } else { "${srcTauriDir}/src/main.rs" }
+        result.outcomes.add(setupWiringOutcome(libPath))
         let frontend = "${srcTauriDir}/.."
         result.outcomes.add(localStorageOutcome("${frontend}/index.html"))
+        let dialogAssets = dialogAssetsOutcome(frontend)
+        for (d in dialogAssets) {
+            result.outcomes.add(d)
+        }
         let guides = frontendGuideOutcomes(frontend)
         for (g in guides) {
             result.outcomes.add(g)
@@ -485,6 +624,26 @@ public class PortCommand <: CommandHandler {
                         let old = String.fromUtf8(File.readFrom(p))
                         File.writeTo(p, (old + o.after).toArray())
                         wroteAny = true
+                    }
+                    if (o.id == "R2-PORT-010" && o.applied) {
+                        // 与 009 同一文件：009 先追加函数定义，010 再在 setup 块内接线
+                        let p = if (exists(Path("${srcTauriDir}/src/lib.rs"))) { "${srcTauriDir}/src/lib.rs" } else { "${srcTauriDir}/src/main.rs" }
+                        backupFile(p, "${backupPath}/lib.rs.bak")
+                        let old = String.fromUtf8(File.readFrom(p))
+                        File.writeTo(p, applySetupWiring(old).toArray())
+                        wroteAny = true
+                    }
+                    if (o.id == "R2-PORT-014" && o.applied) {
+                        let jsPath = "${frontend}/lingqu-dialog.js"
+                        let cssPath = "${frontend}/lingqu-dialog.css"
+                        if (!exists(Path(jsPath))) {
+                            File.writeTo(jsPath, dialogJsContent().toArray())
+                            wroteAny = true
+                        }
+                        if (!exists(Path(cssPath))) {
+                            File.writeTo(cssPath, dialogCssContent().toArray())
+                            wroteAny = true
+                        }
                     }
                     if (o.id == "R2-PORT-011" && o.applied) {
                         let p = "${frontend}/index.html"
@@ -739,6 +898,7 @@ public class UiReportCommand <: CommandHandler {
         o.put("portRules", JsonInt(argInt(args, "portRules", 0)))
         o.put("portAuto", JsonInt(argInt(args, "portAuto", 0)))
         o.put("portGuide", JsonInt(argInt(args, "portGuide", 0)))
+        o.put("portDecided", JsonInt(argInt(args, "portDecided", 0)))
         o.put("portError", JsonString(argStr(args, "portError", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         let text = o.toJsonString()
@@ -829,6 +989,7 @@ public func build(): AppSpec {
             app.register("t2h:deps", DepsCommand())
             app.register("t2h:port", PortCommand())
             app.register("t2h:revert", RevertCommand())
+            app.register("t2h:decisions", DecisionsCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）
