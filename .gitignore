@@ -36,3 +36,6 @@ Thumbs.db
 .lingqu/
 .shot-*.png
 .atomcode/
+# hvigor（DevEco 打 HAP 时的构建缓存/日志：出现在工程根，属派生品）
+.hvigor/
+oh_modules/
