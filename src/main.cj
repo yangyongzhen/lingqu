@@ -442,6 +442,9 @@ public class DecisionsCommand <: CommandHandler {
                 eprintln("[lingqu][decisions] 写决策记录失败：${e}")
                 return res
             }
+            // 落盘成功后把 items 换成新表——否则返回值与 accepted/ignored 计数都是改前的
+            // 旧数据，界面刚点完"采纳"却看到"已决策 0"（0.13.1 修）
+            items = newItems
             res.put("total", JsonInt(newItems.size()))
         }
 
@@ -638,6 +641,8 @@ public class PortCommand <: CommandHandler {
                 if (o.id == "R2-PORT-008") {
                     o.applied = false
                     o.tier = T_GUIDE
+                    // 不写盘（applied=false），但这是**必须人填**的一项 → 计入 A3 人工介入
+                    o.needsHuman = true
                     o.note = "未设 NATIVE_OHOS_SDK 环境变量——链接器路径留人工填写（模板见 after）"
                 }
             }
@@ -657,14 +662,14 @@ public class PortCommand <: CommandHandler {
                 backupPath = ".lingqu/port/${safeName}"
                 var wroteAny = false
                 if (result.appliedCount() > 0) {
-                    File.writeTo("${backupPath}/Cargo.toml.bak", before.toArray())
+                    File.writeTo("${backupPath}/${BAK_CARGO}", before.toArray())
                     File.writeTo(tomlPath, result.afterText.toArray())
                     wroteAny = true
                 }
                 for (o in result.outcomes) {
                     if (o.id == "R2-PORT-007" && o.applied) {
                         let p = "${srcTauriDir}/rust-toolchain.toml"
-                        backupFile(p, "${backupPath}/rust-toolchain.toml.bak")
+                        backupFile(p, "${backupPath}/${BAK_TOOLCHAIN}")
                         File.writeTo(p, o.after.toArray())
                         wroteAny = true
                     }
@@ -674,13 +679,13 @@ public class PortCommand <: CommandHandler {
                             Directory.create(Path(dir))
                         }
                         let p = "${dir}/config.toml"
-                        backupFile(p, "${backupPath}/cargo-config.toml.bak")
+                        backupFile(p, "${backupPath}/${BAK_CARGO_CONFIG}")
                         File.writeTo(p, o.after.toArray())
                         wroteAny = true
                     }
                     if (o.id == "R2-PORT-009" && o.applied) {
                         let p = if (exists(Path("${srcTauriDir}/src/lib.rs"))) { "${srcTauriDir}/src/lib.rs" } else { "${srcTauriDir}/src/main.rs" }
-                        backupFile(p, "${backupPath}/lib.rs.bak")
+                        backupFile(p, "${backupPath}/${BAK_LIBRS}")
                         let old = String.fromUtf8(File.readFrom(p))
                         File.writeTo(p, (old + o.after).toArray())
                         wroteAny = true
@@ -688,7 +693,7 @@ public class PortCommand <: CommandHandler {
                     if (o.id == "R2-PORT-010" && o.applied) {
                         // 与 009 同一文件：009 先追加函数定义，010 再在 setup 块内接线
                         let p = if (exists(Path("${srcTauriDir}/src/lib.rs"))) { "${srcTauriDir}/src/lib.rs" } else { "${srcTauriDir}/src/main.rs" }
-                        backupFile(p, "${backupPath}/lib.rs.bak")
+                        backupFile(p, "${backupPath}/${BAK_LIBRS}")
                         let old = String.fromUtf8(File.readFrom(p))
                         File.writeTo(p, applySetupWiring(old).toArray())
                         wroteAny = true
@@ -707,7 +712,7 @@ public class PortCommand <: CommandHandler {
                     }
                     if (o.id == "R2-PORT-011" && o.applied) {
                         let p = "${frontend}/index.html"
-                        backupFile(p, "${backupPath}/index.html.bak")
+                        backupFile(p, "${backupPath}/${BAK_INDEX}")
                         let old = String.fromUtf8(File.readFrom(p))
                         // 注到 <head> 之后（业务 script 之前）——habit-tree 同位置
                         let headEnd = indexOfOr(old, "</head>")
@@ -771,7 +776,14 @@ func backupFile(src: String, dst: String): Unit {
 }
 
 /**
- * t2h:revert —— 回滚 t2h:port 的落盘改动（把备份写回去，T4-6 的另一半）。
+ * t2h:revert —— 回滚 t2h:port 的落盘改动（T4-6 的另一半）。
+ *
+ * 0.13.1 修：apply 从 0.11.0 起把备份改到 `.lingqu/port/<工程>/<文件名>.bak`（逐文件），
+ * 而这里仍在找旧的单文件 `.lingqu/port/<工程>-Cargo.toml.bak`——**回滚从 0.11.0 起
+ * 一直是坏的**（永远报"没有备份可回滚"）。现在按 `revertPairs()` 全表逐文件回滚
+ * （Cargo.toml / rust-toolchain.toml / .cargo/config.toml / lib.rs / index.html），
+ * 并清掉 014 生成的 lingqu-dialog.js/.css（带 lingqu 标记才算工具产物，不误删用户的）；
+ * 旧路径备份仍兼容（只回滚 Cargo.toml 并在 note 里说明）。
  */
 public class RevertCommand <: CommandHandler {
     public init() {}
@@ -791,29 +803,90 @@ public class RevertCommand <: CommandHandler {
         if (name.size == 0) {
             name = "project"
         }
-        let backup = ".lingqu/port/${sanitizeFileName(name)}-Cargo.toml.bak"
-        if (!exists(Path(backup))) {
-            res.put("ok", JsonBool(false))
-            res.put("error", JsonString("没有备份可回滚：${backup}（先跑 apply 过的 t2h:port）"))
-            return res
-        }
+        let safeName = sanitizeFileName(name)
+        let dir = backupDirOf(safeName)
+        let legacy = legacyCargoBakOf(safeName)
         let tomlPath = cargoTomlPathOf(path)
-        if (tomlPath == "") {
+
+        var restored = JsonArray()
+        var skipped = JsonArray()
+        var removed = JsonArray()
+        var errMsg = ""
+        var usedLegacy = false
+
+        if (exists(Path(dir))) {
+            // 工程目录：按表逐文件回滚
+            for (pair in revertPairs()) {
+                let bak = "${dir}/${pair.backupFile}"
+                if (!exists(Path(bak))) {
+                    continue
+                }
+                // 目标路径：Cargo.toml 用解析结果，其余按相对路径；lib.rs 单 bin 工程退回 main.rs
+                var target = ""
+                if (pair.relTarget == "") {
+                    target = tomlPath
+                } else {
+                    target = "${path}/${pair.relTarget}"
+                    if (pair.backupFile == BAK_LIBRS && !exists(Path(target))) {
+                        target = "${path}/src-tauri/src/main.rs"
+                    }
+                }
+                if (target == "") {
+                    skipped.add(JsonString(pair.backupFile))
+                    continue
+                }
+                try {
+                    let bakText = String.fromUtf8(File.readFrom(bak))
+                    File.writeTo(target, bakText.toArray())
+                    restored.add(JsonString(target))
+                } catch (e: Exception) {
+                    errMsg = "回滚 ${target} 失败：${e}"
+                }
+            }
+            // 014 生成的前端资源：带 lingqu 标记才算工具产物，删掉才算"回到干净仓库"
+            for (f in ["lingqu-dialog.js", "lingqu-dialog.css"]) {
+                let p = "${path}/${f}"
+                if (fileContains(p, "lingqu: R2-PORT-014")) {
+                    try {
+                        remove(Path(p))
+                        removed.add(JsonString(p))
+                    } catch (e: Exception) {
+                        errMsg = "删除 ${p} 失败：${e}"
+                    }
+                }
+            }
+        } else if (exists(Path(legacy))) {
+            // 兼容 0.10.0 的旧单文件备份
+            usedLegacy = true
+            if (tomlPath == "") {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString("找不到要回滚的 Cargo.toml（工程路径变了？）"))
+                return res
+            }
+            try {
+                let bak = String.fromUtf8(File.readFrom(legacy))
+                File.writeTo(tomlPath, bak.toArray())
+                restored.add(JsonString(tomlPath))
+            } catch (e: Exception) {
+                errMsg = "回滚 ${tomlPath} 失败：${e}"
+            }
+        } else {
             res.put("ok", JsonBool(false))
-            res.put("error", JsonString("找不到要回滚的 Cargo.toml（工程路径变了？）"))
+            res.put("error", JsonString("没有备份可回滚：找过 ${dir}/ 与 ${legacy}（先跑 apply=true 的 t2h:port）"))
             return res
         }
-        try {
-            let bak = String.fromUtf8(File.readFrom(backup))
-            File.writeTo(tomlPath, bak.toArray())
-            res.put("ok", JsonBool(true))
-            res.put("restored", JsonString(tomlPath))
-            res.put("from", JsonString(backup))
-            eprintln("[lingqu][revert] ${tomlPath} ← ${backup}")
-        } catch (e: Exception) {
-            res.put("ok", JsonBool(false))
-            res.put("error", JsonString("回滚失败：${e}"))
+
+        let okFlag = errMsg == "" && restored.size() > 0
+        res.put("ok", JsonBool(okFlag))
+        res.put("restored", restored)
+        res.put("removed", removed)
+        res.put("skipped", skipped)
+        res.put("backup", JsonString(if (usedLegacy) { legacy } else { dir }))
+        res.put("legacy", JsonBool(usedLegacy))
+        if (errMsg != "") {
+            res.put("error", JsonString(errMsg))
         }
+        eprintln("[lingqu][revert] ${safeName}: restored=${restored.size()} removed=${removed.size()} legacy=${usedLegacy} err=${errMsg}")
         return res
     }
 }
@@ -961,14 +1034,21 @@ public class UiReportCommand <: CommandHandler {
         o.put("portDecided", JsonInt(argInt(args, "portDecided", 0)))
         o.put("portError", JsonString(argStr(args, "portError", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
+        // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
+        // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
+        o.put("tag", JsonString(argStr(args, "tag", "")))
+        o.put("ts", JsonInt(argInt(args, "ts", 0)))
         let text = o.toJsonString()
         // 落文件而不是只打日志：GUI 的 stderr 去向受框架日志重定向影响（见 AGENTS §4 第 14 条），
         // 落盘的东西才是可复核的证据。
-        //   .lingqu/ui-report.json —— 最新一次快照（覆盖写）
-        //   .lingqu/ui-report.log  —— 自检序列（每次一行，追加），用于比对状态流转
+        //   .lingqu/ui-report.json —— 最新一次快照（覆盖写，pretty）
+        //   .lingqu/ui-report.log  —— 自检序列（**每次一行压缩 JSON**，追加），用于断言状态流转。
+        //     0.13.1 修正：以前把 pretty JSON 直接追加进 .log，7 条快照占了 259 行，
+        //     而注释与文档都写"每次一行"——按行 grep 的断言全失效。这里压成单行。
         let dir = ".lingqu"
         let snap = ".lingqu/ui-report.json"
         let logf = ".lingqu/ui-report.log"
+        let oneline = text.replace("\n", " ").replace("\r", " ")
         var wrote = false
         try {
             if (!exists(Path(dir))) {
@@ -979,7 +1059,7 @@ public class UiReportCommand <: CommandHandler {
             if (exists(Path(logf))) {
                 prev = String.fromUtf8(File.readFrom(logf))
             }
-            File.writeTo(logf, (prev + text + "\n").toArray())
+            File.writeTo(logf, (prev + oneline + "\n").toArray())
             wrote = true
         } catch (e: Exception) {
             eprintln("[lingqu][ui] 写报告失败：${e}")

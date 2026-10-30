@@ -5,7 +5,7 @@
   cjc-version = "1.0.5"
   name = "lingqu"
   description = "lingqu - cj-tauri 业务包"
-  version = "0.13.0"
+  version = "0.13.1"
   target-dir = ""
   output-type = "static"
   compile-option = ""
@@ -14,21 +14,24 @@
   package-configuration = {}
 
 [dependencies]
-  # cj-tauri 框架本体（由 cj-tauri create 写入的本机路径；换机器重跑 create 或手改）
-  cjTauri = { path = "/root/test/cj/cj-tauri" }
+  # cj-tauri 框架本体。**不写本机绝对路径**：cjpm 会展开 ${CJ_TAURI_ROOT}
+  # （2026-10-30 实测：dependencies.path 与 target.*.link-option 两处都展开），
+  # 于是仓里不含任何人的本机路径，换机器只设环境变量即可。
+  # test.sh / run-dev.sh 会给出按平台的默认值；setup.sh 会校验它是否存在。
+  cjTauri = { path = "${CJ_TAURI_ROOT}" }
 
 # ── 为什么业务包自己要写 link-option ────────────────────────────────────────
 # 业务包里引用了 cjTauri 的 FFI 外部函数（cj_bridge_*），而 C 桥的实现只在
 # **可执行产物**那一侧链接（targets/desktop/cjpm.toml 由 sync 派生时自带）。
 # 但 `cjpm test` 会把本包编成一个独立的测试可执行文件，那条链接行里没有 C 桥，
 # 于是 ld.lld 报一串 `undefined symbol: cj_bridge_*`。在业务包这一层补上即可。
-#   · 路径是本机绝对路径，与上面的 cjTauri 依赖同源（同一条「换机器重跑 create」纪律）
+#   · 路径同样走 ${CJ_TAURI_ROOT}（与上面的依赖同源，不含本机绝对路径）
 #   · 不写 --subsystem=windows：这里只影响测试可执行文件，测试要能往控制台打输出
 [target.x86_64-w64-mingw32]
-  link-option = "-L/root/test/cj/cj-tauri/native -lcjtbridge"
+  link-option = "-L${CJ_TAURI_ROOT}/native -lcjtbridge"
 
 [target.x86_64-unknown-linux-gnu]
-  link-option = "-L/root/test/cj/cj-tauri/native -lcjtbridge -lwebkit2gtk-4.1 -lgtk-3 -lgdk-3 -lglib-2.0 -lgio-2.0 -lsoup-3.0 -ljavascriptcoregtk-4.1 -lgobject-2.0"
+  link-option = "-L${CJ_TAURI_ROOT}/native -lcjtbridge -lwebkit2gtk-4.1 -lgtk-3 -lgdk-3 -lglib-2.0 -lgio-2.0 -lsoup-3.0 -ljavascriptcoregtk-4.1 -lgobject-2.0"
 
 [target.x86_64-unknown-linux-gnu.bin-dependencies]
     path-option = ["${CANGJIE_STDX}"]

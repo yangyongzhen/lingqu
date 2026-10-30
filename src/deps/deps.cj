@@ -125,8 +125,13 @@ public func parseCargoLock(text: String): ArrayList<DepItem> {
 }
 
 /**
- * 提取 Cargo.toml 里 [patch.*] 段覆盖的 crate 名（不含子表头）。
+ * 提取 Cargo.toml 里 [patch.*] 段覆盖的 crate 名。
  * [patch.crates-io] 与 [patch."https://..."] 都算——fork 替换已落档。
+ *
+ * 0.13.1 修两个解析缺陷：
+ *   ① 子表形态 `[patch.crates-io.tauri]`（键在子表里）以前会把表内的
+ *      `git = "..."` / `rev = "..."` 当成 crate 名塞进结果集，可能误判"已处置"；
+ *   ② 子表头的末段就是被 patch 的 crate 名，必须收进来。
  */
 public func parsePatchedCrates(cargoTomlText: String): HashSet<String> {
     let patched = HashSet<String>()
@@ -135,7 +140,15 @@ public func parsePatchedCrates(cargoTomlText: String): HashSet<String> {
     for (raw in lines) {
         let t = raw.trimAscii()
         if (t.startsWith("[")) {
+            // 段头切换：只有 [patch... 段才继续收键
             inPatch = t.startsWith("[patch")
+            if (inPatch) {
+                // 子表形态：[patch.crates-io.tauri] / [patch."url".crate]
+                let crateName = crateNameOfPatchSubtable(t)
+                if (crateName != "") {
+                    patched.add(crateName)
+                }
+            }
             continue
         }
         if (!inPatch || t.startsWith("#") || t.startsWith("\"") || t.startsWith("//")) {
@@ -146,11 +159,47 @@ public func parsePatchedCrates(cargoTomlText: String): HashSet<String> {
             continue
         }
         let key = t[0..eq].trimAscii()
-        if (key != "") {
+        // 只收 crate 名（含连字符/下划线/字母数字）；`git`/`rev`/`branch` 这类键
+        // 是子表内的属性，不是被 patch 的 crate
+        if (key != "" && !isPatchAttrKey(key)) {
             patched.add(key)
         }
     }
     return patched
+}
+
+/** 子表头 `[patch.crates-io.tauri]` → `tauri`；不是子表头返回 "" */
+func crateNameOfPatchSubtable(headerLine: String): String {
+    var h = headerLine
+    if (h.startsWith("[")) {
+        h = h[1..]
+    }
+    if (h.endsWith("]")) {
+        h = h[0..(h.size - 1)]
+    }
+    // 去掉结束引号后按 "." 切；段数 > 2 才是子表（[patch.crates-io] 是 2 段）
+    let parts = h.split(".", -1)
+    if (parts.size <= 2) {
+        return ""
+    }
+    var last = parts[parts.size - 1].trimAscii()
+    // [patch."https://host/repo.git"] 这种两段形态里带引号——不是子表
+    if (last.startsWith("\"") || last.endsWith("\"")) {
+        return ""
+    }
+    // [patch."https://host/x.git".tauri] 的末段可能有尾引号
+    last = last.replace("\"", "")
+    return last
+}
+
+/** patch 子表内的属性键（不是 crate 名） */
+func isPatchAttrKey(key: String): Bool {
+    for (k in ["git", "rev", "branch", "tag", "path", "version", "package", "features", "default-features", "optional"]) {
+        if (key == k) {
+            return true
+        }
+    }
+    return false
 }
 
 // ===== 规则表（每条都有实测出处，见文件头）=====
@@ -316,8 +365,10 @@ public func depsScanJson(projectDir: String): JsonObject {
     }
     if (lockText.isSome()) {
         items = parseCargoLock(lockText.getOrThrow())
-        // 同名 crate 去重（Cargo.lock 理论上唯一，防御多 target 段重复）
-        items = dedupeByName(items)
+        // 只去掉「同名同版本」的重复块；**同名不同版本要保留**——Cargo.lock 里
+        // 同一个 crate 出现多个版本是常态（如 bitflags 1.x 与 2.x 并存），
+        // 以前按名字去重会让 depsTotal 小于真实包数，直接违反 P3 出口判据 3。
+        items = dedupeByNameVersion(items)
     }
 
     // Cargo.toml 的 [patch.*]：src-tauri/ 优先，退回工程根
@@ -358,15 +409,16 @@ func readTextOrNone(path: String): Option<String> {
     }
 }
 
-/** 按名去重，保留首个版本号 */
-func dedupeByName(items: ArrayList<DepItem>): ArrayList<DepItem> {
+/** 按「名字+版本」去重：只丢真正重复的块，同名多版本全部保留（Cargo.lock 常态） */
+func dedupeByNameVersion(items: ArrayList<DepItem>): ArrayList<DepItem> {
     let seen = HashSet<String>()
     let out = ArrayList<DepItem>()
     for (item in items) {
-        if (seen.contains(item.name)) {
+        let k = "${item.name}@${item.version}"
+        if (seen.contains(k)) {
             continue
         }
-        seen.add(item.name)
+        seen.add(k)
         out.add(item)
     }
     return out

@@ -62,7 +62,8 @@ public func testToolchainOutcomesIdempotentFlag(): Unit {
 
 @Test
 public func testCountersAutoAndGuide(): Unit {
-    // T4-8 分档计数：auto/guide 各归各类，guide 只数 applied 的
+    // T4-8 分档计数（0.13.1 语义）：auto = 规则机械完成；guide = **需要人拍板**（needsHuman），
+    // 与 applied（动没动手）分开——008/010 那种"不写坏文件但必须人来填"的项以前被漏计
     let res = PortResult()
     var a = RuleOutcome("R2-PORT-001", false, "", "", "")
     a.applied = true
@@ -70,16 +71,21 @@ public func testCountersAutoAndGuide(): Unit {
     var g = RuleOutcome("R2-PORT-012", false, "", "", "")
     g.tier = T_GUIDE
     g.applied = true
+    g.needsHuman = true
     res.outcomes.add(g)
     var g2 = RuleOutcome("R2-PORT-013", false, "", "", "")
     g2.tier = T_GUIDE
-    res.outcomes.add(g2) // guide 但没 applied——不计数
+    res.outcomes.add(g2) // guide 但探测无命中（无可处置项）——不计数
+    var g3 = RuleOutcome("R2-PORT-008", false, "", "", "")
+    g3.tier = T_GUIDE
+    g3.needsHuman = true // 未设 NATIVE_OHOS_SDK：没写盘，但必须人填 → 计入人工介入
+    res.outcomes.add(g3)
     @Assert(res.autoCount(), 1)
-    @Assert(res.humanCount(), 1)
+    @Assert(res.humanCount(), 2)
     let cj = res.countersJson()
     // get 返回 Option，toString 是 "Some(1)"——先解包再比
     @Assert(cj.get("auto").getOrThrow().toString(), "1")
-    @Assert(cj.get("guide").getOrThrow().toString(), "1")
+    @Assert(cj.get("guide").getOrThrow().toString(), "2")
 }
 
 @Test

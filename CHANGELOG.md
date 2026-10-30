@@ -5,6 +5,101 @@
 
 ---
 
+## [0.13.1] - 2026-10-30
+
+**主题**：P5 之前的**交接审核轮** —— 逐文件审 0.9.0～0.13.0（上一手 AI 交付的五轮），
+修掉 7 个真缺陷、校准 4 处虚高数字、把「换机器就构建不了」的根因拔掉。
+**没有新增功能**，目标是把地基修到可信：0.13.0 声称的「P4 判据 2/4 达成」里，判据 4 其实不成立。
+
+### Fixed
+
+1. **`t2h:revert` 自 0.11.0 起一直是坏的**（严重，且被文档写成"已达成"）
+   现象：apply 之后点回滚永远报「没有备份可回滚」。
+   根因：0.11.0 把备份从「单文件 `<工程>-Cargo.toml.bak`」改成「逐文件 `.lingqu/port/<工程>/<文件>.bak`」，
+   **但 revert 没跟着改**，还在找旧路径；即使找到了也只回滚 Cargo.toml，其余 4 个被改文件留在原地。
+   处置：新增 `revertPairs()` / `backupDirOf()` / `legacyCargoBakOf()`（`src/port/port.cj`，纯函数可单测），
+   备份文件名收成 `BAK_*` 常量，**apply 与 revert 共用同一张表**；回滚覆盖 Cargo.toml /
+   rust-toolchain.toml / .cargo/config.toml / lib.rs / index.html，并删除带 `lingqu: R2-PORT-014`
+   标记的 `lingqu-dialog.js/.css`（不带标记的不动，避免误删用户文件）；旧路径备份仍兼容。
+
+2. **`cjpm.toml` 里存着别的机器的绝对路径**（严重）
+   现象：任何非 Linux 机器跑 `scripts/test.sh`，第一道闸直接红：
+   `the path '/root/test/cj/cj-tauri' of module 'cjTauri' does not exist`。
+   根因：`cjpm.toml` 是被跟踪文件，而 `scripts/setup.sh` 用 sed 把当前机器的路径写进去——
+   谁跑过 setup 谁的本机路径就进 commit。
+   处置：`cjpm.toml` 的 `dependencies.path` 与两处 `target.*.link-option` 全部改成 `${CJ_TAURI_ROOT}`
+   （2026-10-30 实测 cjpm 对两处都展开）；`setup.sh` 从「sed 改写被跟踪文件」改为**环境体检 +
+   检查仓里没有本机路径**。仓从此不含任何人的本机路径。
+
+3. **R2-PORT-010 可以越过 R2-PORT-009 生效**（中高）
+   现象：009 因故跳过（工程里没有 `fn run()`）时，010 照样在 `.setup()` 里插
+   `install_panic_hook(app);` → 用户工程报 `cannot find function install_panic_hook`。
+   处置：010 以 009 注入的 `fn install_panic_hook(` 为前置条件，缺则降 guide（给出模板但不动代码）。
+
+4. **R2-PORT-002 会静默改行为 / 改坏文件**（中）
+   现象 A：`tauri = { version = "2", default-features = false, ... }` 被重写成 `{ version, features }`，
+   `default-features = false` 被丢掉——用户构建行为被静默改变。
+   现象 B：多行 features（`features = [` 后接若干行）只匹配首行、拿不到 `]`，
+   结果丢掉用户 features 却留下续行 → **Cargo.toml 语法错误**。
+   处置：新增 `otherKeysOf()` 保留不认识的键；识别多行 features 时如实跳过并转 guide。
+
+5. **`t2h:deps` 按名字去重导致少算包数**（中）
+   现象：`depsTotal` 可能小于 `Cargo.lock` 的真实包数——直接违反 P3 出口判据 3。
+   根因：按 crate 名去重，但同名多版本（bitflags 1.x/2.x）是 Cargo.lock 的常态。
+   处置：改成「名字+版本」去重（`dedupeByNameVersion`）。
+
+6. **`[patch.*]` 子表解析污染「已处置」集合**（中）
+   `[patch.crates-io.tauri]` 形态下，表内的 `git` / `rev` 被当成 crate 名进结果集，
+   而段头里的真名 `tauri` 反而漏掉 → 既可能误判"已处置"，也可能漏掉真正的 fork 替换。
+   处置：从段头提取 crate 名，跳过 `git/rev/branch/tag/path/version/package/features/default-features/optional`。
+
+7. **`t2h:decisions` 返回改前的旧列表**（低）
+   record 成功后返回体与 `accepted/ignored` 计数仍在用旧 `items`——刚点「采纳」界面却显示「已决策 0」。
+   处置：落盘成功后把 `items` 换成新表。
+
+### Changed
+
+- 备份文件名/目录改为 `src/port/port.cj` 的常量、由 apply 与 revert 共用——这次漂移的根因就是"两处各写一遍路径"。
+- `scripts/setup.sh` 改为体检脚本（见 Fixed 2）：校验 `CANGJIE_HOME / CANGJIE_STDX / CJ_TAURI_ROOT`、
+  检查 cj-tauri CLI 是否已编、检查 `cjpm.toml` 里没有本机绝对路径，**不再修改任何被跟踪文件**。
+- 新增 `src/tests/port_revert_test.cj`（6 例）与 `src/tests/deps_review_test.cj`（4 例）：
+  每条修复一个用例，用例写的是「修复前必然红」的断言（路径映射、保留键、多行 features、
+  同名多版本、子表 crate 名）。
+
+### Docs（虚高数字校准 —— 交付凭证必须可复算）
+
+| 位置 | 原写法 | 实际（按 `git grep -c '^@Test'` 逐版本核对） |
+|---|---|---|
+| 0.10.0 单测 | 「7 例新单测／总 63」 | **6 例／总 56** |
+| 0.12.0 单测 | 「5 例新单测／总 74」 | **5 例／总 69** |
+| 0.13.0 单测 | 「8 例新单测／总 82」 | **8 例／总 77** |
+| 0.13.0 指纹库 | 「15 条（FP-001~015）」 | **13 条（FP-001~007 + FP-010~015）**——FP-008/009 从未存在 |
+
+- 0.11.0 的「总 64」复核无误（56+8）。
+- 空位编号 FP-008/009 **不补编**（凭空补两条会违反"规则库不凭空编"）；保留编号可追溯性。
+- 本轮新增 10 例 → 当前 **87 例单测**。
+
+### 已知限制（本轮审核发现但未改，如实登记）
+
+- **指纹库里有 3 条 marker 过泛**：FP-003 `linker \``、FP-005 `unresolved import`、FP-007 `custom-protocol`
+  会在不相关的报错上命中并给出"很确定"的根因。它们仍是有用线索，但**结论需人复核**；
+  收紧它们要真实日志语料（P5 交叉编译后才会有），现在不凭空改。
+- `R2-PORT-014` 生成的 `lingqu-dialog.js/.css` 落在工程根目录（Vite 项目需自行搬进 `public/` 或 `src/`）。
+- `R2-PORT-006` 只在完全没有 `[patch` 段时整段追加；已有其它 crate 的 patch 段时整条跳过，
+  不会"只补缺口"（诊断里的 `suggestRerunPort` 因此对这类工程可能给不出改动）。
+
+### 验证证据
+
+| 断言项 | 值 |
+|---|---|
+| 门禁 | 四道闸全绿（`scripts/test.sh -s`），build 0 warning |
+| 单测 | **TOTAL=87，FAILED=0，ERROR=0**（`cjpm test` 实测输出） |
+| 新增用例 | `port_revert_test.cj` 6 例 + `deps_review_test.cj` 4 例，逐条对应上面 Fixed |
+| `cjpm.toml` | 无本机绝对路径（`setup.sh` 检查项；`grep` 实测 0 命中） |
+| 换机器复现 | 本机（Windows）在仓库现有状态下直接四道闸全绿，不需要改任何被跟踪文件 |
+
+---
+
 ## [0.13.0] - 2026-10-30
 
 **主题**：P4 收官 —— T4-7 Agent 兜底闭环（错误指纹库 + 结构化补丁建议 + 六道闸校验器），
@@ -13,7 +108,7 @@
 ### Added
 
 - **`src/port/diagnose.cj`（新）**——T4-7a/b：
-  - **错误指纹库 15 条**（FP-001~015，与 `skills/t2h-ohos-port/references/pitfalls.md` 同源）：
+  - **错误指纹库 13 条**（FP-001~007 + FP-010~015，与 `skills/t2h-ohos-port/references/pitfalls.md` 同源）：
     编译链接期 7 条（napi 缺依赖 / -lgcc_eh / 链接器未配置 / patch 绕过 / wry·tao 未一并 patch /
     版本解析失败 / custom-protocol 白屏）+ 运行部署期 8 条（app_data_dir panic / SIGABRT /
     9568322 签名 / 9568269 安装路径 / 10106102 锁屏 / rawfile 死资源）
@@ -31,7 +126,7 @@
   命中指纹（现象→根因→修法）+ 补丁提案过闸结果 + `suggestRerunPort`；
   **未命中如实返回空**（长尾才走 LLM 对话通道）。④ 屏新增"诊断"入口
   （日志路径 → 渲染"[FP-xxx] 根因 → 修法（重跑预览改造即可修 / 需人工）"）
-- **8 例新单测**（总 82）：指纹库形态、rule 档命中与证据行号、同指纹去重、
+- **8 例新单测**（总 77；0.13.1 校准，原写 82 是误记）：指纹库形态、rule 档命中与证据行号、同指纹去重、
   无命中返回空、补丁提案文件映射与去重、六道闸（白名单/单点/结构/轮次/经济性/正常放行）、
   FailLedger 分指纹计数
 
@@ -49,10 +144,10 @@
 
 | 断言项 | 值 |
 |---|---|
-| 指纹库 | 15 条（rule 7 + guide 8），marker 全部为报错原文稳定子串 |
+| 指纹库 | 13 条（rule 7 + guide 6，FP-001~007 / FP-010~015；0.13.1 校准，原写「15 条」有误），marker 全部为报错原文稳定子串 |
 | 诊断匹配 | FP-001/002 主路径命中 + 证据带日志行号；同指纹去重；无命中返回空 |
 | 六道闸 | 白名单外/禁碰文件/多文件/大段删除/空补丁/超轮次/超失败全部拦截；干净补丁放行 |
-| 门禁 | 四道闸全绿，**82 例单测** |
+| 门禁 | 四道闸全绿，**77 例单测** |
 
 **P4 出口判据达成情况（如实标注）**：判据 2（人工介入 ≤5 有记录）、4（幂等可回滚）已达成并有
 单测与实测证据；判据 1（`cargo check --target ohos` 0 error）、3（规则命中率 ≥60%）**需 P5
@@ -81,7 +176,7 @@
 - **④ 屏 guide 项待确认卡**：guide 行标"待你确认"，行内采纳/忽略按钮；
   已决策显示"人工·已采纳/已忽略"；顶部计数变为"已决策 n，待决策 m"；
   `ui_report` 新增 `portDecided` 字段（服务端白名单同批放行）
-- **5 例新单测**（总 74）：接线插入位置与幂等、无 setup 块 guide、对话框资源形态、
+- **5 例新单测**（总 69；0.13.1 校准，原写 74 是误记）：接线插入位置与幂等、无 setup 块 guide、对话框资源形态、
   不存在目录 outcome
 
 ### 验证证据（habit-tree 迁移前文件实测，Xvfb + `ui_report`）
@@ -124,7 +219,7 @@ confirm/prompt 调用点替换仍 guide（设计边界）；`cargo check --targe
   输出 auto/guide 两计数；④ 屏显示"人工介入 n/5"；`ui_report` 新增 `portAuto/portGuide`
 - **t2h:port apply 扩展**：逐文件备份到 `.lingqu/port/<工程>/`（Cargo.toml / rust-toolchain /
   cargo config / lib.rs / index.html），备份不覆盖（首次为准）
-- **8 例新单测**（总 64）：两套工具链模板、SDK 路径替换、注入块形态、分档计数、
+- **8 例新单测**（总 64，复核无误）：两套工具链模板、SDK 路径替换、注入块形态、分档计数、
   guide 探测（正向 fixture + 迁移后样本应为 false）
 
 ### 验证证据（habit-tree 迁移前文件实测，Xvfb + `ui_report`）
@@ -165,7 +260,7 @@ confirm/prompt 的应用内对话框实现属 P4 第三刀（跟 T4-8 审批卡�
 - **命令 `t2h:port` / `t2h:revert`**（三处联动齐全）；④ 改造执行屏新增规则改造卡
   （预览/应用/回滚三按钮 + 逐条 outcome 表 + `portApplied/portRules/portError` 自检字段，
   服务端白名单同批补放行）
-- **7 例新单测**（总 63）：六条全应用 / 变换内容逐项断言 / 幂等二次跑 /
+- **6 例新单测**（总 56；0.13.1 校准，原写「7 例／总 63」有误）：六条全应用 / 变换内容逐项断言 / 幂等二次跑 /
   已迁移工程逐字节不变 / 非 Tauri 工程跳过钉版 / 行级工具边界
 
 ### Fixed

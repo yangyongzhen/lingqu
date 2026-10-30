@@ -450,7 +450,7 @@ body.ai-hidden .ai-show{display:block}
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="depsMetricsCard">
           <div class="legend" style="margin:0" id="depsLegend">
             <div class="seg"><button class="on" data-f="all">全量 0</button><button data-f="patch">需 patch 0</button><button data-f="no">不可用 0</button></div>
-            <span><i class="dot ok"></i>可用 0</span><span><i class="dot warn"></i>需 patch 0</span><span><i class="dot err"></i>不可用 0</span>
+            <span><i class="dot ok"></i>可用 <b class="lg-n">0</b></span><span><i class="dot warn"></i>需 patch <b class="lg-n">0</b></span><span><i class="dot err"></i>不可用 <b class="lg-n">0</b></span>
             <span class="right" id="depsNote" style="margin-left:auto">待 t2h:deps 扫描</span>
           </div>
         </div>
@@ -494,10 +494,10 @@ body.ai-hidden .ai-show{display:block}
           </table>
         </div>
         <div class="grid4">
-          <div class="stat"><div class="k">自动完成</div><div class="v" style="color:var(--ok)">9</div></div>
-          <div class="stat"><div class="k">待你确认</div><div class="v" style="color:var(--warn)">2</div></div>
-          <div class="stat"><div class="k">人工介入</div><div class="v">3<small>/ 5</small></div></div>
-          <div class="stat"><div class="k">耗时</div><div class="v">6<small>分 12 秒</small></div></div>
+          <div class="stat"><div class="k">自动完成</div><div class="v" style="color:var(--ok)" id="portStatAuto">—</div></div>
+          <div class="stat"><div class="k">待你确认</div><div class="v" style="color:var(--warn)" id="portStatPending">—</div></div>
+          <div class="stat"><div class="k">人工介入</div><div class="v" id="portStatHuman">—<small>/ 5</small></div></div>
+          <div class="stat"><div class="k">耗时</div><div class="v" id="portStatElapsed">—<small>未计时</small></div></div>
         </div>
         <div class="grid2" style="margin-top:13px">
           <div class="card" style="margin-top:0">
@@ -1372,16 +1372,37 @@ withBridge(function(tauri){
     }).join('');
   }
 
+  // C2 面板整体清零（扫描失败/基线未对照时用，防止残留上一轮数字）
+  function clearConfPanels(){
+    ['confBase','confMatched','confMissed','confExtra'].forEach(function(id){
+      var el = $(id);
+      if (el) { el.innerHTML = '—<small>项</small>'; }
+    });
+    if ($('confNote')) { $('confNote').textContent = '未对照基线'; }
+    if ($('confSource')) { $('confSource').innerHTML = ''; }
+    if ($('confLists')) { $('confLists').innerHTML = ''; }
+    window.__conf = null;
+  }
+
   function renderScan(res){
     res = res || {};
     SCAN.res = res;
     var note = $('scanNote');
     if (!res.ok) {
+      // 失败必须**全量清零**：以前只清 __scan/__scanRows，残留的 scanBlockers/scanC2 会
+      // 把「上一轮成功」的数据喂给回投断言（自检假绿）
       window.__scan = { error: res.error || 'scan failed' };
       window.__scanRows = 0;
+      window.__scanBlockers = 0;
+      window.__scanKindRows = '';
+      window.__conf = null;
       $('scoreNote').textContent = '未扫描';
       $('scoreTotal').textContent = '—';
       $('scoreRing').style.setProperty('--v', 0);
+      renderScoreDims({});
+      ['mR','mD','mH','mU'].forEach(function(id){ $(id).innerHTML = '—<small>项</small>'; });
+      $('mC1').textContent = '—'; $('mC2').textContent = '未对照'; $('mC3').textContent = '—';
+      clearConfPanels();
       note.style.color = 'var(--err)';
       note.textContent = '扫描失败：' + (res.error || '未知原因');
       return;
@@ -1406,7 +1427,11 @@ withBridge(function(tauri){
       ? '已扫描维度：' + (s.scannedDims || 'runtime,api')
       : '五维全扫描';
 
-    // 五维条：未扫描（-1）显示「—」且条为空
+    // 五维条：未扫描（-1）显示「—」且条为空；deps 维若先于扫描到手，在这里补上
+    if (typeof window.__depsScore === 'number' && window.__depsScore >= 0
+        && (typeof s.deps !== 'number' || s.deps < 0)) {
+      s.deps = window.__depsScore;
+    }
     renderScoreDims(s);
 
     // 覆盖率指标
@@ -1429,14 +1454,19 @@ withBridge(function(tauri){
       $('confSource').innerHTML = '基线来源：<span class="mono">' + escHtml(cf.source || '（未填写）') + '</span>'
         + '；结论分歧 <b>' + (cf.verdictDiffCount || 0) + '</b> 项（只对照，不影响 C1/C2）。';
       var lines = [];
+      // 后端的 missed/extra/verdictDiff 是**基线里的下标数组**（baseline.cj 的 IntArrayJson），
+      // 直接 map 出来就是「3、7」这种无意义数字——标明是基线序号，别伪装成条目名。
+      var idxList = function(arr){
+        return arr.map(function(v){ return '#' + (Number(v) + 1); }).join('、');
+      };
       if ((cf.missed || []).length) {
-        lines.push('<div class="sethint" style="color:var(--err)">漏识别（基线有、扫描没有）：<span class="mono">' + cf.missed.map(escHtml).join('、') + '</span></div>');
+        lines.push('<div class="sethint" style="color:var(--err)">漏识别（基线有、扫描没有）：<span class="mono">' + idxList(cf.missed) + '</span>（数字=基线序号，见 samples/baselines 文件）</div>');
       }
       if ((cf.extra || []).length) {
-        lines.push('<div class="sethint" style="color:var(--warn)">误识别（扫描有、基线没有，需人看）：<span class="mono">' + cf.extra.map(escHtml).join('、') + '</span></div>');
+        lines.push('<div class="sethint" style="color:var(--warn)">误识别（扫描有、基线没有，需人看）：<span class="mono">' + idxList(cf.extra) + '</span></div>');
       }
       if ((cf.verdictDiff || []).length) {
-        lines.push('<div class="sethint">结论分歧：<span class="mono">' + cf.verdictDiff.map(escHtml).join('；') + '</span></div>');
+        lines.push('<div class="sethint">结论分歧（基线序号）：<span class="mono">' + idxList(cf.verdictDiff) + '</span></div>');
       }
       if (!lines.length) {
         lines.push('<div class="sethint" style="color:var(--ok)">双向 diff 全一致：没有漏识别、没有误识别、结论无分歧。</div>');
@@ -1571,7 +1601,7 @@ withBridge(function(tauri){
     });
     var tb = $('depsRows');
     if (!DEPS.items.length) {
-      tb.innerHTML = '<tr><td colspan="5" class="muted">' + (DEPS.error ? ('扫描失败：' + DEPS.error) : '还没有数据——填工程路径点「扫描依赖」，或置 LINGQU_SCAN_PATH 让探针自动扫。') + '</td></tr>';
+      tb.innerHTML = '<tr><td colspan="5" class="muted">' + (DEPS.error ? ('扫描失败：' + esc(DEPS.error)) : '还没有数据——填工程路径点「扫描依赖」，或置 LINGQU_SCAN_PATH 让探针自动扫。') + '</td></tr>';
       return;
     }
     var html = '';
@@ -1592,13 +1622,22 @@ withBridge(function(tauri){
     DEPS.error = (r && r.error) || d.outError || '';
     window.__deps = {
       total: m.total || 0, patch: m.patch || 0, unavailable: m.unavailable || 0,
-      ok: m.ok || 0, out: DEPS.out, error: DEPS.error, rows: DEPS.items.length
+      ok: m.ok || 0, out: DEPS.out, error: DEPS.error, rows: DEPS.items.length,
+      // score 以前漏了这一个字段，于是 ② 屏的 deps 维永远不亮（"已声明但从未生效"）
+      score: (typeof m.score === 'number') ? m.score : -1
     };
     var seg = document.querySelectorAll('#depsLegend .seg button');
     if (seg.length === 3) {
       seg[0].textContent = '全量 ' + (m.total || 0);
       seg[1].textContent = '需 patch ' + (m.patch || 0);
       seg[2].textContent = '不可用 ' + (m.unavailable || 0);
+    }
+    // 静态图例（可用/需 patch/不可用 n）也要跟着数据走
+    var lg = document.querySelectorAll('#depsLegend .legend .lg-n');
+    if (lg.length === 3) {
+      lg[0].textContent = String(m.ok || 0);
+      lg[1].textContent = String(m.patch || 0);
+      lg[2].textContent = String(m.unavailable || 0);
     }
     var note = $('depsNote');
     if (DEPS.error) {
@@ -1608,10 +1647,12 @@ withBridge(function(tauri){
       note.style.color = '';
       note.textContent = '已落档 ' + (DEPS.out || '（未落档）');
       // 依赖维评分到手就把 ② 屏的 deps 维条点亮（原来是 -1 显示「—」）
-      if (typeof window.__deps.score === 'number' && window.__deps.score >= 0) {
-        var s = window.__scan || {};
-        if (typeof s.deps !== 'number' || s.deps < 0) { s.deps = window.__deps.score; }
-        renderScoreDims(s);
+      if (window.__deps.score >= 0) {
+        window.__depsScore = window.__deps.score;
+        if (window.__scan && typeof window.__scan === 'object') {
+          window.__scan.deps = window.__deps.score;
+          renderScoreDims(window.__scan);
+        }
       }
     }
     renderDepsRows();
@@ -1641,39 +1682,90 @@ withBridge(function(tauri){
 
   /* ===== ④ 改造执行：t2h:port 真数据（Cargo.toml 6 + 工具链 2 + lib.rs 2 + 前端 4）===== */
   var PORT_DECISIONS = {}; // rule → accepted|ignored（来自 t2h:decisions list）
-  function loadDecisions(p){
+  function loadDecisions(p, done){
     invoke('t2h:decisions', { path: p, action: 'list' }).then(function(r){
       PORT_DECISIONS = {};
+      if (r && r.ok === false) {
+        // 记录文件损坏/读失败要显式提示，不能静默当成"从没决策过"
+        $('portNote').style.color = 'var(--err)';
+        $('portNote').textContent = '读决策记录失败：' + (r.error || '未知原因');
+      }
       ((r && r.items) || []).forEach(function(it){
         if (it && it.rule) { PORT_DECISIONS[it.rule] = { decision: it.decision, note: it.note || '' }; }
       });
       if (window.__port) renderPort({ rules: window.__port.rulesRaw || [], counters: { auto: window.__port.auto, guide: window.__port.guide }, applied: window.__port.applied, idempotent: window.__port.idempotent, toml: window.__port.toml, decisions: PORT_DECISIONS });
-    }).catch(function(){});
+      if (typeof done === 'function') { done(); }
+    }).catch(function(e){
+      $('portNote').style.color = 'var(--err)';
+      $('portNote').textContent = '读决策记录失败：' + (e && e.message ? e.message : e);
+      if (typeof done === 'function') { done(); }
+    });
   }
   function recordDecision(rule, decision){
+    // 路径优先取输入框；探针/自动流程没填时传空串下去——后端会回落到 LINGQU_SCAN_PATH
+    // （以前这里 `if (!p) return;` 直接静默放弃，探针流程下按钮是死的）
     var p = ($('portPath').value || '').trim();
-    if (!p) return;
-    invoke('t2h:decisions', { path: p, action: 'record', rule: rule, decision: decision }).then(function(r){
-      PORT_DECISIONS[rule] = { decision: decision, note: '' };
+    var n0 = $('portNote');
+    if (!p && !window.__probePath) {
+      n0.style.color = 'var(--err)';
+      n0.textContent = '请先填 Tauri 工程路径（或置 LINGQU_SCAN_PATH）再记录决策。';
+      return;
+    }
+    var target = p || window.__probePath || '';
+    invoke('t2h:decisions', { path: target, action: 'record', rule: rule, decision: decision }).then(function(r){
+      // 写盘失败不能乐观置「已采纳」——决策台账是 A3 的审计凭证，界面必须与落盘一致
+      if (!r || r.ok === false || r.outError) {
+        n0.style.color = 'var(--err)';
+        n0.textContent = '记录决策失败：' + ((r && (r.error || r.outError)) || '未知原因');
+        return;
+      }
+      // 用后端返回的最新列表刷新本地状态（后端 record 会返回新表）
+      PORT_DECISIONS = {};
+      ((r.items) || []).forEach(function(it){
+        if (it && it.rule) { PORT_DECISIONS[it.rule] = { decision: it.decision, note: it.note || '' }; }
+      });
+      if (!PORT_DECISIONS[rule]) { PORT_DECISIONS[rule] = { decision: decision, note: '' }; }
       renderPort({ rules: (window.__port && window.__port.rulesRaw) || [], counters: { auto: window.__port.auto, guide: window.__port.guide }, applied: window.__port.applied, idempotent: window.__port.idempotent, toml: window.__port.toml, decisions: PORT_DECISIONS });
       reportUi('port-decision-' + decision);
     }).catch(function(e){
-      $('portNote').style.color = 'var(--err)';
-      $('portNote').textContent = '记录决策失败：' + (e && e.message ? e.message : e);
+      n0.style.color = 'var(--err)';
+      n0.textContent = '记录决策失败：' + (e && e.message ? e.message : e);
     });
   }
   function renderPort(r){
     var rules = (r && r.rules) || [];
+    // 失败返回（ok:false）时不能回退到上一工程的旧规则表——否则红字错误与旧表格同屏
+    var failed = !!(r && (r.outError || r.error));
     if (r && r.rules) { window.__portRulesRaw = rules; }
-    rules = rules.length ? rules : (window.__portRulesRaw || []);
+    if (failed) { window.__portRulesRaw = []; rules = []; }
+    else { rules = rules.length ? rules : (window.__portRulesRaw || []); }
     var decisions = (r && r.decisions) || PORT_DECISIONS;
     var tb = $('portRows');
     $('portApplied').textContent = (r && r.applied !== undefined) ? String(r.applied) : '—';
     $('portIdem').textContent = r && r.idempotent ? '是（再跑一遍 applied=0）' : '—';
     var c = (r && r.counters) || {};
+    // guide 项 = needsHuman（0.13.1 起后端显式给这个字段）；
+    // 老后端没有该字段时按 tier==='guide' && applied 兜底，两版都能显示
+    var isHuman = function(it){ return (it.needsHuman === true) || (it.needsHuman === undefined && it.tier === 'guide' && it.applied); };
     var guidePending = 0;
-    rules.forEach(function(it){ if (it.tier === 'guide' && it.applied && !(decisions[it.id])) guidePending++; });
-    $('portHuman').textContent = String(c.guide || 0) + '（已决策 ' + Object.keys(decisions).length + '，待决策 ' + guidePending + '）';
+    var guideTotal = 0;
+    rules.forEach(function(it){
+      if (isHuman(it)) {
+        guideTotal++;
+        if (!(decisions[it.id])) guidePending++;
+      }
+    });
+    $('portHuman').textContent = String(c.guide || guideTotal) + '（已决策 ' + Object.keys(decisions).length + '，待决策 ' + guidePending + '）';
+    // 顶部四张 stat 卡以前是写死的 9 / 2 / 3 / 6分12秒——与下方真数据同屏矛盾（0.13.1 修）
+    if ($('portStatAuto')) { $('portStatAuto').textContent = String(c.auto || 0); }
+    if ($('portStatPending')) { $('portStatPending').textContent = String(guidePending); }
+    if ($('portStatHuman')) { $('portStatHuman').innerHTML = String(c.guide || guideTotal) + '<small>/ 5</small>'; }
+    if ($('portStatElapsed')) {
+      var ms = (r && typeof r.elapsedMs === 'number') ? r.elapsedMs : null;
+      $('portStatElapsed').innerHTML = (ms === null)
+        ? '—<small>未计时</small>'
+        : (ms < 1000 ? String(ms) + '<small>毫秒</small>' : String(Math.round(ms / 1000)) + '<small>秒</small>');
+    }
     var note = $('portNote');
     if (r && r.outError) {
       note.style.color = 'var(--err)';
@@ -1692,7 +1784,7 @@ withBridge(function(tauri){
     rules.forEach(function(it){
       var pill, extra = '';
       var dec = decisions[it.id];
-      if (it.tier === 'guide' && it.applied) {
+      if (isHuman(it)) {
         if (dec && dec.decision === 'accepted') {
           pill = '<span class="pill warn">人工·已采纳</span>';
         } else if (dec && dec.decision === 'ignored') {
@@ -1755,8 +1847,10 @@ withBridge(function(tauri){
     $('portNote').textContent = apply ? '应用中：' + p : '预览中：' + p;
     invoke('t2h:port', { path: p, apply: apply }).then(function(r){
       renderPort(r || {});
-      loadDecisions(p);
-      reportUi(apply ? 'port-applied' : 'port-preview');
+      // 先读完决策再回投：以前 reportUi 在前，portDecided 发的是加载前的旧值
+      loadDecisions(p, function(){
+        reportUi(apply ? 'port-applied' : 'port-preview');
+      });
     }).catch(function(e){
       renderPort({ error: e && e.message ? e.message : 'invoke error' });
       reportUi('port-error');
@@ -1769,8 +1863,18 @@ withBridge(function(tauri){
     if (!p) { $('portNote').textContent = '请先填 Tauri 工程路径。'; return; }
     invoke('t2h:revert', { path: p }).then(function(r){
       renderPort({ rules: [], applied: 0 });
+      if (!r || r.ok === false) {
+        $('portNote').style.color = 'var(--err)';
+        $('portNote').textContent = '回滚失败：' + ((r && r.error) || '未知原因');
+        reportUi('port-revert-error');
+        return;
+      }
+      // 0.13.1：restored 是逐文件数组，removed 是清掉的前端资源
+      var list = (r.restored || []).join('、');
       $('portNote').style.color = 'var(--ok)';
-      $('portNote').textContent = '已回滚：' + (r.restored || '') + ' ← ' + (r.from || '');
+      $('portNote').textContent = '已回滚 ' + ((r.restored || []).length) + ' 个文件：' + list
+        + (((r.removed || []).length) ? ('；已删除生成资源 ' + r.removed.join('、')) : '')
+        + ((r.legacy) ? '（旧版单文件备份，仅回滚了 Cargo.toml）' : '');
       reportUi('port-reverted');
     }).catch(function(e){
       $('portNote').style.color = 'var(--err)';
@@ -1781,8 +1885,10 @@ withBridge(function(tauri){
 
   /* ===== 扫描探针：给了路径就立刻跑一次 t2h:scan 并渲染，把指标回投自检 ===== */
   function runScanProbe(path){
+    window.__probePath = path;   // ④ 屏决策按钮在探针流程下也要能用（recordDecision 会回落到它）
     $('scanPath').value = path;
     $('depsPath').value = path;
+    $('portPath').value = path;  // 以前漏填这一格 → 探针流程里点「采纳/忽略」是死按钮
     // 依赖矩阵与画像共用一次探针：同一路径 t2h:scan + t2h:deps 各跑一次，
     // deps 的指标（total/patch/unavailable/rows）单独回投，可独立断言
     invoke('t2h:deps', { path: path }).then(function(r){
@@ -1797,7 +1903,11 @@ withBridge(function(tauri){
     // portApplied 等 ④ 屏指标单独回投，可独立断言
     invoke('t2h:port', { path: path, apply: false }).then(function(r){
       renderPort(r || {});
-      reportUi('port-done');
+      // 探针也要把既有决策读回来，否则已经决策过的项仍显示「待你确认」，
+      // portDecided 回投恒 0（假红）
+      loadDecisions(path, function(){
+        reportUi('port-done');
+      });
     }).catch(function(e){
       renderPort({ error: e && e.message ? e.message : 'invoke error' });
       reportUi('port-error');
@@ -1872,7 +1982,10 @@ withBridge(function(tauri){
       portGuide: (window.__port && window.__port.guide) || 0,
       portDecided: Object.keys(PORT_DECISIONS).length || 0,
       portError: (window.__port && window.__port.error) || '',
-      errorCount: window.__uiErrors.length
+      errorCount: window.__uiErrors.length,
+      // tag / ts 让落盘序列可判定（以前 tag 只进 console.log，快照之间无法区分）
+      tag: String(tag || ''),
+      ts: Date.now()
     }).catch(function(){});
     if (tag) { console.log('[ui-report] ' + tag); }
   }

@@ -145,6 +145,7 @@ public func frontendGuideOutcomes(srcDir: String): ArrayList<RuleOutcome> {
         o12.note = "前端未发现原生 confirm/prompt 调用——无需处置"
     } else {
         o12.applied = true
+        o12.needsHuman = true
         o12.before = joinLines(jsHits)
         o12.after = "方案：加 Promise 化 confirmDialog/promptDialog（应用内对话框）后逐调用点替换——参考 habit-tree src/ui.ts openDialog"
         o12.note = "原生 confirm/prompt 在 ArkWeb 静默失效（未接 onJsConfirm/onJsPrompt 回调）"
@@ -159,6 +160,7 @@ public func frontendGuideOutcomes(srcDir: String): ArrayList<RuleOutcome> {
         o13.note = "前端未发现 <input type=\"color\">——无需处置"
     } else {
         o13.applied = true
+        o13.needsHuman = true
         o13.before = joinLines(colorHits)
         o13.after = "方案：换应用内色板对话框（预设色板 + hex 输入）；display:none 隐藏无效，必须 remove()——参考 habit-tree src/ui.ts getColorDialog"
         o13.note = "ArkWeb 不支持原生取色器（点击无反应，应用市场审核实测）"

@@ -43,6 +43,16 @@ public class RuleOutcome {
     public var before: String
     public var after: String
     public var tier: String
+    /**
+     * 这一条是否**需要人拍一次板**（A3 人工介入的计数口径）。
+     *
+     * 与 `applied` 的分工（0.13.1 明确，此前混着用导致 A3 少算）：
+     *   applied    = 规则是否已经动手（文件改过了 / 模板已生成）
+     *   needsHuman = 这一条必须人来确认（guide 档：SDK 路径待填、confirm 调用点待改…）
+     * 二者可以同时为真（012/013 探测到调用点并给了方案 = 已产出 + 待人改），
+     * 也可以 applied=false + needsHuman=true（008 未设 NATIVE_OHOS_SDK：不写坏文件，但必须人来填）。
+     */
+    public var needsHuman: Bool = false
 
     public init(id: String, applied: Bool, note: String, before: String, after: String) {
         this.id = id
@@ -61,6 +71,7 @@ public class RuleOutcome {
         o.put("before", JsonString(this.before))
         o.put("after", JsonString(this.after))
         o.put("tier", JsonString(this.tier))
+        o.put("needsHuman", JsonBool(this.needsHuman))
         return o
     }
 }
@@ -80,11 +91,11 @@ public class PortResult {
         return n
     }
 
-    /** T4-8 人工介入口径：本轮回合里 guide 档（留人工决策）的条数 */
+    /** T4-8 人工介入口径：本轮回合里**需要人拍板**的条数（guide 档 → A3 计数） */
     public func humanCount(): Int64 {
         var n: Int64 = 0
         for (o in this.outcomes) {
-            if (o.tier == T_GUIDE && o.applied) {
+            if (o.needsHuman) {
                 n += 1
             }
         }
@@ -115,8 +126,7 @@ public class PortResult {
         o.put("auto", JsonInt(this.autoCount()))
         o.put("guide", JsonInt(this.humanCount()))
         return o
-    }
-}
+    }}
 
 // ===== 行级工具（不引 regex 的字面量操作）=====
 
@@ -245,6 +255,14 @@ func ruleCdylib(lines: ArrayList<String>, out: RuleOutcome): ArrayList<String> {
 /**
  * R2-PORT-002：tauri 版本钉 =2.11.5 + features 补 custom-protocol / protocol-asset。
  * 只认 [dependencies] 段里 `tauri = ` 开头的行；features 原样保留并合并。
+ *
+ * 0.13.1 修（原实现会把工程改坏/改跑偏的两处）：
+ *   ① 以前一律重写成 `{ version = "=2.11.5", features = [...] }`，顺带**丢掉**
+ *      原有的 default-features / optional / 其它键——那是静默改行为；
+ *      现在把不认识的键原样搬过去。
+ *   ② 多行 features（`features = [\n "a",\n "b"\n]`）以前只匹配到本行、拿不到 `]`，
+ *      会把用户 features 全部丢掉但留下续行 → **Cargo.toml 直接语法错误**。
+ *      现在识别为多行形态，如实跳过并转 guide（不猜、不破坏）。
  */
 func ruleTauriPin(lines: ArrayList<String>, out: RuleOutcome): ArrayList<String> {
     let depIdx = sectionIndex(lines, "[dependencies]")
@@ -261,10 +279,17 @@ func ruleTauriPin(lines: ArrayList<String>, out: RuleOutcome): ArrayList<String>
                 out.note = "tauri 已钉 =2.11.5——跳过"
                 return lines
             }
+            // 多行 features：本行有 `[` 但没有 `]` → 不碰（机械改会留下续行变语法错误）
+            let openBr = indexOfOr(t, "[")
+            if (openBr >= 0 && indexOfOr(t[openBr..], "]") < 0) {
+                out.tier = T_GUIDE
+                out.note = "tauri 的 features 是多行数组——机械合并会改坏结构，留人工（模板见 after）"
+                out.after = "tauri = { version = \"=2.11.5\", features = [原有 features… , \"custom-protocol\", \"protocol-asset\"] }"
+                return lines
+            }
             // 拆 features
             var feats = ""
-            let fi = indexOfOr(t, "features")
-            if (fi >= 0) {
+            if (indexOfOr(t, "features") >= 0) {
                 feats = featuresInnerOf(t)
             }
             // 合并必需 features（已有就不重复）
@@ -294,8 +319,14 @@ func ruleTauriPin(lines: ArrayList<String>, out: RuleOutcome): ArrayList<String>
                 }
                 joined += farr[j]
             }
+            // 保留原行里除 version / features 之外的键（default-features、optional、target…）
+            let extra = otherKeysOf(t, ["version", "features"])
             let indent = leadingIndentOf(lines[i])
-            let newline = "${indent}tauri = { version = \"=2.11.5\", features = [${joined}] }"
+            var newline = "${indent}tauri = { version = \"=2.11.5\", features = [${joined}]"
+            if (extra != "") {
+                newline += ", ${extra}"
+            }
+            newline += " }"
             out.applied = true
             out.before = lines[i]
             out.after = "${indent}# 版本钉 =2.11.5：patch 按精确版本替换（^2.11 会绕过 patch，见 lingqu R2-PORT-002）\n${newline}"
@@ -311,6 +342,72 @@ func ruleTauriPin(lines: ArrayList<String>, out: RuleOutcome): ArrayList<String>
     }
     out.note = "[dependencies] 里没有 tauri——跳过（非 Tauri 工程？）"
     return lines
+}
+
+/**
+ * 取 `{ a = 1, b = "x", c = [...] }` 里除 excludedKeys 之外的键值对原文（用 ", " 连接）。
+ * 用于「保留用户原有配置」——不认识的键原样搬走，比丢掉强（丢掉是静默改行为）。
+ * 只做一层花括号内的逗号切分；嵌套 `{}`/`[]` 内部不切（够本项目用，且不引入 regex）。
+ */
+public func otherKeysOf(line: String, excludedKeys: Array<String>): String {
+    let openBr = indexOfOr(line, "{")
+    if (openBr < 0) {
+        return ""
+    }
+    let closeBr = indexOfOr(line[openBr..], "}")
+    if (closeBr < 0) {
+        return ""
+    }
+    let inner = line[(openBr + 1)..(openBr + closeBr)]
+    // 按顶层逗号切（跳过 [] 与 {} 内部）；按字节走（本库 String 下标返回字节，见 leadingIndentOf）
+    let bytes = inner.toArray()
+    let segs = ArrayList<String>()
+    var depth: Int64 = 0
+    var start: Int64 = 0
+    var i: Int64 = 0
+    while (i < bytes.size) {
+        let ch = bytes[i]
+        if (ch == 91 || ch == 123) {
+            depth += 1
+        } else if (ch == 93 || ch == 125) {
+            depth -= 1
+        } else if (ch == 44 && depth == 0) {
+            segs.add(inner[start..i])
+            start = i + 1
+        }
+        i += 1
+    }
+    segs.add(inner[start..])
+    var kept = ArrayList<String>()
+    for (seg in segs) {
+        let s = seg.trimAscii()
+        if (s == "") {
+            continue
+        }
+        let eq = indexOfOr(s, "=")
+        if (eq <= 0) {
+            continue
+        }
+        let k = s[0..eq].trimAscii()
+        var isExcluded = false
+        for (e in excludedKeys) {
+            if (k == e) {
+                isExcluded = true
+                break
+            }
+        }
+        if (!isExcluded) {
+            kept.add(s)
+        }
+    }
+    var joined = ""
+    for (j in 0..kept.size) {
+        if (j > 0) {
+            joined += ", "
+        }
+        joined += kept[j]
+    }
+    return joined
 }
 
 /**
@@ -586,4 +683,55 @@ public func applyCargoTomlRules(text: String): PortResult {
 public func isIdempotent(res: PortResult): Bool {
     let second = applyCargoTomlRules(res.afterText)
     return second.appliedCount() == 0
+}
+
+// ===== T4-6 的另一半：回滚单元映射 =====
+//
+// 0.11.0 把 apply 的备份从「单文件 `<工程>-Cargo.toml.bak`」改成「逐文件
+// `.lingqu/port/<工程>/<文件名>.bak`」，但 t2h:revert 没跟着改——它还在找旧路径，
+// 于是**回滚从 0.11.0 起一直是坏的**（报"没有备份可回滚"），且即使找到也只回滚
+// Cargo.toml，其余 4 个被改文件留在原地。这里把「备份文件名 ↔ 工程内目标路径」
+// 的映射抽成纯函数，命令层只做 IO，映射本身可单测（D-009）。
+
+/** apply 写出的备份文件名（与 PortCommand 的落盘分支一一对应） */
+public let BAK_CARGO = "Cargo.toml.bak"
+public let BAK_TOOLCHAIN = "rust-toolchain.toml.bak"
+public let BAK_CARGO_CONFIG = "cargo-config.toml.bak"
+public let BAK_LIBRS = "lib.rs.bak"
+public let BAK_INDEX = "index.html.bak"
+
+/** 一个回滚单元：备份文件名 + 工程内相对目标路径（空串 = 由命令层按工程结构解析） */
+public class RevertPair {
+    public var backupFile: String
+    public var relTarget: String
+
+    public init(backupFile: String, relTarget: String) {
+        this.backupFile = backupFile
+        this.relTarget = relTarget
+    }
+}
+
+/** apply 的备份目录（0.11.0 起的形态） */
+public func backupDirOf(safeName: String): String {
+    return ".lingqu/port/${safeName}"
+}
+
+/** 旧版（<=0.10.0）的单文件备份路径——revert 兼容它，避免升级后旧备份变孤儿 */
+public func legacyCargoBakOf(safeName: String): String {
+    return ".lingqu/port/${safeName}-Cargo.toml.bak"
+}
+
+/**
+ * 回滚单元全表（顺序即回滚顺序：Cargo.toml 最后写，先回滚依赖链再回滚配置）。
+ * Cargo.toml 的 relTarget 为空串——它可能在 src-tauri/ 也可能在工程根，命令层用
+ * cargoTomlPathOf 解析后再回滚，不在这里猜。
+ */
+public func revertPairs(): ArrayList<RevertPair> {
+    let out = ArrayList<RevertPair>()
+    out.add(RevertPair(BAK_TOOLCHAIN, "src-tauri/rust-toolchain.toml"))
+    out.add(RevertPair(BAK_CARGO_CONFIG, "src-tauri/.cargo/config.toml"))
+    out.add(RevertPair(BAK_LIBRS, "src-tauri/src/lib.rs"))
+    out.add(RevertPair(BAK_INDEX, "index.html"))
+    out.add(RevertPair(BAK_CARGO, ""))
+    return out
 }

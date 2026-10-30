@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.13.0**（2026-10-30），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.13.1**（2026-10-30），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -145,6 +145,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 29 | `JsonArray.size` 当成属性用 → `invalid binary operator '<' on type 'Int64' and '() -> Int64'` | `stdx.encoding.json` 的 `JsonArray.size` 是**方法**：写 `arr.size()`；而 `ArrayList` 的 `size` 是属性（`list.size`）。两者不一样 |
 | 30 | Linux 上应用加载完 capability 清单后**静默退出**（无 GTK 报错） | `$DISPLAY` 可能是死的 X 转发会话（`xdpyinfo` 打不开）。无头/受限机器用 `xvfb-run -a -s "-screen 0 1600x900x24"` 跑，不要信 `$DISPLAY` 的存在 |
 | 31 | Linux 手跑桌面产物报 `error while loading shared libraries`（先 `libstdx.encoding.json.so` 再 `libcjtbridge.so`） | 手跑要补运行库：`LD_LIBRARY_PATH=$CJ_TAURI_ROOT/native:$CANGJIE_STDX:$CANGJIE_HOME/runtime/lib/linux_x86_64_cjnative`。`run-dev.sh`/`test.sh` 内部已处理，直跑产物时容易漏 |
+| 32 | 换机器后第一道闸直接红：`the path '/root/test/cj/cj-tauri' of module 'cjTauri' does not exist` | **本机绝对路径被提交进仓**。`cjpm.toml` 是跟踪文件，谁跑过会改文件的脚本谁的本机路径就进 commit → `cjpm.toml` 一律用 `${CJ_TAURI_ROOT}`（cjpm 对 `dependencies.path` 与 `target.*.link-option` **两处都展开**，2026-10-30 实测）；`setup.sh` 只做体检不改文件 |
+| 33 | 改了「落盘路径/文件名」但回滚或消费方没跟着改（例：0.11.0 把备份改成逐文件，`t2h:revert` 仍找旧单文件路径 → 回滚永远报"没有备份"） | 路径/文件名**收成常量并由产出方与消费方共用**（本项目是 `port.cj` 的 `BAK_*` + `revertPairs()`），并给映射本身写纯函数单测。**只改一处 = 静默破坏另一条链路**，且命令层没有单测会替你发现 |
 
 ---
 
@@ -207,8 +209,8 @@ python scripts/search_docs.py --query "string 切片" --domain language --view l
 > 本项目已靠它避开三个坑：`quote` 是关键字、`HashMap` 用 `add` 不是 `put`、只有零参 `trimAscii()`
 > （§4 第 20–22 条）。**这三条都是「按别的语言的习惯写」写出来的错，查一下就不会犯。**
 
-上游框架仓（**只记远程地址，不记本机路径**——换环境时 clone 到任意目录，再由 `./scripts/setup.sh` 把
-`cjpm.toml` 里的 path 依赖与 `-L<native>` 对齐；改这些仓之前先看它们自己的 AGENTS.md）：
+上游框架仓（**只记远程地址，不记本机路径**——换环境时 clone 到任意目录并 `export CJ_TAURI_ROOT=<它>`
+即可，`cjpm.toml` 里写的就是 `${CJ_TAURI_ROOT}`（0.13.1 起）；改这些仓之前先看它们自己的 AGENTS.md）：
 
 | 仓 | 远程地址 | 说明 |
 |---|---|---|
@@ -241,6 +243,6 @@ feat/0.3.0 patch 都是这条路的实证）。
 ```bash
 git clone https://atomgit.com/qq8864/cj-tauri.git
 git clone https://atomgit.com/qq8864/cjh.git
-CJ_TAURI_ROOT=<你 clone 的 cj-tauri 目录> ./scripts/setup.sh   # 对齐 cjpm.toml 的本机绝对路径
+CJ_TAURI_ROOT=<你 clone 的 cj-tauri 目录> ./scripts/setup.sh   # 环境体检（只校验，不改任何文件）
 ```
 

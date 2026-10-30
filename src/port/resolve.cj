@@ -44,9 +44,20 @@ public func setupWiringOutcome(path: String): RuleOutcome {
         o.note = "setup 已接线 install_panic_hook——跳过"
         return o
     }
+    // 前置条件：009 必须已经把函数定义注入进去了。否则在这里插调用会得到
+    // `cannot find function install_panic_hook` —— 工具把用户工程改坏，比不改更糟。
+    if (!text.contains("fn install_panic_hook(")) {
+        o.tier = T_GUIDE
+        o.applied = false
+        o.needsHuman = true
+        o.note = "未找到 install_panic_hook 函数定义（R2-PORT-009 未落地）——接线留人工（模板见 after）"
+        o.after = joinLines(setupWiringLines())
+        return o
+    }
     if (!text.contains(".setup(|app| {") && !text.contains(".setup(|app|{")) {
         o.tier = T_GUIDE
         o.applied = false
+        o.needsHuman = true
         o.note = "未找到 .setup(|app| { 块——接线位置留人工（模板见 after）"
         o.after = joinLines(setupWiringLines())
         return o
