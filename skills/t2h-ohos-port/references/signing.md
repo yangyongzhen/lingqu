@@ -71,6 +71,11 @@ D:\oh\DevEcoStudio\sdk\default\openharmony\toolchains\hdc.exe shell bm get --udi
 两个都对上 → 这套材料可以直接签，**不用登录**。对不上（换了设备）→ 只能走路径 C 或在 DevEco 里
 重新"自动签名"一次（那一步要账号，把新设备注册进 profile）。
 
+> **省事版**：灵渠迁移台把这一节整个做成了命令 —— `t2h:sign`（置 `LINGQU_SIGN_PATH=<工程>` 起 GUI，
+> 或点 ⑤ 屏「签名体检」）。它做四件事并落档 `.lingqu/sign/<工程>.{json,log}`：取 UDID → 解析工程
+> `build-profile.json5` 的 `signingConfigs` → 扫 `~/.ohos/config` 全部 `.p7b`（优先挑包名也对得上的）→
+> 给「装得上吗 + 要动什么」。**纯离线、免账号**。判定实现见 `src/compiler/sign.cj`。
+
 ### 3.3 配方（全程命令行，6 步）
 
 ```powershell

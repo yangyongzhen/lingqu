@@ -561,6 +561,7 @@ body.ai-hidden .ai-show{display:block}
           <button class="btn primary" id="btnBuild">交叉编译（OHOS）</button>
           <button class="btn" id="btnVerifyAssets" title="不重编，只比对 .so 内嵌的前端产物与 dist/">校验前端指纹</button>
           <button class="btn primary" id="btnHap" title="跑 hvigor assembleHap 并做死资源校验">装配 HAP</button>
+          <button class="btn" id="btnSign" title="查本机 UDID + 工程签名配置 + ~/.ohos/config 材料，判定能不能直装">签名体检</button>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="buildCard">
           <div class="legend" style="margin:0 0 6px">
@@ -585,6 +586,17 @@ body.ai-hidden .ai-show{display:block}
             <span>HAP 闸：<b id="hapGate">—</b></span>
           </div>
           <div class="sethint" id="hapNote">装配前会先补 `ohpm install --all`；未配签名配置时产出的是 debug/unsigned HAP（真机安装见 T5-5）。</div>
+        </div>
+        <div class="card" style="margin-bottom:12px;padding:10px 14px" id="signCard">
+          <div class="legend" style="margin:0 0 6px">
+            <span>本机 UDID：<b id="signUdid" class="mono">—</b></span>
+            <span>工程签名配置：<b id="signConfig">—</b></span>
+            <span>材料文件：<b id="signFiles">—</b></span>
+            <span>profile 类型：<b id="signType">—</b></span>
+            <span>含本机 UDID：<b id="signDevice">—</b></span>
+            <span>本机候选材料：<b id="signCand">—</b></span>
+          </div>
+          <div class="sethint" id="signNote">「签名体检」不需要华为账号、不联网：读 `hdc shell bm get --udid` + 工程 build-profile.json5 + `~/.ohos/config` 里的 .p7b，判定装得上还是会被 9568322 拒。</div>
         </div>
         <div class="card">
           <div class="card-h"><h3>流水线</h3><span class="right">占位示意</span></div>
@@ -791,15 +803,19 @@ window.onerror = function(msg, src, line){
 };
 
 /* ---------- 左栏切屏 ---------- */
+function switchScreen(name){
+  document.querySelectorAll('.step').forEach(function(x){
+    x.classList.toggle('active', x.getAttribute('data-s') === name);
+  });
+  document.querySelectorAll('.screen').forEach(function(s){
+    s.classList.toggle('on', s.getAttribute('data-screen') === name);
+  });
+  var w = document.querySelector('.work');
+  if (w) { w.scrollTop = 0; }
+}
 document.querySelectorAll('.step').forEach(function(b){
   b.addEventListener('click', function(){
-    document.querySelectorAll('.step').forEach(function(x){ x.classList.remove('active'); });
-    b.classList.add('active');
-    var name = b.getAttribute('data-s');
-    document.querySelectorAll('.screen').forEach(function(s){
-      s.classList.toggle('on', s.getAttribute('data-screen') === name);
-    });
-    document.querySelector('.work').scrollTop = 0;
+    switchScreen(b.getAttribute('data-s'));
   });
 });
 
@@ -892,6 +908,16 @@ withBridge(function(tauri){
       if (d && d.hapPath) {
         $('buildPath').value = String(d.hapPath);
         runHap(String(d.hapPath));
+      }
+      // 签名体检探针（T5-5）：LINGQU_SIGN_PATH 显式设置时才跑（秒级，不需要账号）
+      if (d && d.signPath) {
+        runSign(String(d.signPath));
+      }
+      // 指定初始屏（LINGQU_UI_SCREEN=build 之类）：给「截某屏的版面证据」一个可复现入口，
+      // 不必靠人手动点左栏（无视觉环境也能落到 ui-report 的 activeScreen 上）
+      if (d && d.uiScreen) {
+        switchScreen(String(d.uiScreen));
+        setTimeout(function(){ reportUi('screen-' + String(d.uiScreen)); }, 600);
       }
     }).catch(function(e){
       $('envList').innerHTML = '<div class="pill err">体检失败：' + esc(e.message) + '</div>';
@@ -2168,8 +2194,60 @@ withBridge(function(tauri){
     runHap(p);
   });
 
-  $('btnVerifyAssets').addEventListener('click', function(){
-    var p = ($('buildPath').value || '').trim();
+  /* ===== ⑤ 屏 签名体检（T5-5）：UDID + 工程 signingConfigs + ~/.ohos/config 材料 =====
+   * 真机实测的痛点：hvigor 有没有产出 signed.hap 跟"装不装得上"完全无关，
+   * 判据是 profile 的 device-ids 里有没有本机 UDID。这条判定可以离线做（不需要账号）。 */
+  var SIGN = { ok: false, hasUdid: false, hasConfig: false, filesExist: false,
+               allowsDevice: false, type: '', candCount: 0 };
+  function renderSign(r){
+    r = r || {};
+    SIGN = {
+      ok: r.ok === true,
+      hasUdid: !!r.udid,
+      hasConfig: r.hasConfig === true,
+      filesExist: r.filesExist === true,
+      allowsDevice: r.allowsDevice === true,
+      type: String(r.profileType || ''),
+      candCount: (typeof r.candidateCount === 'number') ? r.candidateCount : 0
+    };
+    $('signUdid').textContent = r.udid ? String(r.udid).slice(0, 12) + '…' : '—';
+    $('signUdid').title = String(r.udid || '拿不到（设备没连？）');
+    $('signUdid').style.color = r.udid ? 'var(--ok)' : 'var(--err)';
+    $('signConfig').textContent = r.hasConfig ? ('已配（' + (r.signingName || 'default') + '）') : '未配';
+    $('signConfig').style.color = r.hasConfig ? 'var(--ok)' : 'var(--warn)';
+    $('signFiles').textContent = r.hasConfig ? (r.filesExist ? '齐全' : '缺文件') : '—';
+    $('signFiles').style.color = r.filesExist ? 'var(--ok)' : 'var(--err)';
+    $('signType').textContent = r.profileType ? String(r.profileType) : '—';
+    $('signType').style.color = (r.profileType === 'debug') ? 'var(--ok)' : 'var(--warn)';
+    $('signDevice').textContent = r.allowsDevice ? '是' : '否';
+    $('signDevice').style.color = r.allowsDevice ? 'var(--ok)' : 'var(--err)';
+    $('signCand').textContent = SIGN.candCount > 0
+      ? (SIGN.candCount + ' 份（可用：' + (r.candidatePath ? '有' : '无') + '）')
+      : '0 份（先跑一次 DevEco 自动签名）';
+    $('signCand').style.color = SIGN.candCount > 0 ? '' : 'var(--warn)';
+    var note = $('signNote');
+    note.style.color = SIGN.ok ? 'var(--ok)' : 'var(--err)';
+    note.textContent = (r.reason || r.error || '尚未体检。') + (r.nextStep ? ('　下一步：' + r.nextStep) : '');
+    if (r.error) { note.textContent = String(r.error).split('\n')[0]; }
+  }
+  function runSign(path){
+    var note = $('signNote');
+    note.style.color = 'var(--warn)';
+    note.textContent = '体检中（hdc 取 UDID + 解析 signingConfigs + 扫 ~/.ohos/config）…';
+    $('btnSign').disabled = true;
+    invoke('t2h:sign', { path: path || '' }).then(function(r){
+      renderSign(r || {});
+      reportUi('sign-done');
+    }).catch(function(e){
+      renderSign({ ok: false, error: e && e.message ? e.message : 'invoke error' });
+      reportUi('sign-error');
+    }).then(function(){ $('btnSign').disabled = false; });
+  }
+  $('btnSign').addEventListener('click', function(){
+    runSign(($('buildPath').value || '').trim());
+  });
+
+  $('btnVerifyAssets').addEventListener('click', function(){    var p = ($('buildPath').value || '').trim();
     if (!p) { $('buildNote').style.color = 'var(--err)'; $('buildNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_BUILD_PATH）。'; return; }
     runBuild(p, true);
   });
@@ -2251,6 +2329,14 @@ withBridge(function(tauri){
       hapRawfile: (typeof HAP.rawfile === 'number') ? HAP.rawfile : 0,
       hapArm64: HAP.arm64 === true,
       hapGate: HAP.gate || '',
+      // ⑤ 签名体检（T5-5）：UDID / 签名配置 / 材料 / profile 类型 / 本机候选
+      signOk: SIGN.ok === true,
+      signUdid: SIGN.hasUdid === true,
+      signHasConfig: SIGN.hasConfig === true,
+      signFilesExist: SIGN.filesExist === true,
+      signAllowsDevice: SIGN.allowsDevice === true,
+      signType: SIGN.type || '',
+      signCandCount: (typeof SIGN.candCount === 'number') ? SIGN.candCount : 0,
       errorCount: window.__uiErrors.length,
       // tag / ts 让落盘序列可判定（以前 tag 只进 console.log，快照之间无法区分）
       tag: String(tag || ''),

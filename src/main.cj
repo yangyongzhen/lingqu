@@ -163,6 +163,10 @@ public class EnvCommand <: CommandHandler {
         res.put("buildVerifyOnly", JsonString(envOr("LINGQU_BUILD_VERIFY_ONLY", "")))
         // 置 LINGQU_HAP_PATH 就在启动时跑一次 t2h:hap（HAP 装配，耗时以分钟计）
         res.put("hapPath", JsonString(envOr("LINGQU_HAP_PATH", "")))
+        // 置 LINGQU_SIGN_PATH 就在启动时跑一次 t2h:sign（签名体检，秒级、不需要账号）
+        res.put("signPath", JsonString(envOr("LINGQU_SIGN_PATH", "")))
+        // 置 LINGQU_UI_SCREEN 就把启动时的初始屏切过去（截某屏版面证据的可复现入口）
+        res.put("uiScreen", JsonString(envOr("LINGQU_UI_SCREEN", "")))
         return res
     }
 }
@@ -1074,6 +1078,14 @@ public class UiReportCommand <: CommandHandler {
         o.put("hapRawfile", JsonInt(argInt(args, "hapRawfile", 0)))
         o.put("hapArm64", JsonBool(argBool(args, "hapArm64", false)))
         o.put("hapGate", JsonString(argStr(args, "hapGate", "")))
+        // T5-5 签名体检（t2h:sign 回投）
+        o.put("signOk", JsonBool(argBool(args, "signOk", false)))
+        o.put("signUdid", JsonBool(argBool(args, "signUdid", false)))
+        o.put("signHasConfig", JsonBool(argBool(args, "signHasConfig", false)))
+        o.put("signFilesExist", JsonBool(argBool(args, "signFilesExist", false)))
+        o.put("signAllowsDevice", JsonBool(argBool(args, "signAllowsDevice", false)))
+        o.put("signType", JsonString(argStr(args, "signType", "")))
+        o.put("signCandCount", JsonInt(argInt(args, "signCandCount", 0)))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -1649,8 +1661,278 @@ public class HapCommand <: CommandHandler {
     }
 }
 
-/** DevEco 位置：DEVECO_HOME 优先，其次常见安装路径（都不存在返回 ""） */
-func devecoHomeOr(): String {
+/**
+ * t2h:sign —— 真机签名体检（T5-5 真机部署链的前置判定，0.18.0）。
+ *
+ * 解决的具体痛点（2026-10-31 真机实测）：`hvigor assembleHap` 即使没配签名也会产出
+ * `entry-default-signed.hap`，而 `hdc install` 却报 `9568322 signature verification failed
+ * due to not trusted app source`——"有 signed 文件"≠"能装"。真正的判据是：
+ * **profile 的 device-ids 里有没有本机 UDID**，而这一条完全可以离线判定（见 sign.cj）。
+ *
+ * 本命令做四件事（全部落盘，不静默）：
+ *   ① `hdc shell bm get --udid` 取本机 UDID（hdc 定位不到就如实说"没找到"）
+ *   ② 解析工程 `build-profile.json5`（JSON5）的 signingConfigs 与 products.signingConfig
+ *   ③ 扫 `~/.ohos/config` 下所有 `.p7b`，解析出 type/bundle/device-ids（不需要账号、不需要联网）
+ *   ④ `judgeSign()` 给结论 + **可执行的下一步**（抄回哪份材料 / 去 DevEco 自动签 / 切 debug）
+ *
+ * 落档：`.lingqu/sign/<工程>.json`（lingqu/sign/v1）+ `.log`（hdc 原始输出与扫描明细）
+ */
+public class SignCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        if (path.size == 0) {
+            path = envOr("LINGQU_BUILD_PATH", "")
+        }
+        var res = JsonObject()
+
+        // ---- 工程位置（缺 path 时仍做"设备 + 本机材料"体检，给的是通用结论） ----
+        var ohosDir = ""
+        var projName = "unknown"
+        if (path.size > 0) {
+            projName = sanitizeFileName(projectNameOf(path))
+            let tomlPath = cargoTomlPathOf(path)
+            if (tomlPath != "") {
+                let srcDir = tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+                ohosDir = hostPath("${srcDir}/gen/ohos")
+            }
+        }
+
+        // ---- ① 本机 UDID ----
+        let hdc = hdcPathOr()
+        var udid = ""
+        var hdcLog = ""
+        if (hdc == "") {
+            hdcLog = "[hdc] 没找到 hdc（找过 OHOS_HOME / DEVECO_SDK_HOME / DEVECO_HOME 下的 toolchains）"
+        } else {
+            try {
+                let (code, out, errOut) = executeWithOutput(hdc, ["shell", "bm", "get", "--udid"])
+                let text = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                hdcLog = "[hdc shell bm get --udid] ${hdc} exit=${code}\n${text}"
+                // 注意：hdc 失败时退出码仍是 0（AGENTS §4-40），UDID 只能按输出文本判
+                udid = parseUdid(text)
+            } catch (e: Exception) {
+                hdcLog = "[hdc] 起不来：${e}"
+            }
+        }
+
+        // ---- ② 工程签名配置（build-profile.json5 是 JSON5，用轻量提取） ----
+        let buildProfile = if (ohosDir == "") { "" } else { hostPath("${ohosDir}/build-profile.json5") }
+        var projText = ""
+        var buildProfileError = ""
+        if (buildProfile != "" && exists(Path(buildProfile))) {
+            try {
+                projText = String.fromUtf8(File.readFrom(buildProfile))
+            } catch (e: Exception) {
+                buildProfileError = "读不到 ${buildProfile}：${e}"
+            }
+        } else if (buildProfile != "") {
+            buildProfileError = "找不到 ${buildProfile}（还没生成鸿蒙脚手架？）"
+        }
+        let proj = parseProjSigning(projText)
+        let certPath = resolveProjectPath(proj.certPath, ohosDir)
+        let storeFile = resolveProjectPath(proj.storeFile, ohosDir)
+        let profilePath = resolveProjectPath(proj.profilePath, ohosDir)
+        var filesExist = false
+        if (certPath != "" && storeFile != "" && profilePath != "") {
+            filesExist = exists(Path(certPath)) && exists(Path(storeFile)) && exists(Path(profilePath))
+        }
+
+        // 工程配的那份 profile 解析（判定"含不含本机 UDID"的关键）
+        let configured = OhosProfile()
+        if (profilePath != "" && exists(Path(profilePath))) {
+            try {
+                let raw = latin1Of(File.readFrom(profilePath))
+                let parsed = parseOhosProfile(extractProfileJson(raw), profilePath)
+                configured.profileType = parsed.profileType
+                configured.bundleName = parsed.bundleName
+                configured.parseError = parsed.parseError
+                for (d in parsed.deviceIds) {
+                    configured.deviceIds.add(d)
+                }
+            } catch (e: Exception) {
+                configured.parseError = "读 profile 失败：${e}"
+            }
+        }
+
+        // ---- ③ 本机候选材料（~/.ohos/config/*.p7b） ----
+        let home = firstNonEmpty([envOr("USERPROFILE", ""), envOr("HOME", "")])
+        let configDir = if (home == "") { "" } else { hostPath("${home}/.ohos/config") }
+        var cands = ArrayList<OhosProfile>()
+        if (configDir != "") {
+            cands = discoverProfiles(configDir)
+            // 分隔符归一到宿主形式（`C:\...\config/xxx.p7b` 这种混写看着像 bug，也容易被人误抄）
+            for (p in cands) {
+                p.p7bPath = hostPath(p.p7bPath)
+            }
+        }
+        // 工程包名（AppScope/app.json5）：优先挑**包名也对得上**的候选材料，
+        // 否则会把别的工程的 profile（同样含本机 UDID）误报成"可用材料"。
+        var bundleName = ""
+        let appJson = if (ohosDir == "") { "" } else { hostPath("${ohosDir}/AppScope/app.json5") }
+        if (appJson != "" && exists(Path(appJson))) {
+            try {
+                bundleName = json5ValueAfter(String.fromUtf8(File.readFrom(appJson)), "bundleName")
+            } catch (e: Exception) {
+                let _ = e
+            }
+        }
+        var candidatePath = ""
+        var candidateBundle = ""
+        match (pickProfile(cands, udid, bundleName)) {
+            case Some(p) =>
+                candidatePath = p.p7bPath
+                candidateBundle = p.bundleName
+            case None => match (pickProfile(cands, udid, "")) {
+                case Some(p) =>
+                    candidatePath = p.p7bPath
+                    candidateBundle = p.bundleName
+                case None => ()
+            }
+        }
+
+        // ---- ④ 判定 ----
+        let hasConfig = proj.hasSigningConfigs && proj.signingConfigName != ""
+        let check = judgeSign(hasConfig, filesExist, configured.allows(udid), configured.profileType,
+            udid, candidatePath != "")
+        check.configuredName = proj.signingConfigName
+
+        // ---- 落档（证据：hdc 原文 + 材料明细，供人复核） ----
+        var outError = ""
+        var outJson = ""
+        var outLog = ""
+        var logText = hdcLog + "\n"
+        logText += "[config] ${configDir}（找到 ${cands.size} 份 .p7b）\n"
+        for (p in cands) {
+            logText += "[profile] ${p.p7bPath} type=${p.profileType} bundle=${p.bundleName} " +
+                "devices=${p.deviceIds.size} allowsLocal=${p.allows(udid)} err=${p.parseError}\n"
+        }
+        logText += "[project] ${buildProfile}\n"
+        logText += "[signing] name=${proj.signingConfigName} type=${proj.certType} " +
+            "certpath=${certPath} profile=${profilePath} storeFile=${storeFile} filesExist=${filesExist}\n"
+        logText += "[verdict] ok=${check.ok} reason=${check.reason}\n"
+        try {
+            if (!exists(Path(".lingqu/sign"))) {
+                if (!exists(Path(".lingqu"))) {
+                    Directory.create(Path(".lingqu"))
+                }
+                Directory.create(Path(".lingqu/sign"))
+            }
+            outJson = ".lingqu/sign/${projName}.json"
+            outLog = ".lingqu/sign/${projName}.log"
+            File.writeTo(outLog, logText.toArray())
+            var root = JsonObject()
+            root.put("schema", JsonString("lingqu/sign/v1"))
+            root.put("project", JsonString(projName))
+            root.put("ohosDir", JsonString(ohosDir))
+            root.put("buildProfile", JsonString(buildProfile))
+            root.put("buildProfileError", JsonString(buildProfileError))
+            root.put("hdc", JsonString(hdc))
+            root.put("udid", JsonString(udid))
+            root.put("configDir", JsonString(configDir))
+            root.put("candidateCount", JsonInt(Int64(cands.size)))
+            root.put("candidatePath", JsonString(candidatePath))
+            var carr = JsonArray()
+            for (p in cands) {
+                carr.add(p.toJson())
+            }
+            root.put("profiles", carr)
+            root.put("signing", signingJson(proj, certPath, profilePath, storeFile, filesExist))
+            root.put("check", check.toJson())
+            File.writeTo(outJson, root.toJsonString().toArray())
+        } catch (e: Exception) {
+            outError = "落档失败：${e}"
+        }
+
+        // ---- 返回给界面 ----
+        res.put("ok", JsonBool(check.ok && outError == ""))
+        res.put("udid", JsonString(udid))
+        res.put("hdc", JsonString(hdc))
+        res.put("reason", JsonString(check.reason))
+        res.put("nextStep", JsonString(check.nextStep))
+        res.put("hasConfig", JsonBool(hasConfig))
+        res.put("filesExist", JsonBool(filesExist))
+        res.put("allowsDevice", JsonBool(configured.allows(udid)))
+        res.put("profileType", JsonString(configured.profileType))
+        res.put("signingName", JsonString(proj.signingConfigName))
+        res.put("candidateCount", JsonInt(Int64(cands.size)))
+        res.put("candidatePath", JsonString(candidatePath))
+        res.put("candidateBundle", JsonString(candidateBundle))
+        res.put("buildProfile", JsonString(buildProfile))
+        res.put("outJson", JsonString(outJson))
+        res.put("outLog", JsonString(outLog))
+        var em = outError
+        if (em == "") {
+            em = buildProfileError
+        }
+        res.put("error", JsonString(em))
+        eprintln("[lingqu][sign] ${projName} udid=${udid} ok=${check.ok} candidates=${cands.size} " +
+            "hasConfig=${hasConfig} filesExist=${filesExist}")
+        return res
+    }
+}
+
+/** 签名配置 → JSON（落档用） */
+func signingJson(proj: ProjSigning, certPath: String, profilePath: String, storeFile: String,
+    filesExist: Bool): JsonObject {
+    var o = JsonObject()
+    o.put("configuredName", JsonString(proj.signingConfigName))
+    o.put("certType", JsonString(proj.certType))
+    o.put("certPath", JsonString(certPath))
+    o.put("profilePath", JsonString(profilePath))
+    o.put("storeFile", JsonString(storeFile))
+    o.put("filesExist", JsonBool(filesExist))
+    return o
+}
+
+/**
+ * 工程里写的材料路径可能是相对路径（相对 `gen/ohos`）。
+ * 先按原样判存在，不行再拼工程根，最后原样返回（让上层如实报"不存在"）。
+ */
+func resolveProjectPath(p: String, base: String): String {
+    if (p == "") {
+        return ""
+    }
+    if (exists(Path(p))) {
+        return p
+    }
+    if (base == "") {
+        return p
+    }
+    let joined = "${base}/${p}"
+    if (exists(Path(joined))) {
+        return joined
+    }
+    return p
+}
+
+/** hdc 位置：OHOS_HOME / DEVECO_SDK_HOME / DEVECO_HOME 下的 toolchains（找不到返回 ""） */
+func hdcPathOr(): String {
+    var cands = ArrayList<String>()
+    let ohosHome = envOr("OHOS_HOME", "")
+    if (ohosHome != "") {
+        cands.add("${ohosHome}/toolchains/hdc.exe")
+        cands.add("${ohosHome}/toolchains/hdc")
+    }
+    let deveco = devecoHomeOr()
+    let sdk = firstExistingPath([envOr("DEVECO_SDK_HOME", ""), "${deveco}/sdk"])
+    if (sdk != "") {
+        cands.add("${sdk}/default/openharmony/toolchains/hdc.exe")
+        cands.add("${sdk}/default/openharmony/toolchains/hdc")
+    }
+    for (c in cands) {
+        if (exists(Path(c))) {
+            return hostPath(c)
+        }
+    }
+    return ""
+}
+
+/** DevEco 位置：DEVECO_HOME 优先，其次常见安装路径（都不存在返回 ""） */func devecoHomeOr(): String {
     let fromEnv = envOr("DEVECO_HOME", "")
     if (fromEnv.size > 0 && exists(Path(fromEnv))) {
         return fromEnv
@@ -1754,6 +2036,7 @@ public func build(): AppSpec {
             app.register("t2h:diagnose", DiagnoseCommand())
         app.register("t2h:build", BuildCommand())
         app.register("t2h:hap", HapCommand())
+        app.register("t2h:sign", SignCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

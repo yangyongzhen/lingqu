@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.17.0**（2026-10-30），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.18.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -154,6 +154,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 38 | 工具里"环境变量优先、否则推导"的取值顺序，在**环境变量过期**时把正确的推导值覆盖掉（本机 `DEVECO_SDK_HOME` 仍指着已删除的旧 DevEco，导致 hvigor 一直报配置错误） | 路径类环境变量**必须验证目录存在**才采用，否则落到推导值（`firstExistingPath()`）。本机已连续踩到 `DEVECO_HOME` / `DEVECO_SDK_HOME` / `NATIVE_OHOS_SDK` 三个过期值 |
 | 39 | 真机装不上：`hdc install` 报 `9568322 signature verification failed due to not trusted app source` | **HarmonyOS 设备只信任华为签发、且 profile 的 `device-ids` 含本机 UDID 的证书**。用 SDK 自带 OpenHarmony 默认材料签没用；`hvigor assembleHap` 即使 `signingConfigs` 为空也会产出 signed.hap——**"有 signed 文件"≠"能装"**。正解：复用 `~/.ohos/config` 里自动签名的材料（p7b 里 grep 本机 UDID 对上），把 `signingConfigs` 抄回 `build-profile.json5`；口令由 hvigor 解密，**不需要登录 DevEco**。配方见 `skills/t2h-ohos-port/references/signing.md`（2026-10-31 真机实测） |
 | 40 | `hdc install` / `aa start` 明明失败，脚本却当成功（退出码 0） | **`hdc` 失败时退出码仍是 0**，成败只能按输出文本判：`install bundle successfully` / `start ability successfully`；前端据此写 `parseInstallResult`/`parseStartResult`（`src/compiler/deploy.cj`）。同理 `hdc list targets -v` 会带 `COM1 UART Ready` 串口噪声，别当设备 |
+| 41 | 从 PKCS#7（`.p7b`）里取内嵌 JSON 用了「第一个 `{` 到**最后一个** `}`」→ 解析报 `Unexpected character` 或莫名失败 | 证书等二进制里 `0x7D` 就是 `}`，会把尾部垃圾带进 JSON。**必须配对扫描**（深度归零即止，且要跳过字符串字面量与转义），见 `sign.cj` 的 `extractProfileJson`。同理**别用 `String.fromUtf8` 转二进制**：高位字节不是合法 UTF-8，会被吞或抛错（实测内嵌 JSON 被破成 `'?'`）——先做 ASCII 净化视图再取 |
+| 42 | `build-profile.json5` 里的 Windows 路径取出来带双反斜杠（`D:\\oh\\...`），`exists()` 永远 false → 误判"签名材料不存在" | JSON/JSON5 字符串里的 `\\` 是**转义**，取值时必须还原（`unescapeJson5`）。而且 json5 允许注释/尾逗号/单引号/无引号键，**严格 JSON 解析器读不了**，按需做轻量"键 → 值"提取即可 |
 
 ---
 

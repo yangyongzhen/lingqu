@@ -5,6 +5,60 @@
 
 ---
 
+## [0.18.0] - 2026-11-01
+
+**主题**：**签名体检 `t2h:sign`** —— 把 T5-5 挖到的"能不能装"判据做成一键体检。
+**离线、免账号、免 IDE**：读 `hdc shell bm get --udid` + 工程 `build-profile.json5` + `~/.ohos/config/*.p7b`，
+直接回答"现在装的上去吗；装不上要动什么"。
+
+### Added
+
+- **`src/compiler/sign.cj`**（`lingqu.compiler` 续）：签名判定的纯函数层
+  - `extractProfileJson`：从 PKCS#7 二进制里**配对扫描**取出内嵌明文 JSON（字符串/转义感知）
+  - `latin1Of`：字节 → **ASCII 净化视图**（可打印 ASCII 保留、其余换空格）
+  - `parseOhosProfile` → `OhosProfile{profileType,bundleName,deviceIds,parseError}` + `allows(udid)`
+  - `discoverProfiles` / `pickProfile`：扫 `~/.ohos/config` 全部 `.p7b`，挑"含本机 UDID"的那份
+  - `parseProjSigning` + `json5ValueAfter` + `unescapeJson5`：**JSON5** 的轻量提取
+    （注释/尾逗号/单引号/无引号键都认），拿 `signingConfigs` 的 `certpath/profile/storeFile` 与
+    `products[].signingConfig`；**双反斜杠必须还原**，否则 Windows 上 `exists()` 永远假
+  - `parseUdid`：不猜前缀文案，取**最长连续十六进制串**（≥16 位）
+  - `judgeSign(hasConfig, filesExist, allowsDevice, profileType, udid, hasCandidate)` → 结论 + 可执行下一步
+- **命令 `t2h:sign`**（三处联动齐全）：取 UDID → 解析工程签名配置（相对路径会按 `gen/ohos` 兜底解析）→
+  扫本机材料（**优先挑包名也对得上的**，包名读 `AppScope/app.json5`）→ 判定 →
+  落档 `.lingqu/sign/<工程>.json`（`lingqu/sign/v1`）+ `.log`（hdc 原文 + 每份 profile 的 type/bundle/devices/allowsLocal）
+- **12 例新单测**（总 **132**）：脱敏 fixture 的全字段解析、坏 JSON/空 JSON、配对花括号（尾部 `0x7D` 不带进来）、
+  JSON5 五类写法与转义还原、`judgeSign` 五条失败分支、真实 `~/.ohos/config` 扫得到且解析不炸
+- **⑤ 屏签名卡**：UDID / 工程签名配置 / 材料文件 / profile 类型 / 含本机 UDID / 本机候选材料 六项，
+  下面一行直接给"原因 + 下一步"；`ui_report` 新增 `signOk/signUdid/signHasConfig/signFilesExist/signAllowsDevice/signType/signCandCount`
+- **`LINGQU_SIGN_PATH` 探针**：置了就在启动时跑一次体检（秒级，适合 CI）
+- **`LINGQU_UI_SCREEN`**：启动即切到指定屏（`LINGQU_UI_SCREEN=build`），给"截某屏版面证据"一个可复现入口
+- `samples/evidence/ohos-profile.sample.p7b.txt`：真实 profile 的**脱敏**内嵌 JSON（结构逐字段一致，包名与 UDID 换成合成值）
+
+### Fixed
+
+- `.p7b` 用 `String.fromUtf8` 直接转二进制 → 高位字节被吞/报 `Unexpected character: '?'`，内嵌 JSON 破掉。
+  改 ASCII 净化视图（内嵌 JSON 全是 ASCII，净化后更稳）
+- "取最后一个 `}`"当 JSON 结尾 → 证书二进制里的 `0x7D` 会把尾部垃圾带进 JSON。改**配对扫描**（含字符串/转义状态机）
+- `quote` 当变量名编译报 `expected identifier or pattern after 'let'`（AGENTS §4-20 老坑再现，改名 `dquote`）
+
+### 验证证据（真机 + GUI 实测，2026-11-01）
+
+```
+[hdc shell bm get --udid] exit=0
+udid of current device is : B8861DAE97…6385
+[config] C:\Users\<user>\.ohos\config（找到 4 份 .p7b）
+[profile] default_ohos_m7Gx…p7b type=debug bundle=com.jiujiang.habit_tree devices=26 allowsLocal=true
+[signing] name=default type=HarmonyOS … filesExist=true
+[verdict] ok=true reason=签名配置齐全，且 profile 绑定了本机 UDID，可直装
+```
+
+`ui_report`（`activeScreen=build`）：`signOk=true signUdid=true signHasConfig=true signFilesExist=true
+signAllowsDevice=true signType=debug signCandCount=4`，`errorCount=0`。
+**未做**：`t2h:deploy`（安装/启动/取日志命令化）与 ⑥ 真机验证屏仍未接线；T5-4 release 签名两态未做；
+ArkWeb 上的界面渲染仍需人眼确认（我无视觉能力）。
+
+---
+
 ## [0.17.0] - 2026-10-31
 
 **主题**：**T5-5 真机首验**（鸿蒙 PC `HAD-W32` / HarmonyOS 7.0.0.111 / API 26）：
