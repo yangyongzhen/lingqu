@@ -41,6 +41,21 @@
 `AGC APIs + hdc 设备注册`）——**它省掉的是 IDE，不是账号**；本次发现的是更省的一条：
 **复用机器上已有的签名材料，连账号都不需要**。
 
+### Docs（签名知识沉淀，本轮的第二个交付物）
+
+- **新增 `skills/t2h-ohos-port/references/signing.md`** —— 鸿蒙真机签名完整参考（本项目最有复用价值的一段）：
+  - 三条路径对比：SDK 自带 OpenHarmony 默认材料（❌ 9568322）/ **复用 `~/.ohos/config` 自动签名材料（✅ 免账号免 IDE）**/
+    flutter 式 OAuth+AGC（✅ 但要账号）
+  - 材料结构说明（`default_<工程>_<hash>.{p12,cer,csr,p7b}`）+ **直接 grep `.p7b` 判 device-ids**（不需要解析 ASN.1）
+  - **6 步配方**（抄 signingConfigs → ohpm install → hvigor assembleHap → hdc install → aa start → aa dump 验状态）
+  - 失败码表（9568322 / 9568269 / 10106102）+ "什么时候才真需要账号"
+  - 验证纪律（**别只看命令成功**：按文本判、状态里看 FOREGROUND、截图存证、崩溃目录、渲染要人眼）
+- **`skills/t2h-ohos-port/SKILL.md`**：第 7 步（装配 HAP + 签名）改写为指向 signing.md，并把
+  "真机调试必须切 debug 签名"补成"多数情况不需要登录账号"；references 表新增一行
+- **`skills/t2h-ohos-port/references/pitfalls.md`**：9568322 那条补一句交叉链接
+- **`docs/开发环境.md`**：原来那句"首次要在 DevEco 里自动签名（**需登录华为账号**）"**已过时**，
+  改写为"先查 `~/.ohos/config` 的 p7b 有没有你的 UDID——有就免登录复用"
+- **`AGENTS.md` §4** 新增两条坑（#39 真机签名 / #40 hdc 失败退出码仍为 0）
 ### 验证证据（真机，2026-10-31）
 
 | 步骤 | 命令 | 结果 |

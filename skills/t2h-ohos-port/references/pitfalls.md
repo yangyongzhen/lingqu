@@ -31,6 +31,8 @@
   无 device-ids 字段），hdc 直装不信任。
 - **修法**：`products.default.signingConfig: "release" → "default"`（debugKey，含设备 UDID）；
   **上架前改回 release**——lingqu 的构建规则里这是强提醒项。
+  **进阶**：连 DevEco 都不用打开——`~/.ohos/config` 里自动签名材料的 profile 若含本机 UDID，
+  把 `signingConfigs` 抄回 `build-profile.json5` 即可（详见 [signing.md](signing.md)）。
 
 ### 6. `9568269 install file path invalid`（bm install）
 - **根因**：`hdc file send <相对路径>` 会**保留源目录结构**——设备上出现

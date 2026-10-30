@@ -38,8 +38,11 @@ description: Tauri 应用移植到鸿蒙 PC（HarmonyOS / OpenHarmony）的完�
    在 `.setup()` 里接线调用
 6. **交叉编译 .so**：`cargo build --release --target aarch64-unknown-linux-ohos`；
    Windows 上 HAP 装配失败是**预期行为**（DevEco 壳由 tauri CLI 生成一半，手工装配见 pitfalls）
-7. **装配 HAP + 签名**：`.so` 复制到 `gen/ohos/entry/libs/arm64-v8a/` → hvigor 打包；
-   真机调试必须切 **debug 签名**（release profile 直装报 9568322）
+7. **装配 HAP + 签名**（见 [signing.md](references/signing.md)）：`.so` 复制到 `gen/ohos/entry/libs/arm64-v8a/` →
+   `ohpm install --all` → `hvigor assembleHap`。**真机直装必须用绑定本机 UDID 的 debug profile**
+   （release profile 直装报 9568322）；**多数情况下不需要登录华为账号**——`~/.ohos/config` 里
+   当年自动签名的材料若还在、且 `device-ids` 含本机 UDID，把 `signingConfigs` 抄回
+   `build-profile.json5` 即可，hvigor 自己会解密口令
 8. **部署与验证**：hdc 目录坑（cd 到 HAP 目录再 file send）→ `bm install -p` → 手动解锁 →
    按 [pitfalls.md](references/pitfalls.md) 的验证清单核对（AssetKey 指纹 / rawfile 检测 / 版本号反推）
 
@@ -57,4 +60,5 @@ description: Tauri 应用移植到鸿蒙 PC（HarmonyOS / OpenHarmony）的完�
 | [cargo-patches.md](references/cargo-patches.md) | 动 Cargo.toml 之前；为什么用 [patch] 不用 path 依赖、为什么必须钉精确版本 |
 | [toolchain.md](references/toolchain.md) | 配交叉编译链接器之前；gnullvm 与 NDK clang 的两平台差异 |
 | [arkweb-shims.md](references/arkweb-shims.md) | 前端适配三坑；polyfill 完整代码与"为什么必须 remove() 而不能 display:none" |
-| [pitfalls.md](references/pitfalls.md) | 部署/真机阶段按报错原文索引；签名、hdc 目录坑、锁屏、验证清单 |
+| [signing.md](references/signing.md) | **真机装不上（9568322）时第一个读**：三条签名路径对比、复用本机自动签名材料的 6 步配方、失败码表、什么时候才真需要账号 |
+| [pitfalls.md](references/pitfalls.md) | 部署/真机阶段按报错原文索引；hdc 目录坑、锁屏、验证清单 |
