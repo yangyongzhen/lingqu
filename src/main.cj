@@ -6,8 +6,11 @@ import cjTauri.plugins.ws.*
 import lingqu.scanner.*
 import lingqu.deps.*
 import lingqu.port.*
+import lingqu.compiler.*
+import std.collection.*
 import std.env.*
 import std.fs.*
+import std.process.*
 import std.sync.*
 import stdx.encoding.json.*
 
@@ -152,6 +155,9 @@ public class EnvCommand <: CommandHandler {
         res.put("uiProbe", JsonString(envOr("LINGQU_UI_PROBE", "")))
         // 扫描探针：给了路径就在启动时跑一次 t2h:scan，把指标回投到 ui_report（无视觉也能验扫描器）
         res.put("scanPath", JsonString(envOr("LINGQU_SCAN_PATH", "")))
+        // 编译探针（T5-1）：置 LINGQU_BUILD_PATH 就在启动时跑一次 t2h:build（交叉编译），
+        // 结果与指纹命中回投 ui_report。**耗时以分钟计**，只在显式设置时才跑。
+        res.put("buildPath", JsonString(envOr("LINGQU_BUILD_PATH", "")))
         return res
     }
 }
@@ -1041,6 +1047,15 @@ public class UiReportCommand <: CommandHandler {
         o.put("portGuide", JsonInt(argInt(args, "portGuide", 0)))
         o.put("portDecided", JsonInt(argInt(args, "portDecided", 0)))
         o.put("portError", JsonString(argStr(args, "portError", "")))
+        // T5-1 交叉编译（t2h:build 回投；buildExit=-1 表示没跑过）
+        o.put("buildOk", JsonBool(argBool(args, "buildOk", false)))
+        o.put("buildExit", JsonInt(argInt(args, "buildExit", -1)))
+        o.put("buildErrors", JsonInt(argInt(args, "buildErrors", 0)))
+        o.put("buildWarns", JsonInt(argInt(args, "buildWarns", 0)))
+        o.put("buildDiags", JsonInt(argInt(args, "buildDiags", 0)))
+        o.put("buildFp", JsonInt(argInt(args, "buildFp", 0)))
+        o.put("buildSo", JsonString(argStr(args, "buildSo", "")))
+        o.put("buildGate", JsonString(argStr(args, "buildGate", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -1088,6 +1103,197 @@ public class UiReportCommand <: CommandHandler {
         res.put("path", JsonString(snap))
         res.put("log", JsonString(logf))
         return res
+    }
+}
+
+/**
+ * t2h:build —— 交叉编译 + 结构化诊断（T5-1）。
+ *
+ * 一条命令做四件事（全部落盘，D-013 不静默）：
+ *   ① 跑 `cargo build --release --target <target> --message-format=json`
+ *   ② stdout(JSONL) → 解析成结构化诊断；stderr 原样保留（**build-script/链接类失败只在 stderr**）
+ *   ③ 两份文本一起喂指纹库 → 命中就给"现象→根因→修法"，rule 档建议重跑 t2h:port
+ *   ④ 过六道闸里的编译闸 + 回归闸（基线取上一次落档的 errorCount）
+ *
+ * 落档：`.lingqu/build/<工程>.jsonl`（原始 JSONL）/ `.log`（人读全文）/ `.json`（lingqu/build/v1）
+ */
+public class BuildCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:build 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
+            return res
+        }
+        let tomlPath = cargoTomlPathOf(path)
+        if (tomlPath == "") {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("未找到 Cargo.toml（找过 ${path}/src-tauri/Cargo.toml 与 ${path}/Cargo.toml）"))
+            return res
+        }
+        let srcDir = tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+        let target = argStr(args, "target", "aarch64-unknown-linux-ohos")
+        let cargoBin = resolveCargoBin()
+        if (cargoBin == "") {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("找不到 cargo（不在 PATH？可用环境变量 LINGQU_CARGO 指定 cargo 绝对路径）"))
+            return res
+        }
+
+        var exitCode: Int64 = -1
+        var stdoutText = ""
+        var stderrText = ""
+        var spawnError = ""
+        try {
+            let argv = ["build", "--release", "--target", target, "--message-format=json"]
+            let (code, rawOut, rawErr) = executeWithOutput(cargoBin, argv, workingDirectory: Path(srcDir))
+            exitCode = code
+            stdoutText = String.fromUtf8(rawOut)
+            stderrText = String.fromUtf8(rawErr)
+        } catch (e: Exception) {
+            spawnError = "${e}"
+        }
+
+        // ---- 解析 + 诊断 ----
+        let parsed = parseCargoJsonl(stdoutText)
+        // build-script / 链接类失败在 stdout 里没有 compiler-message，只能靠 stderr；
+        // 两份文本拼起来喂指纹库，才不会漏掉最常见的那类失败。
+        let combined = diagsAsLogText(parsed.diags) + "\n" + stderrText
+        let hits = diagnoseLog(combined)
+        let dj = diagnosisJson(hits)
+        // stderr 侧的 error 行：build-script / 链接类失败的**唯一**痕迹
+        let stderrErrors = countErrorLines(stderrText)
+        let effectiveErrors = if (parsed.errorCount() > stderrErrors) { parsed.errorCount() } else { stderrErrors }
+
+        // ---- 六道闸：编译闸 + 回归闸 ----
+        // 注：**不**把诊断提案喂给补丁闸——diagnose 出来的提案只带文件名（增删行数未知，
+        // 真实 diff 由 t2h:port 幂等重跑产生），拿 0/0 去撞"空补丁"闸只会造出假失败（实测撞到过）。
+        let gateReports = ArrayList<GateReport>()
+        gateReports.add(checkCompileGate(exitCode, effectiveErrors))
+        let baselineErrors = lastBuildErrorCountOf(path)
+        gateReports.add(checkRegressionGate(baselineErrors, effectiveErrors))
+        let gates = mergeGates(gateReports)
+
+        // ---- 落档（三份：原始 JSONL / 人读日志 / 结构化摘要）----
+        var outError = ""
+        var outJson = ""
+        var outLog = ""
+        var outJsonl = ""
+        let safeName = sanitizeFileName(projectNameOf(path))
+        try {
+            if (!exists(Path(".lingqu"))) {
+                Directory.create(Path(".lingqu"))
+            }
+            if (!exists(Path(".lingqu/build"))) {
+                Directory.create(Path(".lingqu/build"))
+            }
+            outJsonl = ".lingqu/build/${safeName}.jsonl"
+            outLog = ".lingqu/build/${safeName}.log"
+            outJson = ".lingqu/build/${safeName}.json"
+            File.writeTo(outJsonl, stdoutText.toArray())
+            File.writeTo(outLog, (combined).toArray())
+            var root = JsonObject()
+            root.put("schema", JsonString("lingqu/build/v1"))
+            root.put("project", JsonString(safeName))
+            root.put("target", JsonString(target))
+            root.put("exitCode", JsonInt(exitCode))
+            root.put("errorCount", JsonInt(effectiveErrors))
+            root.put("warningCount", JsonInt(parsed.warningCount()))
+            root.put("baselineErrors", JsonInt(baselineErrors))
+            root.put("stderrErrors", JsonInt(stderrErrors))
+            var arts = JsonArray()
+            for (a in parsed.artifacts) {
+                arts.add(JsonString(a))
+            }
+            root.put("artifacts", arts)
+            root.put("diags", diagsJson(parsed.diags, 40))
+            root.put("diagnosis", dj)
+            root.put("gates", gates.toJson())
+            root.put("stderrTail", JsonString(firstLines("\n" + stderrText, 200)))
+            File.writeTo(outJson, root.toJsonString().toArray())
+        } catch (e: Exception) {
+            outError = "落档失败：${e}"
+        }
+
+        res.put("ok", JsonBool(spawnError == "" && outError == "" && exitCode == 0))
+        res.put("target", JsonString(target))
+        res.put("exitCode", JsonInt(exitCode))
+        res.put("errorCount", JsonInt(effectiveErrors))
+        res.put("warningCount", JsonInt(parsed.warningCount()))
+        res.put("stderrErrors", JsonInt(stderrErrors))
+        res.put("baselineErrors", JsonInt(baselineErrors))
+        res.put("badLines", JsonInt(parsed.badLines))
+        var arts2 = JsonArray()
+        for (a in parsed.artifacts) {
+            arts2.add(JsonString(a))
+        }
+        res.put("artifacts", arts2)
+        res.put("diags", diagsJson(parsed.diags, 20))
+        res.put("diagnosis", dj)
+        let suggest = dj.get("suggestRerunPort")
+        res.put("suggestRerunPort", suggest.getOrThrow())
+        res.put("gates", gates.toJson())
+        res.put("outJson", JsonString(outJson))
+        res.put("outLog", JsonString(outLog))
+        res.put("outJsonl", JsonString(outJsonl))
+        var errMsg = spawnError
+        if (errMsg == "") {
+            errMsg = outError
+        }
+        if (errMsg == "" && exitCode != 0) {
+            errMsg = firstLines(stderrText, 6)
+        }
+        res.put("error", JsonString(errMsg))
+        eprintln("[lingqu][build] ${safeName} target=${target} exit=${exitCode} errors=${effectiveErrors} " +
+            "fp=${dj.get("total").toString()} gates=${gates.passed}")
+        return res
+    }
+}
+
+/** 找 cargo：LINGQU_CARGO 优先，其次 PATH 里的 cargo */
+func resolveCargoBin(): String {
+    let fromEnv = envOr("LINGQU_CARGO", "")
+    if (fromEnv.size > 0 && exists(Path(fromEnv))) {
+        return fromEnv
+    }
+    try {
+        let (code, out, _) = executeWithOutput("cargo", ["--version"])
+        if (code == 0 && String.fromUtf8(out).contains("cargo")) {
+            return "cargo"
+        }
+    } catch (e: Exception) {
+        let _ = e
+    }
+    return ""
+}
+
+/** 上一次落档的 errorCount（做回归闸基线）；没有落档返回 -1 */
+func lastBuildErrorCountOf(projectDir: String): Int64 {
+    let f = ".lingqu/build/${sanitizeFileName(projectNameOf(projectDir))}.json"
+    if (!exists(Path(f))) {
+        return -1
+    }
+    try {
+        let root = JsonValue.fromStr(String.fromUtf8(File.readFrom(f)))
+        match (root.kind()) {
+            case JsonKind.JsObject =>
+                match (root.asObject().get("errorCount")) {
+                    case Some(v) => match (v.kind()) {
+                        case JsonKind.JsInt => return v.asInt().getValue()
+                        case _ => return -1
+                    }
+                    case None => return -1
+                }
+            case _ => return -1
+        }
+    } catch (e: Exception) {
+        return -1
     }
 }
 
@@ -1149,6 +1355,7 @@ public func build(): AppSpec {
             app.register("t2h:revert", RevertCommand())
             app.register("t2h:decisions", DecisionsCommand())
             app.register("t2h:diagnose", DiagnoseCommand())
+        app.register("t2h:build", BuildCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

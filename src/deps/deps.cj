@@ -203,6 +203,18 @@ func isPatchAttrKey(key: String): Bool {
 }
 
 // ===== 规则表（每条都有实测出处，见文件头）=====
+
+/** 桌面 GTK/glib 依赖链（registry 版 wry/tao 的传递依赖；OHOS 目标上必不可编） */
+func isDesktopGtkCrate(name: String): Bool {
+    for (k in ["glib-sys", "gobject-sys", "gio-sys", "gdk-sys", "gdk-pixbuf-sys",
+        "pango-sys", "cairo-sys-rs", "atk-sys", "gtk-sys", "webkit2gtk-sys", "soup-sys"]) {
+        if (name == k) {
+            return true
+        }
+    }
+    return false
+}
+
 public func applyRule(item: DepItem, patched: HashSet<String>): Unit {
     let name = item.name
 
@@ -254,6 +266,17 @@ public func applyRule(item: DepItem, patched: HashSet<String>): Unit {
         item.decide(D_NO, "R2-DEPS-011",
             "rfd 无 OHOS 后端（原生文件对话框能力位缺失，habit-tree「可优化事项」登记为平台限制）",
             "降级为应用内目录树选择；或经 ArkTS 桥接系统能力（R4-004）")
+        return
+    }
+    // 2b) 桌面 GTK/glib 链（0.14.0 补，依据 2026-10-30 真实交叉编译失败取证）
+    // 未迁移工程直接编译 aarch64-unknown-linux-ohos 时，前 8 个失败点全是这条链：
+    //   glib-sys / gobject-sys / gio-sys / gdk-sys / gdk-pixbuf-sys / pango-sys
+    //   / cairo-sys-rs / atk-sys（它们都是 registry 版 wry/tao 的传递依赖）。
+    // 所以它们的"不可用"是**症状**，根因是上游没 patch —— alternative 直说这一点。
+    if (isDesktopGtkCrate(name)) {
+        item.decide(D_NO, "R2-DEPS-012",
+            "桌面 GTK/glib 依赖链，OHOS 无对应平台库（2026-10-30 实测：未 patch 时交叉编译前 8 个失败点全在这条链上）",
+            "根因在上游：把 wry/tao patch 成 OHOS fork（R2-PORT-006）后这些 crate 根本不会进依赖树；不要试图给它们配 pkg-config")
         return
     }
 

@@ -88,6 +88,29 @@ public func testPatchSubtableAndInlineForms(): Unit {
 }
 
 @Test
+public func testDesktopGtkChainMarkedUnavailable(): Unit {
+    // 0.14.0：依据 2026-10-30 真实交叉编译取证——未 patch wry/tao 时，
+    // 前 8 个失败点全是 GTK/glib 链（glib-sys / gobject-sys / gio-sys / gdk-sys /
+    // gdk-pixbuf-sys / pango-sys / cairo-sys-rs / atk-sys），它们都要判"不可用"，
+    // 且替代建议必须指向根因（patch wry/tao），而不是让人去配 pkg-config。
+    let patched = HashSet<String>()
+    for (n in ["glib-sys", "gobject-sys", "gio-sys", "gdk-sys", "gdk-pixbuf-sys",
+        "pango-sys", "cairo-sys-rs", "atk-sys"]) {
+        let it = DepItem(n, "0.18.1")
+        applyRule(it, patched)
+        @Assert(it.verdict, D_NO)
+        @Assert(it.rule, "R2-DEPS-012")
+        @Assert(it.alternative.contains("wry") || it.alternative.contains("R2-PORT-006"), true)
+    }
+    // 已 patch 掉 wry/tao 的工程里这些 crate 不会出现；万一出现，"已处置"优先
+    let p2 = HashSet<String>()
+    p2.add("glib-sys")
+    let g = DepItem("glib-sys", "0.18.1")
+    applyRule(g, p2)
+    @Assert(g.rule, "R2-DEPS-100")
+}
+
+@Test
 public func testPatchedCratesOutsidePatchSectionIgnored(): Unit {
     // 回归：非 patch 段的同名 crate 不能算"已处置"
     let toml = """

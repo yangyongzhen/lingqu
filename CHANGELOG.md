@@ -5,6 +5,72 @@
 
 ---
 
+## [0.14.0] - 2026-10-30
+
+**主题**：**P5 第一刀 —— T5-1 交叉编译 + 结构化诊断**。`t2h:build` 上线：跑
+`cargo build --release --target aarch64-unknown-linux-ohos`，把 stdout(JSONL) 与 stderr
+两路结果归一化成结构化诊断，命中指纹就给"现象→根因→修法"，并过**编译闸 + 回归闸**。
+同时**一次解锁三笔欠账**：P3 出口判据 1、P4 出口判据 1、六道闸里此前只有"闸位"的两道。
+
+### Added
+
+- **`src/compiler/compile.cj`（新，`lingqu.compiler` 包）**——T5-1 的纯函数半边：
+  - `parseCargoJsonl`：解析 `--message-format=json` 的 JSONL，抽 `compiler-message`
+    （level / code / message / 主 span 的 file:line:col / rendered 前 12 行）、
+    `compiler-artifact`（只收 `.so`/`.a` 交付产物）、`build-finished.success`；
+    **截断/混杂行只计数不炸**（`badLines`）——真实构建日志的最后一行常是半个 JSON
+  - `countErrorLines` / `firstErrorLine`：从**stderr** 数 error 行（见下面 Fixed 1）
+  - `diagsAsLogText`：归一化成可喂指纹库的文本（同时含"短描述"与"源码上下文"两类 marker）
+- **`t2h:build` 命令**（三处联动齐全）：`{path, target?}` → 跑 cargo → 诊断 → 闸 → 落档
+  `.lingqu/build/<工程>.{jsonl,log,json}`（`lingqu/build/v1`）；`LINGQU_CARGO` 可指定 cargo
+- **六道闸补齐第 5/6 道**（`src/port/gates.cj`）：`checkCompileGate`（目标平台必须编过）、
+  `checkRegressionGate`（error 数不得比上次涨）、`mergeGates`
+- **指纹库 +2**（13 → **15 条**）：FP-016（`pkg-config has not been configured to support
+  cross-compilation`，rule 档 → 重跑 `t2h:port` 根除）、FP-017（`failed to run custom build
+  command for`，guide 档）——**依据是本轮真实构建失败，不是凭空编**
+- **依赖规则 +1**（`R2-DEPS-012`）：GTK/glib 桌面链 8 个 crate（glib-sys / gobject-sys / gio-sys /
+  gdk-sys / gdk-pixbuf-sys / pango-sys / cairo-sys-rs / atk-sys）判「不可用」，替代建议直指
+  根因"patch 掉 wry/tao"，而不是让人去配 pkg-config
+- **⑤ 构建打包屏接真数据**：路径输入 + 「交叉编译」按钮 + 退出码/错误数/警告数/产物/编译闸五项指示
+  + 指纹命中列表；`ui_report` 新增 `buildOk/buildExit/buildErrors/buildWarns/buildDiags/buildFp/buildSo/buildGate`
+  八个可断言字段；`LINGQU_BUILD_PATH` 探针（耗时以分钟计，只在显式设置时跑）
+- **9 例新单测**（总 99）：JSONL 解析（含截断/空/混杂垃圾）、build-script 失败无 compiler-message、
+  产物过滤、stderr 计数、编译闸、回归闸、合并闸、FP-016/017 命中真实失败、GTK 链规则
+- 入库两份**真实构建输出**样本（脱敏裁剪）：`samples/evidence/cargo-jsonl-compile-error.jsonl`、
+  `cargo-jsonl-build-script-fail.jsonl`、`cargo-jsonl-success-artifacts.jsonl`
+
+### Fixed
+
+1. **build-script 失败时 `errorCount=0` 却"编译失败"**（本轮实测撞到）
+   `cargo` 的 JSON 流里只有 `build-finished{"success":false}`，**一条 `compiler-message` 都没有**——
+   因为 `glib-sys` 这类失败发生在 build script 里，报错只进 stderr。处置：同时收 stderr 并
+   `countErrorLines()` 数 `error:`/`error[` 行，取两路最大值作有效错误数（`stderrErrors` 单独回投）。详见 AGENTS §4-34。
+2. **回归闸把"首次构建"误报成"回归"**
+   无基线时按基线 0 处理，于是未迁移工程首跑打出「错误从 0 涨到 8（改了反而更糟）」——
+   它根本没被"改"过。处置：无基线时**跳过回归闸**（首次的绝对要求由编译闸负责）。
+3. **诊断提案被喂进补丁闸 → 假失败**
+   `patchProposalsFromDiagnosis` 给的提案只有文件名（增删行数为未知占位 0），撞上"空补丁"闸
+   必然失败。处置：`t2h:build` 只过编译闸 + 回归闸；补丁闸留给真正产生 diff 的 agent 应用路径。
+4. **产物列表被中间态淹掉**：一次失败构建有 249 条 artifact（`.rlib`/`.rmeta`/`.d`/宿主 `.dll.a`），
+   落档 12 KB 全是噪音。处置：只收 `.so`/`.a`（且排除 `.dll.a`）。
+5. **`package lingqu.build` 与顶层 `build()` 撞名**（编译期直接报错）
+   `src/build/` → `src/compiler/`（`lingqu.compiler`）。详见 AGENTS §4-35。
+
+### 验证证据（实机，Windows 桌面会话 + Xvfb 均不需要）
+
+| 场景 | 断言 | 结果 |
+|---|---|---|
+| **A 未迁移**（habit-tree @ main） | `t2h:build` | `exit=101 errorCount=8 stderrErrors=8 artifacts=0 baseline=-1`；闸 2 条失败（都指向编译）；指纹 **FP-016(rule) + FP-017(guide)**，`suggestRerunPort=true` |
+| **B 已迁移**（habit-tree @ ohos） | `t2h:build` | **`exit=0 errorCount=0`，`gates.passed=true`**（P4 出口判据 1 达成）；产物 `libgrove_lib.so`（5.5 MB，`llvm-readobj` 实测 `Format=elf64-littleaarch64`）+ `libgrove_lib.a` |
+| **P3 出口判据 1**（矩阵 ↔ 真实失败） | 依赖矩阵「不可用」清单 vs 真实失败点 | 真实失败 8 个（glib-sys/gobject-sys/gio-sys/gdk-sys/gdk-pixbuf-sys/pango-sys/cairo-sys-rs/atk-sys），矩阵 **8/8 判为不可用 = 100%**（判据要求 ≥80%）；另有 2 个"多识别"（gtk-sys/webkit2gtk-sys，构建未走到）如实登记 |
+| **T5-2 可行性预验** | `.so` 内 vite AssetKey ↔ `dist/` | 从 `libgrove_lib.so` 提取到 `assets/index-BbUz51cz.css`、`assets/index-CNGJtM_T.js`、`assets/ui-BQiP9gYH.js`，与 `dist/assets/` **三个文件名逐字吻合** |
+| 门禁 | 四道闸 | build 0 warning / **TOTAL=99** / `cj-tauri check` PASS / 骨架 build 0 warning |
+
+**未做（如实标注）**：T5-2（`.so` 指纹校验命令化）、T5-3 HAP 装配、T5-4 签名、T5-5 hdc 部署全部未开始；
+真机尚未连接（`hdc list targets` = `[Empty]`），所以**没有任何真机证据**。
+
+---
+
 ## [0.13.1] - 2026-10-30
 
 **主题**：P5 之前的**交接审核轮** —— 逐文件审 0.9.0～0.13.0（上一手 AI 交付的五轮），

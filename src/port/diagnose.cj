@@ -135,6 +135,20 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
         "改前端必须重编 .so 并核对 AssetKey 指纹（见 pitfalls.md 第 10 条）",
         "", PK_GUIDE))
 
+    // ---- 0.13.1 审核轮补：T5-1 首次真机交叉编译实测到的失败（不是凭空编的）----
+    // 证据：habit-tree @ main 分支（未迁移）在 Windows 上
+    //   cargo build --release --target aarch64-unknown-linux-ohos
+    // 的首个失败就是 glib-sys 的 build script —— 根因是 wry/tao 仍是 registry 版本、
+    // 拉进了 GTK/glib 桌面依赖链（未迁移工程的必经之路）。
+    lib.add(Fingerprint("FP-016", "pkg-config has not been configured to support cross-compilation",
+        "某个 C 依赖的 build script 交叉编译时找不到 pkg-config 配置；在未迁移的 Tauri 工程上通常是 wry/tao 还是 registry 版本 → 拉进 GTK/glib 桌面依赖链（glib-sys）",
+        "先看紧随其后的 custom build command 是哪条 crate；若是 glib-sys/gtk 系，重跑 t2h:port（R2-PORT-006 patch 掉 wry/tao）即可根除",
+        "R2-PORT-006", PK_RULE))
+    lib.add(Fingerprint("FP-017", "failed to run custom build command for",
+        "C 依赖 crate 的 build script 失败（交叉编译缺 sysroot / pkg-config / 目标平台不支持）",
+        "看紧随其后的 `cargo:warning=` 行确定缺什么；桌面专属依赖（glib/gtk/x11）应 patch 掉而不是硬配 pkg-config",
+        "", PK_GUIDE))
+
     return lib
 }
 

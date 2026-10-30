@@ -148,3 +148,55 @@ public class FailLedger {
         return n
     }
 }
+
+// ===== 第 5/6 闸：编译闸与回归闸（0.13.1 起有真数据可用）=====
+//
+// 这两道闸以前只是"闸位预留"（要 cargo 子进程才有输入）。T5-1 之后 `t2h:build`
+// 会把 (退出码, error 数, warning 数) 交进来，于是可以真正判：
+//   编译闸：目标平台编译必须成功（退出码 0 且 0 个 error）；
+//   回归闸：改了代码之后 error 数不得比改之前更多（0 → 0 才算真进步）。
+
+/** 编译闸：目标平台编译必须过 */
+public func checkCompileGate(exitCode: Int64, errorCount: Int64): GateReport {
+    let rep = GateReport()
+    if (exitCode != 0) {
+        rep.fail("编译闸：目标平台编译失败（退出码 ${exitCode}）")
+    }
+    if (errorCount > 0) {
+        rep.fail("编译闸：仍有 ${errorCount} 个编译错误")
+    }
+    return rep
+}
+
+/**
+ * 回归闸：error 数不得超过基线。
+ *
+ * `baselineErrors < 0` = 没有基线（该工程第一次跑）：**此时不判回归**——没有"之前"，
+ * 就谈不上"变糟"。首次的绝对要求由编译闸负责（exit=0 且 0 error），所以这里放行不会漏。
+ * 早先版本把无基线当基线 0，结果在"未迁移工程首次构建"上报"错误从 0 涨到 8"，
+ * 把"本来就没迁移"误报成"回归"（2026-10-30 实机撞到）。
+ */
+public func checkRegressionGate(baselineErrors: Int64, currentErrors: Int64): GateReport {
+    let rep = GateReport()
+    if (baselineErrors < 0) {
+        return rep
+    }
+    if (currentErrors > baselineErrors) {
+        rep.fail("回归闸：错误从 ${baselineErrors} 涨到 ${currentErrors}（改了反而更糟）")
+    }
+    return rep
+}
+
+/** 把多份闸报告合成一份（任一失败即整体失败） */
+public func mergeGates(reports: ArrayList<GateReport>): GateReport {
+    let merged = GateReport()
+    for (r in reports) {
+        if (!r.passed) {
+            merged.passed = false
+        }
+        for (f in r.failures) {
+            merged.failures.add(f)
+        }
+    }
+    return merged
+}

@@ -555,7 +555,21 @@ body.ai-hidden .ai-show{display:block}
       <section class="screen" data-screen="build">
         <div class="whead">
           <div><h1>构建打包</h1><p>交叉编译 → 前端指纹校验 → HAP 装配 → 签名 → 安装。失败阶段可直接把证据交给 AI 诊断。</p></div>
-          <div class="acts"><button class="btn">查看产物目录</button><button class="btn primary">重新构建</button></div>
+        </div>
+        <div class="acts-row">
+          <input id="buildPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_BUILD_PATH / LINGQU_SCAN_PATH）" style="flex:1 1 200px;min-width:160px">
+          <button class="btn primary" id="btnBuild">交叉编译（OHOS）</button>
+        </div>
+        <div class="card" style="margin-bottom:12px;padding:10px 14px" id="buildCard">
+          <div class="legend" style="margin:0 0 6px">
+            <span>退出码：<b id="buildExit">—</b></span>
+            <span>错误：<b id="buildErrors">—</b></span>
+            <span>警告：<b id="buildWarns">—</b></span>
+            <span>产物：<b id="buildSo">—</b></span>
+            <span>编译闸：<b id="buildGate">—</b></span>
+          </div>
+          <div class="sethint" id="buildNote">点「交叉编译」跑 cargo build --release --target aarch64-unknown-linux-ohos；失败会给结构化诊断 + 指纹命中（命中即不调模型）。</div>
+          <div id="buildDiags" class="mono small" style="margin-top:8px"></div>
         </div>
         <div class="card">
           <div class="card-h"><h3>流水线</h3><span class="right">占位示意</span></div>
@@ -854,6 +868,11 @@ withBridge(function(tauri){
       if (d && d.uiProbe) { window.__uiProbeMode = String(d.uiProbe); runUiProbe(); }
       // 扫描探针：后端把 LINGQU_SCAN_PATH 透传下来，就在启动时跑一次 t2h:scan
       if (d && d.scanPath) { runScanProbe(String(d.scanPath)); }
+      // 编译探针（T5-1）：LINGQU_BUILD_PATH 显式设置时才跑（交叉编译以分钟计）
+      if (d && d.buildPath) {
+        $('buildPath').value = String(d.buildPath);
+        runBuild(String(d.buildPath));
+      }
     }).catch(function(e){
       $('envList').innerHTML = '<div class="pill err">体检失败：' + esc(e.message) + '</div>';
       setDot('dotEnv', 'err'); $('txtEnv').textContent = '体检失败';
@@ -1968,6 +1987,84 @@ withBridge(function(tauri){
     });
   }
 
+  /* ===== ⑤ 构建打包：T5-1 交叉编译 + 结构化诊断（真数据） ===== */
+  var BUILD = {};   // 最近一次 t2h:build 的结果摘要（回投 ui_report 用）
+  function renderBuild(r){
+    r = r || {};
+    var ok = r.ok === true;
+    BUILD = {
+      ok: ok,
+      exit: (typeof r.exitCode === 'number') ? r.exitCode : -1,
+      errors: (typeof r.errorCount === 'number') ? r.errorCount : 0,
+      warns: (typeof r.warningCount === 'number') ? r.warningCount : 0,
+      diags: (r.diags || []).length,
+      fp: (r.diagnosis && typeof r.diagnosis.total === 'number') ? r.diagnosis.total : 0,
+      gate: (r.gates && r.gates.passed === true) ? 'pass' : ((r.gates && r.gates.passed === false) ? 'fail' : ''),
+      so: (r.artifacts || []).filter(function(a){ return /\.so$/.test(a); }).join(', '),
+      out: r.outJson || ''
+    };
+    $('buildExit').textContent = (BUILD.exit >= 0) ? String(BUILD.exit) : '—';
+    $('buildExit').style.color = ok ? 'var(--ok)' : 'var(--err)';
+    $('buildErrors').textContent = String(BUILD.errors);
+    $('buildErrors').style.color = BUILD.errors > 0 ? 'var(--err)' : '';
+    $('buildWarns').textContent = String(BUILD.warns);
+    $('buildSo').textContent = BUILD.so || '—';
+    $('buildGate').textContent = BUILD.gate === 'pass' ? '通过' : (BUILD.gate === 'fail' ? '未通过' : '—');
+    $('buildGate').style.color = BUILD.gate === 'pass' ? 'var(--ok)' : (BUILD.gate === 'fail' ? 'var(--err)' : '');
+
+    var note = $('buildNote');
+    if (r.error && !ok) {
+      note.style.color = 'var(--err)';
+      note.textContent = '编译失败：' + String(r.error).split('\n')[0];
+    } else if (ok) {
+      note.style.color = 'var(--ok)';
+      note.textContent = '编译通过（target ' + (r.target || '') + '）；产物落档 ' + (r.outJson || '');
+    } else {
+      note.style.color = '';
+      note.textContent = '待编译。';
+    }
+
+    // 诊断列表：优先显示指纹命中（现象→根因→修法），否则显示前几条 error
+    var html = '';
+    var dj = r.diagnosis || null;
+    if (dj && dj.items && dj.items.length) {
+      dj.items.forEach(function(it){
+        var fp = it.fingerprint || {};
+        var tag = it.patchKind === 'rule' ? '<span class="pill warn">重跑改造即可修</span>'
+          : '<span class="pill info">需人工</span>';
+        html += '<div style="margin:4px 0">[' + esc(fp.id || '?') + '] ' + tag + ' '
+          + esc(fp.rootCause || '') + ' → ' + esc(fp.fix || '') + '</div>';
+      });
+      if (dj.suggestRerunPort) {
+        html += '<div class="sethint" style="color:var(--warn);margin-top:6px">建议：重跑「改造执行」的预览/应用（幂等，只补缺口）</div>';
+      }
+    } else if ((r.diags || []).length) {
+      r.diags.slice(0, 6).forEach(function(d){
+        html += '<div style="margin:2px 0">' + esc((d.level || '') + (d.code ? '[' + d.code + ']' : '') + ' '
+          + (d.file || '') + ':' + (d.line || 0) + ' ' + (d.message || '')) + '</div>';
+      });
+    }
+    $('buildDiags').innerHTML = html;
+  }
+  function runBuild(path){
+    var note = $('buildNote');
+    note.style.color = 'var(--warn)';
+    note.textContent = '交叉编译中（首次可能要几分钟，正在跑 cargo build --target aarch64-unknown-linux-ohos）…';
+    $('btnBuild').disabled = true;
+    invoke('t2h:build', { path: path }).then(function(r){
+      renderBuild(r || {});
+      reportUi('build-done');
+    }).catch(function(e){
+      renderBuild({ ok: false, error: e && e.message ? e.message : 'invoke error' });
+      reportUi('build-error');
+    }).then(function(){ $('btnBuild').disabled = false; });
+  }
+  $('btnBuild').addEventListener('click', function(){
+    var p = ($('buildPath').value || '').trim();
+    if (!p) { $('buildNote').style.color = 'var(--err)'; $('buildNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_BUILD_PATH）。'; return; }
+    runBuild(p);
+  });
+
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -2020,6 +2117,15 @@ withBridge(function(tauri){
       portGuide: (window.__port && window.__port.guide) || 0,
       portDecided: Object.keys(PORT_DECISIONS).length || 0,
       portError: (window.__port && window.__port.error) || '',
+      // ⑤ 构建打包（T5-1 交叉编译）：退出码 / 错误数 / 指纹命中 / 编译闸 / 产物
+      buildOk: BUILD.ok === true,
+      buildExit: (typeof BUILD.exit === 'number') ? BUILD.exit : -1,
+      buildErrors: (typeof BUILD.errors === 'number') ? BUILD.errors : 0,
+      buildWarns: (typeof BUILD.warns === 'number') ? BUILD.warns : 0,
+      buildDiags: (typeof BUILD.diags === 'number') ? BUILD.diags : 0,
+      buildFp: (typeof BUILD.fp === 'number') ? BUILD.fp : 0,
+      buildSo: BUILD.so || '',
+      buildGate: BUILD.gate || '',
       errorCount: window.__uiErrors.length,
       // tag / ts 让落盘序列可判定（以前 tag 只进 console.log，快照之间无法区分）
       tag: String(tag || ''),
