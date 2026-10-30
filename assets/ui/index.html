@@ -92,10 +92,16 @@ body.ai-hidden .body{grid-template-columns:240px 1fr}
 
 /* ============ 中栏 ============ */
 .work{overflow:auto;padding:20px 22px 30px;min-width:0}
-.whead{display:flex;align-items:flex-start;gap:14px;margin-bottom:16px}
+.whead{display:flex;align-items:flex-start;gap:14px;margin-bottom:16px;flex-wrap:wrap}
 .whead h1{font-size:19px;margin:0;font-weight:650;letter-spacing:.2px}
 .whead p{margin:4px 0 0;color:var(--dim);font-size:12.5px;max-width:72ch}
-.whead .acts{margin-left:auto;display:flex;gap:8px;flex:0 0 auto}
+/* 标题区给个宽度基线：中栏只有 652px，④ 屏的「输入框+3 个按钮」约 520px，
+   若不让标题区占住基线、又不许换行，说明文字会被压成一竖条（看着像没排版） */
+.whead > :first-child{flex:1 1 260px;min-width:0}
+.whead .acts{margin-left:auto;display:flex;gap:8px;flex:0 0 auto;flex-wrap:wrap;justify-content:flex-end}
+/* 操作行：输入框 + 多个按钮的屏（④）单独占一行，别把标题说明挤成竖条 */
+.acts-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:-6px 0 13px}
+.acts-row input{flex:1 1 200px;min-width:160px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px}
 .card + .card{margin-top:13px}
 .card-h{display:flex;align-items:center;gap:9px;margin-bottom:12px}
@@ -148,6 +154,15 @@ tbody tr:hover td{background:var(--panel2)}
 .mono{font-family:var(--mono);font-size:12px}
 .muted{color:var(--dim)}
 .small{font-size:11.5px}
+
+/* ④ 改造执行：diff 列只显示首行 + 最大 3 行高，避免长 JS/CSS 撑爆行高 */
+.port-table td{vertical-align:top}
+.port-diff{line-height:1.5;max-height:3.2em;overflow:hidden;word-break:break-all}
+
+/* 仍是示意数据的分区（P5 之前没有真数据）：弱化 + 角标，避免与上方真数据混淆 */
+.placeholder{opacity:.62}
+.placeholder-badge{font-size:10px;padding:1px 7px;border-radius:999px;border:1px dashed var(--line);
+  color:var(--dim2);margin-left:8px;font-weight:400;letter-spacing:.02em}
 
 /* 状态 pill */
 .pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;
@@ -468,7 +483,12 @@ body.ai-hidden .ai-show{display:block}
       <section class="screen" data-screen="port">
         <div class="whead">
           <div><h1>改造执行</h1><p>规则优先、AI 兜底；每一步都带验证探针，人工介入逐次计数（验收 A3 线 ≤5 处）。</p></div>
-          <div class="acts"><input id="portPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_SCAN_PATH）" style="width:260px"><button class="btn" id="btnPortPreview">预览改造</button><button class="btn primary" id="btnPortApply">应用（落盘）</button><button class="btn" id="btnPortRevert">回滚</button></div>
+        </div>
+        <div class="acts-row">
+          <input id="portPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_SCAN_PATH）" style="flex:1 1 200px;min-width:160px">
+          <button class="btn" id="btnPortPreview">预览改造</button>
+          <button class="btn primary" id="btnPortApply">应用（落盘）</button>
+          <button class="btn" id="btnPortRevert">回滚</button>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="diagCard">
           <div class="legend" style="margin:0">
@@ -478,16 +498,16 @@ body.ai-hidden .ai-show{display:block}
           </div>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="portCard">
-          <div class="legend" style="margin:0">
-            <span>规则改造（Cargo.toml 6 + 工具链 2 + lib.rs 1 + 前端 3）：<b id="portApplied">—</b></span>
+          <div class="legend" style="margin:0 0 6px">
+            <span>规则改造：<b id="portApplied">—</b> 条已处理</span>
             <span>幂等：<b id="portIdem">—</b></span>
             <span>人工介入：<b id="portHuman">—</b><small>/5</small></span>
-            <span id="portNote" class="muted">先「预览改造」看逐条 outcome，确认后「应用」落盘（自动备份，可回滚）</span>
           </div>
+          <div class="sethint" id="portNote">先「预览改造」看逐条 outcome，确认后「应用」落盘（自动备份，可回滚）</div>
         </div>
         <div class="card" style="margin-top:0;margin-bottom:12px">
-          <table>
-            <thead><tr><th style="width:14%">规则</th><th style="width:10%">状态</th><th style="width:34%">改动</th><th>before → after</th></tr></thead>
+          <table class="port-table">
+            <thead><tr><th style="width:12%">规则</th><th style="width:14%">状态</th><th style="width:30%">改动</th><th>before → after</th></tr></thead>
             <tbody id="portRows">
               <tr><td colspan="4" class="muted">还没有数据——填工程路径点「预览改造」。</td></tr>
             </tbody>
@@ -500,8 +520,8 @@ body.ai-hidden .ai-show{display:block}
           <div class="stat"><div class="k">耗时</div><div class="v" id="portStatElapsed">—<small>未计时</small></div></div>
         </div>
         <div class="grid2" style="margin-top:13px">
-          <div class="card" style="margin-top:0">
-            <div class="card-h"><h3>步骤</h3><span class="right">可从任意步继续</span></div>
+          <div class="card placeholder" style="margin-top:0">
+            <div class="card-h"><h3>步骤<span class="placeholder-badge">占位示意 · P5 接真数据</span></h3><span class="right">可从任意步继续</span></div>
             <div class="time">
               <div class="tstep done"><div class="i">✓</div><div><div class="t">环境体检 <span class="pill ok">通过</span></div><div class="d">rustc / target / NDK / llvm-mingw / ohrs / hvigor 全部就绪</div></div></div>
               <div class="tstep done"><div class="i">✓</div><div><div class="t">依赖切 fork + 钉版本 <span class="pill ok">R2-001</span></div><div class="d">tauri 2.11.5 / wry 0.56.0 · cargo metadata 已验证</div></div></div>
@@ -513,8 +533,8 @@ body.ai-hidden .ai-show{display:block}
               <div class="tstep wait"><div class="i">7</div><div><div class="t">HAP 装配与签名 <span class="muted">等待</span></div></div></div>
             </div>
           </div>
-          <div class="card" style="margin-top:0">
-            <div class="card-h"><h3>实时日志</h3><span class="right">占位示意</span></div>
+          <div class="card placeholder" style="margin-top:0">
+            <div class="card-h"><h3>实时日志<span class="placeholder-badge">占位示意 · P5 接真数据</span></h3><span class="right">占位示意</span></div>
             <div class="log" style="max-height:290px"><span class="ts">15:42:01</span> <span class="ok">[R1-002]</span> 生成 src-tauri/rust-toolchain.toml（gnullvm + aarch64-unknown-linux-ohos）
 <span class="ts">15:42:02</span> <span class="ok">[R2-001]</span> Cargo.toml：tauri/wry/tao/openharmony-ability → patch
 <span class="ts">15:42:03</span> <span class="cmd">$ cargo metadata --format-version 1</span>
@@ -1732,6 +1752,20 @@ withBridge(function(tauri){
       n0.textContent = '记录决策失败：' + (e && e.message ? e.message : e);
     });
   }
+  // diff 预览：after 里可能是一整段 JS/CSS（如 R2-PORT-014 的 lingqu-dialog.js），
+  // 直接摊进单元格会把行高撑爆、看着很乱 → 只取首行有效内容 + 省略号
+  function diffPreview(it){
+    var before = (it.before || '').trim();
+    var afterLines = String(it.after || '').split('\n').filter(function(l){ return l.trim() !== ''; });
+    var after = afterLines.length ? afterLines[0].trim() : '';
+    var more = afterLines.length > 1 ? (' …(+' + (afterLines.length - 1) + ' 行)') : '';
+    if (after.length > 120) { after = after.slice(0, 120) + '…'; }
+    if (!before) { return '（新增）→ ' + after + more; }
+    var b = before.trim();
+    if (b.length > 90) { b = b.slice(0, 90) + '…'; }
+    return b + '  →  ' + after + more;
+  }
+
   function renderPort(r){
     var rules = (r && r.rules) || [];
     // 失败返回（ok:false）时不能回退到上一工程的旧规则表——否则红字错误与旧表格同屏
@@ -1755,7 +1789,7 @@ withBridge(function(tauri){
         if (!(decisions[it.id])) guidePending++;
       }
     });
-    $('portHuman').textContent = String(c.guide || guideTotal) + '（已决策 ' + Object.keys(decisions).length + '，待决策 ' + guidePending + '）';
+    $('portHuman').textContent = String(c.guide || guideTotal) + '（待决策 ' + guidePending + ' / 已决策 ' + Object.keys(decisions).length + '）';
     // 顶部四张 stat 卡以前是写死的 9 / 2 / 3 / 6分12秒——与下方真数据同屏矛盾（0.13.1 修）
     if ($('portStatAuto')) { $('portStatAuto').textContent = String(c.auto || 0); }
     if ($('portStatPending')) { $('portStatPending').textContent = String(guidePending); }
@@ -1791,16 +1825,20 @@ withBridge(function(tauri){
           pill = '<span class="pill ok">人工·已忽略</span>';
         } else {
           pill = '<span class="pill warn">待你确认</span>';
-          extra = ' <button class="btn" style="padding:2px 8px" onclick="lingquDecide(\'' + esc(it.id) + '\',\'accepted\')">采纳</button>'
-            + ' <button class="btn" style="padding:2px 8px" onclick="lingquDecide(\'' + esc(it.id) + '\',\'ignored\')">忽略</button>';
         }
       } else {
         pill = it.applied ? '<span class="pill warn">已改</span>' : '<span class="pill ok">跳过</span>';
       }
+      // 采纳/忽略按钮放在「改动」列末尾：状态列只有 14% 宽，塞不下 pill + 两个按钮
+      // （0.12.0 把按钮放状态列，guide 项一多就把相邻列挤变形）
+      if (isHuman(it) && !dec) {
+        extra = '<div style="margin-top:6px"><button class="btn" style="padding:2px 8px" onclick="lingquDecide(\'' + esc(it.id) + '\',\'accepted\')">采纳</button>'
+          + ' <button class="btn" style="padding:2px 8px" onclick="lingquDecide(\'' + esc(it.id) + '\',\'ignored\')">忽略</button></div>';
+      }
       html += '<tr><td class="mono"><b>' + esc(it.id) + '</b></td>'
-        + '<td>' + pill + extra + '</td>'
-        + '<td class="muted small">' + esc(it.note || '') + '</td>'
-        + '<td class="muted mono small">' + esc((it.before || '（新增）').slice(0, 120)) + '<br>→ ' + esc((it.after || '').slice(0, 160)) + '</td></tr>';
+        + '<td>' + pill + '</td>'
+        + '<td class="muted small">' + esc(it.note || '') + extra + '</td>'
+        + '<td class="muted mono small port-diff">' + esc(diffPreview(it)) + '</td></tr>';
     });
     tb.innerHTML = html || '<tr><td colspan="4" class="muted">该工程无规则可应用（可能已迁移）。</td></tr>';
     window.__port = { applied: (r && r.applied) || 0, rules: rules.length, rulesRaw: rules, idempotent: !!(r && r.idempotent),
