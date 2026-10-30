@@ -13,6 +13,14 @@
 
 ### Fixed
 
+0. **`t2h:ui_report` 并发写把自检日志截成碎片**（严重，0.13.1 实机首跑就撞到）
+   现象：`.lingqu/ui-report.log` 里出现只有 `6902039 }` 的 9 字节残行，整条快照丢失，
+   自检序列无法逐条断言（那个 tag `scan-kind-platform` 从此消失）。
+   根因：落盘是「读全文 → 拼一行 → 覆盖写」，而 `t2h:ui_report` 会被多个前端定时器与
+   页签切换**并发**调用，两个写者互相截断对方内容（审计里登记为"双写无锁"，这次实机取证）。
+   处置：加进程级 `Mutex`（`gUiReportLock`）+ 上一行未以换行结尾时先补换行。
+   **复跑实测：16/16 行都是完整快照，`scan-kind-platform` 回来了。**
+
 1. **`t2h:revert` 自 0.11.0 起一直是坏的**（严重，且被文档写成"已达成"）
    现象：apply 之后点回滚永远报「没有备份可回滚」。
    根因：0.11.0 把备份从「单文件 `<工程>-Cargo.toml.bak`」改成「逐文件 `.lingqu/port/<工程>/<文件>.bak`」，
@@ -89,6 +97,19 @@
   不会"只补缺口"（诊断里的 `suggestRerunPort` 因此对这类工程可能给不出改动）。
 
 ### 验证证据
+
+**实机取证（Windows 桌面会话，`LINGQU_SCAN_PATH=E:\test\rust\habit-tree LINGQU_UI_PROBE=1`）**
+—— 补上了本节早先缺的 `ui_report` 证据：
+
+| 断言项 | 实测值 |
+|---|---|
+| 窗口 / 视口 / grid | 标题「灵渠迁移台 · Lingqu」；1264×801；`240px 652px 372px` |
+| 屏数 / 当前屏 / JS 错误 | 7 / env / `errorCount=0` |
+| WS 通道 | `wsState=connected`；`frames=2`，`lastFrameType=done`，回复「收到」 |
+| ② 画像 | `scanR=24 scanC1=100 scanC2=100`；`scanKindRows=commands:12,events:0,plugins:0,frontend:7,platform:5`；落档 `.lingqu/scan/habit-tree.json` |
+| ③ 依赖 | `depsTotal=453 depsPatch=0 depsUnavailable=0`；落档 `.lingqu/deps/habit-tree.json` |
+| ④ 改造 | `portRules=14 portApplied=2 portAuto=1 portGuide=1 portDecided=0`（本机样本在 `ohos` 分支**已迁移**，故 001~007/009/011 全部按已迁移跳过；剩下正是 008 未设 `NATIVE_OHOS_SDK`→guide + 014 dialog 资源未生成→auto） |
+| 自检日志 | **16/16 行完整快照**，每行带 `tag`+`ts`（修并发写前同场景出过碎片行） |
 
 | 断言项 | 值 |
 |---|---|

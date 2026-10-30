@@ -8,6 +8,7 @@ import lingqu.deps.*
 import lingqu.port.*
 import std.env.*
 import std.fs.*
+import std.sync.*
 import stdx.encoding.json.*
 
 /*
@@ -978,7 +979,14 @@ public class DepsCommand <: CommandHandler {
  * 为什么需要它：GUI「对不对」习惯靠肉眼，而肉眼不可自动化——CI 里、
  * 以及 AI 助手没有视觉能力时，都无法判断「三栏布局还在不在、折叠有没有生效」。
  * 这条命令把版面变成可断言的数字：视口尺寸、grid 列宽、当前屏、屏数、id 数、JS 错误数。
+ *
+ * 落盘要加锁：命令会被多个前端定时器与页签切换并发调用，而落盘是
+ * 「读全文 → 拼一行 → 覆盖写」——不加锁时两个写者会互相截断内容。2026-10-30 实测把
+ * 某条快照写成只剩 `6902039 }` 的碎片，整份自检序列因此不可判定。
  */
+/** ui_report 落盘互斥锁（见 UiReportCommand 头注释：并发写会互相截断） */
+let gUiReportLock = Mutex()
+
 public class UiReportCommand <: CommandHandler {
     public init() {}
 
@@ -1051,16 +1059,26 @@ public class UiReportCommand <: CommandHandler {
         let oneline = text.replace("\n", " ").replace("\r", " ")
         var wrote = false
         try {
-            if (!exists(Path(dir))) {
-                Directory.create(Path(dir))
+            // 互斥：t2h:ui_report 会被多个定时器/页签切换并发调用，而落盘是
+            // 「读全文 → 拼一行 → 覆盖写」。不加锁时两个写者会互相截断对方的内容——
+            // 2026-10-30 实测把某条快照写成了只剩 `6902039 }` 的碎片，整份自检序列不可信。
+            synchronized(gUiReportLock) {
+                if (!exists(Path(dir))) {
+                    Directory.create(Path(dir))
+                }
+                File.writeTo(snap, text.toArray())
+                var prev = ""
+                if (exists(Path(logf))) {
+                    prev = String.fromUtf8(File.readFrom(logf))
+                }
+                // 上一行没以换行结尾（上次写到一半挂了）时先补一个，避免两行粘连
+                var line = oneline
+                if (prev != "" && !prev.endsWith("\n")) {
+                    line = "\n" + line
+                }
+                File.writeTo(logf, (prev + line + "\n").toArray())
+                wrote = true
             }
-            File.writeTo(snap, text.toArray())
-            var prev = ""
-            if (exists(Path(logf))) {
-                prev = String.fromUtf8(File.readFrom(logf))
-            }
-            File.writeTo(logf, (prev + oneline + "\n").toArray())
-            wrote = true
         } catch (e: Exception) {
             eprintln("[lingqu][ui] 写报告失败：${e}")
         }
