@@ -161,6 +161,8 @@ public class EnvCommand <: CommandHandler {
         // 置 LINGQU_BUILD_VERIFY_ONLY=1 时，build 探针改为**只校验不编译**（T5-2 前端指纹；
         // 也是"改了前端没重编 .so 必须报错"这条自证用得上的一键入口）
         res.put("buildVerifyOnly", JsonString(envOr("LINGQU_BUILD_VERIFY_ONLY", "")))
+        // 置 LINGQU_HAP_PATH 就在启动时跑一次 t2h:hap（HAP 装配，耗时以分钟计）
+        res.put("hapPath", JsonString(envOr("LINGQU_HAP_PATH", "")))
         return res
     }
 }
@@ -1064,6 +1066,14 @@ public class UiReportCommand <: CommandHandler {
         o.put("buildAssetMatched", JsonInt(argInt(args, "buildAssetMatched", 0)))
         o.put("buildAssetStale", JsonInt(argInt(args, "buildAssetStale", 0)))
         o.put("buildAssetMissing", JsonInt(argInt(args, "buildAssetMissing", 0)))
+        // T5-3 HAP 装配（t2h:hap 回投）
+        o.put("hapOk", JsonBool(argBool(args, "hapOk", false)))
+        o.put("hapBuilt", JsonBool(argBool(args, "hapBuilt", false)))
+        o.put("hapBytes", JsonInt(argInt(args, "hapBytes", 0)))
+        o.put("hapSigned", JsonBool(argBool(args, "hapSigned", false)))
+        o.put("hapRawfile", JsonInt(argInt(args, "hapRawfile", 0)))
+        o.put("hapArm64", JsonBool(argBool(args, "hapArm64", false)))
+        o.put("hapGate", JsonString(argStr(args, "hapGate", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -1436,6 +1446,254 @@ func lastBuildErrorCountOf(projectDir: String): Int64 {
     }
 }
 
+/**
+ * t2h:hap —— HAP 装配 + 死资源校验（T5-3）。
+ *
+ * 不依赖 PATH：全程用 DevEco 自带的 node + hvigorw.js（实测 6.1.1.300 / hvigor 6.24.4）：
+ *   <DEVECO_HOME>\tools\node\node.exe <DEVECO_HOME>\tools\hvigor\bin\hvigorw.js
+ *     --mode module -p product=default assembleHap --no-daemon
+ * 运行目录 = `<src-tauri>/gen/ohos`。
+ *
+ * 必需环境（缺了逐条报可执行提示，不猜）：DEVECO_HOME / DEVECO_SDK_HOME / OHOS_HOME。
+ * 另：装配前必须 `ohpm install --all`，否则 ArkTS 报 Cannot find module '@ohos-rs/ability'
+ *     （本命令在 oh_modules 缺失时自动装一次，可用 autoInstall=false 关掉）。
+ *
+ * 落档：`.lingqu/hap/<工程>.json`（lingqu/hap/v1）+ `.lingqu/hap/<工程>.log`（hvigor 全文）
+ */
+public class HapCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:hap 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
+            return res
+        }
+        let tomlPath = cargoTomlPathOf(path)
+        if (tomlPath == "") {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("未找到 Cargo.toml（找过 ${path}/src-tauri/Cargo.toml 与 ${path}/Cargo.toml）"))
+            return res
+        }
+        let srcDir = tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+        let ohosDir = "${srcDir}/gen/ohos"
+
+        // ---- 前置检查：脚手架 / DevEco 位置 ----
+        var preflight = ""
+        if (!exists(Path("${ohosDir}/build-profile.json5"))) {
+            preflight = "找不到鸿蒙工程脚手架 ${ohosDir}/build-profile.json5 —— 先用 `cargo tauri ohos init --ci` 生成，或从工程的 ohos 分支取回 gen/ohos"
+        }
+        let deveco = devecoHomeOr()
+        if (preflight == "" && deveco == "") {
+            preflight = "找不到 DevEco Studio：设环境变量 DEVECO_HOME（本机实测 D:\\oh\\DevEcoStudio）"
+        }
+        let node = "${deveco}/tools/node/node.exe"
+        let hvigorJs = "${deveco}/tools/hvigor/bin/hvigorw.js"
+        if (preflight == "" && (!exists(Path(node)) || !exists(Path(hvigorJs)))) {
+            preflight = "DevEco 里找不到 node/hvigorw.js：${node} / ${hvigorJs}"
+        }
+        let ohpm = "${deveco}/tools/ohpm/bin/ohpm.bat"
+        if (preflight != "") {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString(preflight))
+            res.put("ohosDir", JsonString(ohosDir))
+            return res
+        }
+
+        // ---- 环境变量：父进程没设就从 DEVECO_HOME 推，不让用户逐个 export ----
+        // 分隔符必须与宿主一致：hvigor 会校验 DEVECO_SDK_HOME 的值，混合分隔符
+        // （D:\oh\DevEcoStudio/sdk）会被判 Illegal value（实测 00303217 Configuration Error）
+        // 关键：机器上常见**过期**的环境变量（本机实测 DEVECO_SDK_HOME 仍指着已删除的旧 DevEco），
+        // 直接用会让 hvigor 报 00303217 Configuration Error。所以：环境变量值**必须在磁盘上存在**
+        // 才采用，否则落到从 DEVECO_HOME 推导的值。
+        let sdkHome = hostPath(firstExistingPath([envOr("DEVECO_SDK_HOME", ""), "${deveco}/sdk"]))
+        let ohosHome = hostPath(firstExistingPath([envOr("OHOS_HOME", ""), "${sdkHome}/default/openharmony"]))
+        if (sdkHome == "" || ohosHome == "") {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("推不出 OHOS SDK 位置：DEVECO_HOME=${deveco}（DEVECO_SDK_HOME/OHOS_HOME 均不存在）"))
+            return res
+        }
+        setVariable("DEVECO_HOME", hostPath(deveco))
+        setVariable("DEVECO_SDK_HOME", sdkHome)
+        setVariable("OHOS_HOME", ohosHome)
+
+        var phaseLog = ""
+        var errMsg = ""
+        let autoInstall = argBool(args, "autoInstall", true)
+        var installedDeps = false
+        if (!exists(Path("${ohosDir}/oh_modules"))) {
+            if (!autoInstall) {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString("缺 ${ohosDir}/oh_modules —— 需要先 `ohpm install --all`（或设 autoInstall=true）"))
+                return res
+            }
+            try {
+                let (code, out, errOut) = executeWithOutput(ohpm, ["install", "--all"], workingDirectory: Path(ohosDir))
+                phaseLog += "[ohpm install] exit=${code}\n" + String.fromUtf8(out) + "\n" + String.fromUtf8(errOut) + "\n"
+                installedDeps = code == 0
+                if (code != 0) {
+                    errMsg = "ohpm install 失败（exit=${code}）：${firstLines(String.fromUtf8(errOut), 3)}"
+                }
+            } catch (e: Exception) {
+                errMsg = "ohpm install 起不来：${e}"
+            }
+        }
+
+        // ---- hvigor assembleHap ----
+        var hvigorText = ""
+        if (errMsg == "") {
+            try {
+                // 注意：argv 第一个元素必须是 hvigorw.js 的路径——漏了它 node 会把
+                // --mode 当成自己的选项（实测 `bad option: --mode`，exit=9）
+                let argv = [hvigorJs, "--mode", "module", "-p", "product=default", "assembleHap", "--no-daemon"]
+                let (code, out, errOut) = executeWithOutput(node, argv, workingDirectory: Path(ohosDir))
+                hvigorText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                phaseLog += "[hvigor] exit=${code}\n"
+            } catch (e: Exception) {
+                errMsg = "hvigor 起不来：${e}"
+            }
+        }
+        let hv = parseHvigorOutput(hvigorText)
+
+        // ---- 找产物 + 死资源校验 ----
+        let outDir = "${ohosDir}/entry/build/default/outputs/default"
+        let signedPath = "${outDir}/entry-default-signed.hap"
+        let unsignedPath = "${outDir}/entry-default-unsigned.hap"
+        var hapPath = ""
+        if (exists(Path(signedPath))) {
+            hapPath = signedPath
+        } else if (exists(Path(unsignedPath))) {
+            hapPath = unsignedPath
+        }
+        var hapBytes: Int64 = 0
+        var entries = HapEntries()
+        var readError = ""
+        if (hapPath != "") {
+            try {
+                let data = File.readFrom(hapPath)
+                hapBytes = Int64(data.size)
+                entries = scanHapEntries(data)
+            } catch (e: Exception) {
+                readError = "读 HAP 失败：${e}"
+            }
+        }
+
+        let gateReports = ArrayList<GateReport>()
+        gateReports.add(checkHapGate(hv.built, entries.hasModuleJson, entries.hasArm64So, entries.rawfileCount))
+        let gates = mergeGates(gateReports)
+
+        var outError = ""
+        var outJson = ""
+        var outLog = ""
+        let safeName = sanitizeFileName(projectNameOf(path))
+        try {
+            if (!exists(Path(".lingqu/hap"))) {
+                if (!exists(Path(".lingqu"))) {
+                    Directory.create(Path(".lingqu"))
+                }
+                Directory.create(Path(".lingqu/hap"))
+            }
+            outJson = ".lingqu/hap/${safeName}.json"
+            outLog = ".lingqu/hap/${safeName}.log"
+            File.writeTo(outLog, (phaseLog + hvigorText).toArray())
+            var root = JsonObject()
+            root.put("schema", JsonString("lingqu/hap/v1"))
+            root.put("project", JsonString(safeName))
+            root.put("ohosDir", JsonString(ohosDir))
+            root.put("built", JsonBool(hv.built))
+            root.put("errorCount", JsonInt(hv.errorCount))
+            root.put("firstError", JsonString(hv.firstError))
+            root.put("signed", JsonBool(exists(Path(signedPath))))
+            root.put("hapPath", JsonString(hapPath))
+            root.put("hapBytes", JsonInt(hapBytes))
+            root.put("entries", entries.toJson())
+            root.put("gates", gates.toJson())
+            root.put("installedDeps", JsonBool(installedDeps))
+            File.writeTo(outJson, root.toJsonString().toArray())
+        } catch (e: Exception) {
+            outError = "落档失败：${e}"
+        }
+
+        res.put("ok", JsonBool(errMsg == "" && outError == "" && gates.passed))
+        res.put("ohosDir", JsonString(ohosDir))
+        res.put("built", JsonBool(hv.built))
+        res.put("errorCount", JsonInt(hv.errorCount))
+        res.put("firstError", JsonString(hv.firstError))
+        res.put("hapPath", JsonString(hapPath))
+        res.put("hapBytes", JsonInt(hapBytes))
+        res.put("signed", JsonBool(exists(Path(signedPath))))
+        res.put("entries", entries.toJson())
+        res.put("gates", gates.toJson())
+        res.put("installedDeps", JsonBool(installedDeps))
+        res.put("outJson", JsonString(outJson))
+        res.put("outLog", JsonString(outLog))
+        var em = errMsg
+        if (em == "") {
+            em = outError
+        }
+        if (em == "") {
+            em = readError
+        }
+        if (em == "" && !hv.built) {
+            em = if (hv.firstError != "") { hv.firstError } else { firstLines(hvigorText, 5) }
+        }
+        res.put("error", JsonString(em))
+        eprintln("[lingqu][hap] ${safeName} built=${hv.built} errors=${hv.errorCount} " +
+            "rawfile=${entries.rawfileCount} gates=${gates.passed}")
+        return res
+    }
+}
+
+/** DevEco 位置：DEVECO_HOME 优先，其次常见安装路径（都不存在返回 ""） */
+func devecoHomeOr(): String {
+    let fromEnv = envOr("DEVECO_HOME", "")
+    if (fromEnv.size > 0 && exists(Path(fromEnv))) {
+        return fromEnv
+    }
+    for (cand in ["D:/oh/DevEcoStudio", "C:/Program Files/Huawei/DevEco Studio"]) {
+        if (exists(Path(cand))) {
+            return cand
+        }
+    }
+    return ""
+}
+
+/** 把路径分隔符统一成宿主形式（Windows 用反斜杠；其它平台保持正斜杠） */
+func hostPath(p: String): String {
+    if (!hostIsWindows()) {
+        return p
+    }
+    return p.replace("/", "\\")
+}
+
+/** 取第一个非空字符串 */
+func firstNonEmpty(cands: Array<String>): String {
+    for (c in cands) {
+        if (c.size > 0) {
+            return c
+        }
+    }
+    return ""
+}
+
+/**
+ * 取第一个**在磁盘上存在**的路径候选；都不存在返回 ""。
+ * 用于"环境变量 vs 推导值"二选一：环境变量可能是过期值（本机就踩到过），不能盲信。
+ */
+func firstExistingPath(cands: Array<String>): String {
+    for (c in cands) {
+        if (c.size > 0 && exists(Path(c))) {
+            return c
+        }
+    }
+    return ""
+}
+
 /** 取整数参数（缺失/类型不符回默认值） */
 func argInt(args: JsonObject, key: String, fallback: Int64): Int64 {
     match (args.get(key)) {
@@ -1495,6 +1753,7 @@ public func build(): AppSpec {
             app.register("t2h:decisions", DecisionsCommand())
             app.register("t2h:diagnose", DiagnoseCommand())
         app.register("t2h:build", BuildCommand())
+        app.register("t2h:hap", HapCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

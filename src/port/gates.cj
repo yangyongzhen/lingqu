@@ -223,3 +223,26 @@ public func checkAssetFingerprintGate(staleCount: Int64, missingCount: Int64, em
     }
     return rep
 }
+
+// ===== 第 8 道：HAP 装配闸（T5-3）=====
+//
+// 判据来自实测（habit-tree @ ohos 的 entry-default-signed.hap，1.40 MB）：
+//   必须含 `module.json`（HAP 清单）与 `libs/arm64-v8a/*.so`（原生库）；
+//   **不应含 `rawfile/`** —— ArkWeb 下前端被编进 .so，rawfile 里的副本是死资源
+//   （要么永远读不到，要么白白撑大包体）。
+public func checkHapGate(built: Bool, hasModuleJson: Bool, hasArm64So: Bool, rawfileCount: Int64): GateReport {
+    let rep = GateReport()
+    if (!built) {
+        rep.fail("HAP 闸：assembleHap 没成功（看 hvigor 输出与 .lingqu/hap/<工程>.log）")
+    }
+    if (built && !hasModuleJson) {
+        rep.fail("HAP 闸：产物里没有 module.json——装的不是合法 HAP")
+    }
+    if (built && !hasArm64So) {
+        rep.fail("HAP 闸：产物里没有 libs/arm64-v8a/*.so——原生库没打进去")
+    }
+    if (rawfileCount > 0) {
+        rep.fail("HAP 闸：发现 ${rawfileCount} 个 rawfile/ 条目——前端已在 .so 里，这些是死资源（应清掉）")
+    }
+    return rep
+}

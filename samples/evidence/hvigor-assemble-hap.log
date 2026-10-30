@@ -1,0 +1,10 @@
+> hvigor WARN: E:\test\rust\habit-tree\src-tauri\gen\ohos\oh_modules\.ohpm\@ohos-rs+ability@0.4.0-beta.0\oh_modules\@ohos-rs\ability\src\main\module.json does not exist. This library will not be merged. This may occur when the project is manually modified and the local library is not declared in E:\test\rust\habit-tree\src-tauri\gen\ohos\build-profile.json5. Please confirm the correctness of this module. You may try to solve the problem by declare it in entry build-profile.json5.
+> hvigor UP-TO-DATE :entry:default@CreateBuildProfile...  
+> hvigor Finished :entry:default@BuildNativeWithCmake... after 19 ms 
+> hvigor Finished :entry:default@BuildJS... after 5 ms 
+> hvigor Finished :entry:default@BuildNativeWithNinja... after 54 ms 
+> hvigor Finished :entry:default@CompileArkTS... after 4 s 315 ms 
+> hvigor Finished :entry:default@PackageHap... after 571 ms 
+> hvigor Finished :entry:default@SignHap... after 2 s 36 ms 
+> hvigor Finished :entry:assembleHap... after 1 ms 
+> hvigor BUILD SUCCESSFUL in 11 s 441 ms 

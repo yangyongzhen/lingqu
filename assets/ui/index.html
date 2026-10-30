@@ -560,6 +560,7 @@ body.ai-hidden .ai-show{display:block}
           <input id="buildPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_BUILD_PATH / LINGQU_SCAN_PATH）" style="flex:1 1 200px;min-width:160px">
           <button class="btn primary" id="btnBuild">交叉编译（OHOS）</button>
           <button class="btn" id="btnVerifyAssets" title="不重编，只比对 .so 内嵌的前端产物与 dist/">校验前端指纹</button>
+          <button class="btn primary" id="btnHap" title="跑 hvigor assembleHap 并做死资源校验">装配 HAP</button>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="buildCard">
           <div class="legend" style="margin:0 0 6px">
@@ -573,6 +574,17 @@ body.ai-hidden .ai-show{display:block}
           <div class="sethint" id="buildNote">点「交叉编译」跑 cargo build --release --target aarch64-unknown-linux-ohos；失败会给结构化诊断 + 指纹命中（命中即不调模型）。</div>
           <div class="sethint" id="buildAssetNote" style="margin-top:4px"></div>
           <div id="buildDiags" class="mono small" style="margin-top:8px"></div>
+        </div>
+        <div class="card" style="margin-bottom:12px;padding:10px 14px" id="hapCard">
+          <div class="legend" style="margin:0 0 6px">
+            <span>装配：<b id="hapBuilt">—</b></span>
+            <span>产物：<b id="hapSize">—</b></span>
+            <span>签名：<b id="hapSigned">—</b></span>
+            <span>arm64 库：<b id="hapArm64">—</b></span>
+            <span>rawfile 死资源：<b id="hapRawfile">—</b></span>
+            <span>HAP 闸：<b id="hapGate">—</b></span>
+          </div>
+          <div class="sethint" id="hapNote">装配前会先补 `ohpm install --all`；未配签名配置时产出的是 debug/unsigned HAP（真机安装见 T5-5）。</div>
         </div>
         <div class="card">
           <div class="card-h"><h3>流水线</h3><span class="right">占位示意</span></div>
@@ -875,6 +887,11 @@ withBridge(function(tauri){
       if (d && d.buildPath) {
         $('buildPath').value = String(d.buildPath);
         runBuild(String(d.buildPath), String(d.buildVerifyOnly || '') === '1');
+      }
+      // HAP 装配探针（T5-3）：LINGQU_HAP_PATH 显式设置时才跑（分钟级）
+      if (d && d.hapPath) {
+        $('buildPath').value = String(d.hapPath);
+        runHap(String(d.hapPath));
       }
     }).catch(function(e){
       $('envList').innerHTML = '<div class="pill err">体检失败：' + esc(e.message) + '</div>';
@@ -2094,6 +2111,63 @@ withBridge(function(tauri){
       reportUi('build-error');
     }).then(function(){ $('btnBuild').disabled = false; $('btnVerifyAssets').disabled = false; });
   }
+  /* ===== ⑤ 屏 HAP 装配（T5-3）：hvigor assembleHap + 死资源校验 ===== */
+  var HAP = {};
+  function renderHap(r){
+    r = r || {};
+    var ent = r.entries || {};
+    var g = r.gates || {};
+    HAP = {
+      ok: r.ok === true,
+      built: r.built === true,
+      bytes: (typeof r.hapBytes === 'number') ? r.hapBytes : 0,
+      signed: r.signed === true,
+      rawfile: (typeof ent.rawfileCount === 'number') ? ent.rawfileCount : 0,
+      arm64: ent.hasArm64So === true,
+      gate: (g.passed === true) ? 'pass' : ((g.passed === false) ? 'fail' : '')
+    };
+    $('hapBuilt').textContent = HAP.built ? '成功' : '失败';
+    $('hapBuilt').style.color = HAP.built ? 'var(--ok)' : 'var(--err)';
+    $('hapSize').textContent = HAP.bytes > 0 ? (Math.round(HAP.bytes / 1024 / 1024 * 100) / 100 + ' MB') : '—';
+    $('hapSigned').textContent = HAP.signed ? '已签名' : '未签名';
+    $('hapSigned').style.color = HAP.signed ? 'var(--ok)' : 'var(--warn)';
+    $('hapArm64').textContent = HAP.arm64 ? ((ent.arm64Sos || []).join(', ') || '有') : '缺';
+    $('hapArm64').style.color = HAP.arm64 ? 'var(--ok)' : 'var(--err)';
+    $('hapRawfile').textContent = String(HAP.rawfile) + (HAP.rawfile > 0 ? '（应清掉）' : '');
+    $('hapRawfile').style.color = HAP.rawfile > 0 ? 'var(--err)' : 'var(--ok)';
+    $('hapGate').textContent = HAP.gate === 'pass' ? '通过' : (HAP.gate === 'fail' ? '未通过' : '—');
+    $('hapGate').style.color = HAP.gate === 'pass' ? 'var(--ok)' : (HAP.gate === 'fail' ? 'var(--err)' : '');
+    var note = $('hapNote');
+    if (HAP.gate === 'fail') {
+      note.style.color = 'var(--err)';
+      note.textContent = (g.failures || []).join('；') || (r.error || '装配失败');
+    } else if (HAP.built) {
+      note.style.color = 'var(--ok)';
+      note.textContent = 'HAP 就绪：' + (r.hapPath || '') + (r.installedDeps ? '（本次补装了 ohpm 依赖）' : '');
+    } else {
+      note.style.color = 'var(--err)';
+      note.textContent = r.error ? String(r.error).split('\n')[0] : '尚未装配。';
+    }
+  }
+  function runHap(path){
+    var note = $('hapNote');
+    note.style.color = 'var(--warn)';
+    note.textContent = '装配中（hvigor assembleHap，首次可能几分钟；会先补 ohpm install）…';
+    $('btnHap').disabled = true;
+    invoke('t2h:hap', { path: path }).then(function(r){
+      renderHap(r || {});
+      reportUi('hap-done');
+    }).catch(function(e){
+      renderHap({ ok: false, error: e && e.message ? e.message : 'invoke error' });
+      reportUi('hap-error');
+    }).then(function(){ $('btnHap').disabled = false; });
+  }
+  $('btnHap').addEventListener('click', function(){
+    var p = ($('buildPath').value || '').trim();
+    if (!p) { $('hapNote').style.color = 'var(--err)'; $('hapNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_HAP_PATH）。'; return; }
+    runHap(p);
+  });
+
   $('btnVerifyAssets').addEventListener('click', function(){
     var p = ($('buildPath').value || '').trim();
     if (!p) { $('buildNote').style.color = 'var(--err)'; $('buildNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_BUILD_PATH）。'; return; }
@@ -2170,6 +2244,13 @@ withBridge(function(tauri){
       buildAssetMatched: (typeof BUILD.assetMatched === 'number') ? BUILD.assetMatched : 0,
       buildAssetStale: (typeof BUILD.assetStale === 'number') ? BUILD.assetStale : 0,
       buildAssetMissing: (typeof BUILD.assetMissing === 'number') ? BUILD.assetMissing : 0,
+      hapOk: HAP.ok === true,
+      hapBuilt: HAP.built === true,
+      hapBytes: (typeof HAP.bytes === 'number') ? HAP.bytes : 0,
+      hapSigned: HAP.signed === true,
+      hapRawfile: (typeof HAP.rawfile === 'number') ? HAP.rawfile : 0,
+      hapArm64: HAP.arm64 === true,
+      hapGate: HAP.gate || '',
       errorCount: window.__uiErrors.length,
       // tag / ts 让落盘序列可判定（以前 tag 只进 console.log，快照之间无法区分）
       tag: String(tag || ''),

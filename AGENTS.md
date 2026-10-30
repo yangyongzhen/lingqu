@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.15.0**（2026-10-30），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.16.0**（2026-10-30），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -149,6 +149,9 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 33 | 改了「落盘路径/文件名」但回滚或消费方没跟着改（例：0.11.0 把备份改成逐文件，`t2h:revert` 仍找旧单文件路径 → 回滚永远报"没有备份"） | 路径/文件名**收成常量并由产出方与消费方共用**（本项目是 `port.cj` 的 `BAK_*` + `revertPairs()`），并给映射本身写纯函数单测。**只改一处 = 静默破坏另一条链路**，且命令层没有单测会替你发现 |
 | 34 | `cargo build --message-format=json` 的 JSON 流里**一条 `compiler-message` 都没有**，但构建确实失败（`build-finished.success=false`） | build-script / 链接 / pkg-config 这类失败**只写在 stderr**。只解析 stdout 会得出「errorCount=0 却编译失败」的自相矛盾结论（0.14.0 实测）。**必须同时收 stdout(JSONL) 与 stderr**，stderr 侧用 `countErrorLines()` 数 `error:`/`error[` 行 |
 | 35 | 新建子包 `src/build/`（`package lingqu.build`）报 `top-level declaration 'build' is conflicted with possible sub-package 'lingqu.build'` | 包名别与已有顶层函数撞名——`src/main.cj` 里有 `public func build(): AppSpec`。子包名要避开（本项目最终用 `src/compiler/` + `lingqu.compiler`） |
+| 36 | 用 `executeWithOutput(node, ["--mode", ...])` 跑 hvigor 报 `node.exe: bad option: --mode`（exit=9） | **脚本路径必须是 argv 的第一个元素**：`[hvigorwJs, "--mode", ...]`。忘了它，node 会把 hvigor 的选项当成自己的（0.16.0 实机撞到） |
+| 37 | hvigor 报 `00303217 Configuration Error: Invalid value of 'DEVECO_SDK_HOME'`，但手跑同一条命令是成功的 | 环境变量值里**混了分隔符**（`D:\oh\DevEcoStudio/sdk`）。hvigor 会校验该值，拼接后必须按宿主归一（Windows 全反斜杠）。见 `hostPath()` |
+| 38 | 工具里"环境变量优先、否则推导"的取值顺序，在**环境变量过期**时把正确的推导值覆盖掉（本机 `DEVECO_SDK_HOME` 仍指着已删除的旧 DevEco，导致 hvigor 一直报配置错误） | 路径类环境变量**必须验证目录存在**才采用，否则落到推导值（`firstExistingPath()`）。本机已连续踩到 `DEVECO_HOME` / `DEVECO_SDK_HOME` / `NATIVE_OHOS_SDK` 三个过期值 |
 
 ---
 

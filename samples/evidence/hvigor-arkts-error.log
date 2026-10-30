@@ -1,0 +1,7 @@
+> hvigor ERROR: Failed :entry:default@CompileArkTS... 
+2 WARN: ArkTS:WARN: For details about ArkTS syntax errors, see FAQs
+> hvigor ERROR: ArkTS Compiler Error
+1 ERROR: 10505001 ArkTS Compiler Error
+Error Message: Cannot find module '@ohos-rs/ability' or its corresponding type declarations. At File: E:/test/rust/habit-tree/src-tauri/gen/ohos/entry/src/main/ets/entryability/EntryAbility.ets:1:29
+COMPILE RESULT:FAIL {ERROR:2 WARN:14}
+> hvigor ERROR: BUILD FAILED in 10 s 904 ms 

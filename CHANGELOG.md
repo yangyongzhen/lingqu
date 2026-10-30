@@ -5,6 +5,62 @@
 
 ---
 
+## [0.16.0] - 2026-10-30
+
+**主题**：**P5 第三刀 —— T5-3 HAP 装配**：`t2h:hap` 上线，用 DevEco 自带的 node + hvigor
+打 `assembleHap`，并对产物做**死资源校验**（`rawfile/` 必须为空——前端已编进 `.so`）。
+P5 的"从源码到可安装 HAP"这条链**已闭合**，只差真机部署（T5-5）。
+
+### Added
+
+- **`src/compiler/hap.cj`**（`lingqu.compiler` 续）：
+  - `parseHvigorOutput`：解析 hvigor 输出（`BUILD SUCCESSFUL` / `BUILD FAILED` 冲突时以 FAILED 为准、
+    错误行计数与首条错误、产物名提取）；`stripAnsi` 先剥 ANSI，否则 `startsWith("ERROR")` 失配
+  - `scanHapEntries`：**字节级**扫 HAP（zip 条目名明文存放，不用解压）→ `module.json` /
+    `libs/arm64-v8a/*.so` / `rawfile/` 条目；非 ASCII 字节置换后再扫，1.4 MB 也是 O(n)
+- **命令 `t2h:hap`**（三处联动齐全）：
+  - 前置检查（脚手架 `gen/ohos/build-profile.json5`、DevEco 位置、node/hvigorw、SDK 目录）逐条给可执行提示
+  - **自动补 `ohpm install --all`**（缺 `oh_modules` 时；`autoInstall=false` 可关）——
+    否则 ArkTS 报 `Cannot find module '@ohos-rs/ability'`
+  - 跑 `node <devEco>/tools/node/node.exe <devEco>/tools/hvigor/bin/hvigorw.js --mode module -p product=default assembleHap --no-daemon`
+  - 落档 `.lingqu/hap/<工程>.json`（`lingqu/hap/v1`）+ `.log`（hvigor 全文）
+- **第 8 道闸 `checkHapGate`**：装配成功 / 有 `module.json` / 有 `libs/arm64-v8a/*.so` / **无 rawfile 死资源**
+- **⑤ 屏 HAP 卡**：「装配 HAP」按钮 + 装配/产物大小/签名态/arm64 库/rawfile/闸 六项指示；
+  `ui_report` 新增 `hapOk/hapBuilt/hapBytes/hapSigned/hapRawfile/hapArm64/hapGate`；
+  `LINGQU_HAP_PATH` 探针
+- **9 例新单测**（总 114）：成功/失败日志解析、SUCCESS×FAILED 冲突、产物名提取、ANSI 剥离、
+  HAP 条目扫描（健康/rawfile/边界/噪声）、HAP 闸四分支
+
+### Fixed（三条都是**实机跑出来**的，单测覆盖不到）
+
+1. **`executeWithOutput(node, ["--mode", ...])` 报 `node.exe: bad option: --mode`（exit=9）**
+   argv 里**漏了 hvigorw.js 路径**，node 把 hvigor 的选项当成自己的。→ `[hvigorJs, "--mode", ...]`（AGENTS §4-36）
+2. **hvigor 报 `00303217 Configuration Error: Invalid value of 'DEVECO_SDK_HOME'`，但手跑同命令成功**
+   拼接出 `D:\oh\DevEcoStudio/sdk` —— **混合分隔符**被 hvigor 校验拒绝。→ `hostPath()` 按宿主归一（§4-37）
+3. **过期环境变量覆盖了正确推导值**
+   本机 `DEVECO_SDK_HOME` 仍指向已删除的旧 DevEco；"环境变量优先"的取值顺序把它当成了首选。
+   → `firstExistingPath()`：路径类环境变量**必须目录存在**才采用（§4-38）。本机已连续踩到
+   `DEVECO_HOME` / `DEVECO_SDK_HOME` / `NATIVE_OHOS_SDK` 三个过期值
+
+### 验证证据（实机，`t2h:hap` 由界面探针触发）
+
+| 断言项 | 值 |
+|---|---|
+| 装配 | `built=true`、`errorCount=0`、hvigor `BUILD SUCCESSFUL in 3 s 161 ms` |
+| 产物 | `entry-default-signed.hap`，**1.40 MB**（`PackageHap` + `SignHap` 均 finished） |
+| 条目 | `module.json` ✓、`libs/arm64-v8a/libentry.so` ✓、**rawfile = 0** ✓ |
+| 第 8 道闸 | `gates.passed=true` |
+| `ui_report` | `hapOk=true hapBuilt=true hapBytes=1469720 hapSigned=true hapRawfile=0 hapArm64=true hapGate=pass` |
+| 门禁 | 四道闸全绿，build 0 warning，**TOTAL=114** |
+
+> 另一个实测事实：`signingConfigs` 为空时 hvigor 仍产出 **signed** HAP（用 DevEco 内置的调试证书），
+> 所以"签名态"要靠 `signed/unsigned` 两个文件是否存在来判断，不能靠配置猜。
+
+**未做（如实标注）**：T5-4 签名两态（release 签名要 DevEco 登录华为账号）、T5-5 hdc 部署/启动/hilog —
+**真机仍未连接**（`hdc list targets` = `[Empty]`），所以没有任何"装到鸿蒙 PC 上跑起来"的证据。
+
+---
+
 ## [0.15.0] - 2026-10-30
 
 **主题**：**P5 第二刀 —— T5-2 前端指纹校验**：把「`.so` 内嵌的前端产物」与 `dist/` 实际文件
