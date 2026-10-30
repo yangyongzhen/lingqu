@@ -158,6 +158,9 @@ public class EnvCommand <: CommandHandler {
         // 编译探针（T5-1）：置 LINGQU_BUILD_PATH 就在启动时跑一次 t2h:build（交叉编译），
         // 结果与指纹命中回投 ui_report。**耗时以分钟计**，只在显式设置时才跑。
         res.put("buildPath", JsonString(envOr("LINGQU_BUILD_PATH", "")))
+        // 置 LINGQU_BUILD_VERIFY_ONLY=1 时，build 探针改为**只校验不编译**（T5-2 前端指纹；
+        // 也是"改了前端没重编 .so 必须报错"这条自证用得上的一键入口）
+        res.put("buildVerifyOnly", JsonString(envOr("LINGQU_BUILD_VERIFY_ONLY", "")))
         return res
     }
 }
@@ -1056,6 +1059,11 @@ public class UiReportCommand <: CommandHandler {
         o.put("buildFp", JsonInt(argInt(args, "buildFp", 0)))
         o.put("buildSo", JsonString(argStr(args, "buildSo", "")))
         o.put("buildGate", JsonString(argStr(args, "buildGate", "")))
+        // T5-2 前端指纹（.so 内嵌 AssetKey ↔ dist/）
+        o.put("buildAssetOk", JsonBool(argBool(args, "buildAssetOk", false)))
+        o.put("buildAssetMatched", JsonInt(argInt(args, "buildAssetMatched", 0)))
+        o.put("buildAssetStale", JsonInt(argInt(args, "buildAssetStale", 0)))
+        o.put("buildAssetMissing", JsonInt(argInt(args, "buildAssetMissing", 0)))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -1150,14 +1158,20 @@ public class BuildCommand <: CommandHandler {
         var stdoutText = ""
         var stderrText = ""
         var spawnError = ""
-        try {
-            let argv = ["build", "--release", "--target", target, "--message-format=json"]
-            let (code, rawOut, rawErr) = executeWithOutput(cargoBin, argv, workingDirectory: Path(srcDir))
-            exitCode = code
-            stdoutText = String.fromUtf8(rawOut)
-            stderrText = String.fromUtf8(rawErr)
-        } catch (e: Exception) {
-            spawnError = "${e}"
+        // verifyOnly：跳过 cargo，只拿已有 .so 与 dist/ 做前端指纹校验（CI 与"自证"场景用）
+        let verifyOnly = argBool(args, "verifyOnly", false)
+        if (!verifyOnly) {
+            try {
+                let argv = ["build", "--release", "--target", target, "--message-format=json"]
+                let (code, rawOut, rawErr) = executeWithOutput(cargoBin, argv, workingDirectory: Path(srcDir))
+                exitCode = code
+                stdoutText = String.fromUtf8(rawOut)
+                stderrText = String.fromUtf8(rawErr)
+            } catch (e: Exception) {
+                spawnError = "${e}"
+            }
+        } else {
+            exitCode = 0
         }
 
         // ---- 解析 + 诊断 ----
@@ -1171,13 +1185,39 @@ public class BuildCommand <: CommandHandler {
         let stderrErrors = countErrorLines(stderrText)
         let effectiveErrors = if (parsed.errorCount() > stderrErrors) { parsed.errorCount() } else { stderrErrors }
 
-        // ---- 六道闸：编译闸 + 回归闸 ----
+        // ---- T5-2 前端指纹校验：`.so` 内嵌 AssetKey ↔ dist/ 实际产物 ----
+        // 只在"编译成功且产出了 .so"时才有得比；失败构建天然没有 .so，闸会如实说"没扫到"。
+        let soPath = findSoArtifactOf(srcDir, target, parsed.artifacts)
+        // verifyOnly 模式下没有 cargo 输出，直接从磁盘上找最近产出的 .so
+        let soPathFinal = if (soPath != "") { soPath } else if (verifyOnly) { findSoOnDisk(srcDir, target) } else { "" }
+        var distDir = resolveDistDirOf(path, srcDir)
+        var embeddedKeys = ArrayList<String>()
+        var distKeys = ArrayList<String>()
+        var assetDiff = AssetDiff()
+        var assetError = ""
+        if (soPathFinal != "") {
+            try {
+                embeddedKeys = extractAssetKeys(File.readFrom(soPathFinal))
+                distKeys = distAssetKeysOf(distDir)
+                assetDiff = compareAssetKeys(embeddedKeys, distKeys)
+            } catch (e: Exception) {
+                assetError = "读 .so 失败：${e}"
+            }
+        }
+
+        // ---- 六道闸：编译闸 + 回归闸 + 前端指纹闸 ----
         // 注：**不**把诊断提案喂给补丁闸——diagnose 出来的提案只带文件名（增删行数未知，
         // 真实 diff 由 t2h:port 幂等重跑产生），拿 0/0 去撞"空补丁"闸只会造出假失败（实测撞到过）。
         let gateReports = ArrayList<GateReport>()
-        gateReports.add(checkCompileGate(exitCode, effectiveErrors))
-        let baselineErrors = lastBuildErrorCountOf(path)
-        gateReports.add(checkRegressionGate(baselineErrors, effectiveErrors))
+        let baselineErrors = if (verifyOnly) { -1 } else { lastBuildErrorCountOf(path) }
+        if (!verifyOnly) {
+            gateReports.add(checkCompileGate(exitCode, effectiveErrors))
+            gateReports.add(checkRegressionGate(baselineErrors, effectiveErrors))
+        }
+        if (soPathFinal != "" && assetError == "") {
+            gateReports.add(checkAssetFingerprintGate(Int64(assetDiff.staleInSo.size),
+                Int64(assetDiff.missingInSo.size), Int64(embeddedKeys.size)))
+        }
         let gates = mergeGates(gateReports)
 
         // ---- 落档（三份：原始 JSONL / 人读日志 / 结构化摘要）----
@@ -1215,6 +1255,9 @@ public class BuildCommand <: CommandHandler {
             root.put("diags", diagsJson(parsed.diags, 40))
             root.put("diagnosis", dj)
             root.put("gates", gates.toJson())
+            root.put("soPath", JsonString(soPathFinal))
+            root.put("distDir", JsonString(distDir))
+            root.put("assetDiff", assetDiff.toJson())
             root.put("stderrTail", JsonString(firstLines("\n" + stderrText, 200)))
             File.writeTo(outJson, root.toJsonString().toArray())
         } catch (e: Exception) {
@@ -1239,6 +1282,15 @@ public class BuildCommand <: CommandHandler {
         let suggest = dj.get("suggestRerunPort")
         res.put("suggestRerunPort", suggest.getOrThrow())
         res.put("gates", gates.toJson())
+        res.put("soPath", JsonString(soPathFinal))
+        res.put("distDir", JsonString(distDir))
+        res.put("assetDiff", assetDiff.toJson())
+        res.put("assetError", JsonString(assetError))
+        var keysArr = JsonArray()
+        for (k in embeddedKeys) {
+            keysArr.add(JsonString(k))
+        }
+        res.put("soAssetKeys", keysArr)
         res.put("outJson", JsonString(outJson))
         res.put("outLog", JsonString(outLog))
         res.put("outJsonl", JsonString(outJsonl))
@@ -1271,6 +1323,93 @@ func resolveCargoBin(): String {
         let _ = e
     }
     return ""
+}
+
+/** 找 cargo 产出的 .so 绝对路径：优先按 artifacts 里的文件名去 target 目录拼 */
+func findSoArtifactOf(srcDir: String, target: String, artifacts: ArrayList<String>): String {
+    var soName = ""
+    for (a in artifacts) {
+        if (a.endsWith(".so")) {
+            soName = a
+            break
+        }
+    }
+    if (soName == "") {
+        return ""
+    }
+    let p = "${srcDir}/target/${target}/release/${soName}"
+    if (exists(Path(p))) {
+        return p
+    }
+    return ""
+}
+
+/**
+ * verifyOnly 模式用：从 `target/<target>/release` 里挑一个 .so（cargo 输出不可用时）
+ */
+func findSoOnDisk(srcDir: String, target: String): String {
+    let dir = "${srcDir}/target/${target}/release"
+    if (!exists(Path(dir))) {
+        return ""
+    }
+    var entries: Array<FileInfo>
+    try {
+        entries = Directory.readFrom(dir)
+    } catch (e: Exception) {
+        let _ = e
+        return ""
+    }
+    for (info in entries) {
+        if (!info.isDirectory() && info.name.endsWith(".so")) {
+            return "${dir}/${info.name}"
+        }
+    }
+    return ""
+}
+
+/**
+ * 解析前端产物目录：读 `src-tauri/tauri.conf.json` 的 `frontendDist`（相对 src-tauri 解析），
+ * 读不到就退回工程根的 `dist/`。
+ */
+func resolveDistDirOf(projectDir: String, srcDir: String): String {
+    let conf = "${srcDir}/tauri.conf.json"
+    var dist = ""
+    if (exists(Path(conf))) {
+        try {
+            let text = String.fromUtf8(File.readFrom(conf))
+            dist = jsonStringFieldOf(text, "frontendDist")
+        } catch (e: Exception) {
+            dist = ""
+        }
+    }
+    if (dist == "") {
+        return "${projectDir}/dist"
+    }
+    // frontendDist 相对 src-tauri；也常见 "../dist" 这种写法
+    if (dist.startsWith("./")) {
+        dist = dist[2..]
+    }
+    return "${srcDir}/${dist}"
+}
+
+/** 从 JSON 文本里取顶层字符串字段（tauri.conf.json 用；找不到返回 ""） */
+func jsonStringFieldOf(text: String, key: String): String {
+    try {
+        let root = JsonValue.fromStr(text)
+        match (root.kind()) {
+            case JsonKind.JsObject =>
+                match (root.asObject().get(key)) {
+                    case Some(v) => match (v.kind()) {
+                        case JsonKind.JsString => return v.asString().getValue()
+                        case _ => return ""
+                    }
+                    case None => return ""
+                }
+            case _ => return ""
+        }
+    } catch (e: Exception) {
+        return ""
+    }
 }
 
 /** 上一次落档的 errorCount（做回归闸基线）；没有落档返回 -1 */

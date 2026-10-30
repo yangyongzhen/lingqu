@@ -559,6 +559,7 @@ body.ai-hidden .ai-show{display:block}
         <div class="acts-row">
           <input id="buildPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_BUILD_PATH / LINGQU_SCAN_PATH）" style="flex:1 1 200px;min-width:160px">
           <button class="btn primary" id="btnBuild">交叉编译（OHOS）</button>
+          <button class="btn" id="btnVerifyAssets" title="不重编，只比对 .so 内嵌的前端产物与 dist/">校验前端指纹</button>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="buildCard">
           <div class="legend" style="margin:0 0 6px">
@@ -567,8 +568,10 @@ body.ai-hidden .ai-show{display:block}
             <span>警告：<b id="buildWarns">—</b></span>
             <span>产物：<b id="buildSo">—</b></span>
             <span>编译闸：<b id="buildGate">—</b></span>
+            <span>前端指纹：<b id="buildAsset">—</b></span>
           </div>
           <div class="sethint" id="buildNote">点「交叉编译」跑 cargo build --release --target aarch64-unknown-linux-ohos；失败会给结构化诊断 + 指纹命中（命中即不调模型）。</div>
+          <div class="sethint" id="buildAssetNote" style="margin-top:4px"></div>
           <div id="buildDiags" class="mono small" style="margin-top:8px"></div>
         </div>
         <div class="card">
@@ -871,7 +874,7 @@ withBridge(function(tauri){
       // 编译探针（T5-1）：LINGQU_BUILD_PATH 显式设置时才跑（交叉编译以分钟计）
       if (d && d.buildPath) {
         $('buildPath').value = String(d.buildPath);
-        runBuild(String(d.buildPath));
+        runBuild(String(d.buildPath), String(d.buildVerifyOnly || '') === '1');
       }
     }).catch(function(e){
       $('envList').innerHTML = '<div class="pill err">体检失败：' + esc(e.message) + '</div>';
@@ -2012,6 +2015,35 @@ withBridge(function(tauri){
     $('buildGate').textContent = BUILD.gate === 'pass' ? '通过' : (BUILD.gate === 'fail' ? '未通过' : '—');
     $('buildGate').style.color = BUILD.gate === 'pass' ? 'var(--ok)' : (BUILD.gate === 'fail' ? 'var(--err)' : '');
 
+    // T5-2 前端指纹：.so 内嵌 AssetKey ↔ dist/ 实际产物
+    var ad = r.assetDiff || null;
+    var an = $('buildAssetNote');
+    if (ad) {
+      var stale = (ad.staleInSo || []), missing = (ad.missingInSo || []), matched = (ad.matched || []);
+      BUILD.assetOk = ad.ok === true;
+      BUILD.assetMatched = matched.length;
+      BUILD.assetStale = stale.length;
+      BUILD.assetMissing = missing.length;
+      $('buildAsset').textContent = ad.ok ? ('一致（' + matched.length + '）') : '不一致';
+      $('buildAsset').style.color = ad.ok ? 'var(--ok)' : 'var(--err)';
+      if (ad.ok) {
+        an.style.color = 'var(--ok)';
+        an.textContent = '前端指纹一致：.so 内嵌 ' + matched.length + ' 个前端产物，与 dist/ 逐字吻合。';
+      } else {
+        an.style.color = 'var(--err)';
+        var msg = '前端指纹不一致——';
+        if (stale.length) { msg += '.so 里这 ' + stale.length + ' 个资源 dist/ 已没有（真机会跑旧前端）：' + stale.join('、') + '；'; }
+        if (missing.length) { msg += 'dist/ 里这 ' + missing.length + ' 个新产物没进 .so：' + missing.join('、') + '；'; }
+        msg += ' 处置：重编 .so。';
+        an.textContent = msg;
+      }
+    } else {
+      BUILD.assetOk = false; BUILD.assetMatched = 0; BUILD.assetStale = 0; BUILD.assetMissing = 0;
+      $('buildAsset').textContent = '—';
+      $('buildAsset').style.color = '';
+      an.textContent = r.soPath ? ('没有比对前端指纹（' + (r.assetError || '未产出 .so') + '）') : '';
+    }
+
     var note = $('buildNote');
     if (r.error && !ok) {
       note.style.color = 'var(--err)';
@@ -2046,19 +2078,27 @@ withBridge(function(tauri){
     }
     $('buildDiags').innerHTML = html;
   }
-  function runBuild(path){
+  function runBuild(path, verifyOnly){
     var note = $('buildNote');
     note.style.color = 'var(--warn)';
-    note.textContent = '交叉编译中（首次可能要几分钟，正在跑 cargo build --target aarch64-unknown-linux-ohos）…';
+    note.textContent = verifyOnly
+      ? '校验前端指纹中（不重编，只比对 .so 内嵌资源与 dist/）…'
+      : '交叉编译中（首次可能要几分钟，正在跑 cargo build --target aarch64-unknown-linux-ohos）…';
     $('btnBuild').disabled = true;
-    invoke('t2h:build', { path: path }).then(function(r){
+    $('btnVerifyAssets').disabled = true;
+    invoke('t2h:build', verifyOnly ? { path: path, verifyOnly: true } : { path: path }).then(function(r){
       renderBuild(r || {});
       reportUi('build-done');
     }).catch(function(e){
       renderBuild({ ok: false, error: e && e.message ? e.message : 'invoke error' });
       reportUi('build-error');
-    }).then(function(){ $('btnBuild').disabled = false; });
+    }).then(function(){ $('btnBuild').disabled = false; $('btnVerifyAssets').disabled = false; });
   }
+  $('btnVerifyAssets').addEventListener('click', function(){
+    var p = ($('buildPath').value || '').trim();
+    if (!p) { $('buildNote').style.color = 'var(--err)'; $('buildNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_BUILD_PATH）。'; return; }
+    runBuild(p, true);
+  });
   $('btnBuild').addEventListener('click', function(){
     var p = ($('buildPath').value || '').trim();
     if (!p) { $('buildNote').style.color = 'var(--err)'; $('buildNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_BUILD_PATH）。'; return; }
@@ -2126,6 +2166,10 @@ withBridge(function(tauri){
       buildFp: (typeof BUILD.fp === 'number') ? BUILD.fp : 0,
       buildSo: BUILD.so || '',
       buildGate: BUILD.gate || '',
+      buildAssetOk: BUILD.assetOk === true,
+      buildAssetMatched: (typeof BUILD.assetMatched === 'number') ? BUILD.assetMatched : 0,
+      buildAssetStale: (typeof BUILD.assetStale === 'number') ? BUILD.assetStale : 0,
+      buildAssetMissing: (typeof BUILD.assetMissing === 'number') ? BUILD.assetMissing : 0,
       errorCount: window.__uiErrors.length,
       // tag / ts 让落盘序列可判定（以前 tag 只进 console.log，快照之间无法区分）
       tag: String(tag || ''),

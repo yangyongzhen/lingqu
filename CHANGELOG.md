@@ -5,6 +5,54 @@
 
 ---
 
+## [0.15.0] - 2026-10-30
+
+**主题**：**P5 第二刀 —— T5-2 前端指纹校验**：把「`.so` 内嵌的前端产物」与 `dist/` 实际文件
+对账，并让 **"只改前端不重编 `.so`" 这类"构建全绿、真机跑旧前端"的假成功自动报错**。
+这是路线图点名的"本项目最硬的差异化点"，现在能自证。
+
+### Added
+
+- **`src/compiler/fingerprint.cj`**（`lingqu.compiler` 续）：
+  - `extractAssetKeys`：**按字节**扫 `.so`（不依赖 UTF-8 解码），找 ASCII `assets/` 后吃合法 key
+    字符直到非 key 字节，要求以已知前端扩展名结尾（js/css/mjs/html/png/svg/woff2… 共 18 种）；
+    去重保序，非 `assets/` 下的产物不算
+  - `compareAssetKeys` → `AssetDiff{matched, staleInSo, missingInSo}`：**两个方向分开记**
+  - `distAssetKeysOf`：递归列 `dist/`，只收 `assets/` 下的资源（`dist/index.html` 是入口不算 AssetKey）
+- **`t2h:build` 扩展**：编译成功后自动做指纹校验（`.so` 路径由 artifacts + `target/<target>/release`
+  解析；`dist/` 路径读 `tauri.conf.json` 的 `frontendDist` 并按 src-tauri 相对解析）；
+  新增 `verifyOnly: true` **只校验不编译**（CI / 自证用，秒级）；新增 `LINGQU_BUILD_VERIFY_ONLY=1` 探针
+- **第 7 道闸 `checkAssetFingerprintGate`**（`src/port/gates.cj`）：
+  `.so` 里没扫到资源 → 失败（frontendDist 没配？流水线顺序错？）；
+  `staleInSo > 0` → 失败（真机会跑旧前端）；`missingInSo > 0` → 失败（`.so` 是旧的，必须重编）
+- **⑤ 屏新增「前端指纹」指示 + 「校验前端指纹」按钮**（不重编，秒级出结论），
+  `ui_report` 新增 `buildAssetOk/buildAssetMatched/buildAssetStale/buildAssetMissing`
+- **6 例新单测**（总 105）：字节扫描（含去重/非法扩展名/0x00·0xFF 噪声）、三个比对方向、
+  指纹闸四分支（无内嵌/stale/missing/干净）、`distAssetKeysOf` 真实目录 fixture
+
+### 验证证据（实机三场景，全部可复跑）
+
+| 场景 | 构造 | 结果 |
+|---|---|---|
+| 1 **一致** | habit-tree @ ohos 的 `.so` + 原 `dist/` | `assetDiff.ok=true matched=3 stale=0 missing=0`，闸 **pass**；`.so` 内嵌 `assets/index-BbUz51cz.css`、`assets/index-CNGJtM_T.js`、`assets/ui-BQiP9gYH.js` 与 `dist/assets/` 逐字吻合 |
+| 2 **新前端没打包** | 往 `dist/assets/` 加一个 `index-FRESH99.js`（不重编 `.so`） | `missingInSo=[assets/index-FRESH99.js]`，闸 **fail**：「dist/ 里 1 个新产物没进 .so——.so 是旧的，必须重编」 |
+| 3 **旧 `.so` 带旧前端** | 把 `dist/assets/index-BbUz51cz.css` 移走（不重编） | `staleInSo=[assets/index-BbUz51cz.css]`，闸 **fail**：「`.so` 内嵌的 1 个前端产物在 dist/ 里已不存在——改了前端没重编 .so，真机会跑旧前端」 |
+
+> 重要操作提醒：正常跑 `cargo build` 时改 `dist/` **会触发自动重编**（`generate_context!` 的
+> rerun-if-changed 覆盖前端产物），所以"只改前端不重编"不会在自动流水线里自然发生——
+> 验证这道闸必须用 `verifyOnly`（或用真实设备装旧包）。场景 2/3 就是这么构造的。
+
+| 断言项 | 值 |
+|---|---|
+| 门禁 | 四道闸全绿，build 0 warning |
+| 单测 | **TOTAL=105，FAILED=0，ERROR=0** |
+| `ui_report` | 三场景分别回投 `assetOk=true/false/false`、`matched=3/3/2`、`stale=0/0/1`、`missing=0/1/0` |
+
+**未做（如实标注）**：T5-3 HAP 装配、T5-4 签名、T5-5 hdc 部署；真机仍未连，
+`.so` 只在交叉编译层面验过，**没有任何真机加载/运行证据**。
+
+---
+
 ## [0.14.0] - 2026-10-30
 
 **主题**：**P5 第一刀 —— T5-1 交叉编译 + 结构化诊断**。`t2h:build` 上线：跑

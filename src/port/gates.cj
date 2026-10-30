@@ -200,3 +200,26 @@ public func mergeGates(reports: ArrayList<GateReport>): GateReport {
     }
     return merged
 }
+
+// ===== 第 7 道：前端指纹闸（T5-2）=====
+//
+// 这一道挡的是肉眼看不见、且所有构建步骤都"成功"的那类失败：
+// **只改前端、没重编 `.so`** —— ArkWeb 下前端被编译进 `.so`，装到真机上跑的是旧前端。
+// 判据（两个方向都要看）：
+//   staleCount > 0   → `.so` 里记的前端产物在 `dist/` 已不存在（旧 .so 带旧前端）
+//   missingCount > 0 → `dist/` 有新产物没进 `.so`（新前端没打包）
+public func checkAssetFingerprintGate(staleCount: Int64, missingCount: Int64, embeddedCount: Int64): GateReport {
+    let rep = GateReport()
+    if (embeddedCount == 0) {
+        // `.so` 里压根没扫到前端资源：可能是 frontendDist 没配、或产的是纯 Rust 库
+        rep.fail("前端指纹闸：`.so` 里没有内嵌前端资源（frontendDist 配了吗？流水线顺序对吗？）")
+        return rep
+    }
+    if (staleCount > 0) {
+        rep.fail("前端指纹闸：`.so` 内嵌的 ${staleCount} 个前端产物在 dist/ 里已不存在——改了前端没重编 .so，真机会跑旧前端")
+    }
+    if (missingCount > 0) {
+        rep.fail("前端指纹闸：dist/ 里 ${missingCount} 个新产物没进 .so——.so 是旧的，必须重编")
+    }
+    return rep
+}

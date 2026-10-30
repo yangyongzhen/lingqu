@@ -1,0 +1,7 @@
+assets/index-BbUz51cz.css
+assets/ui-BQiP9gYH.js
+assets/index-CNGJtM_T.js
+assets/  （marker 后跟非法扩展名 → 不应被当成 key）
+assets/index-OLD.js （重复出现三次，应去重）
+assets/index-OLD.js assets/index-OLD.js
+tauri://localhost/assets/index-CNGJtM_T.js （带前缀的完整 URL 形式）
