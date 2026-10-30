@@ -5,6 +5,59 @@
 
 ---
 
+## [0.17.0] - 2026-10-31
+
+**主题**：**T5-5 真机首验**（鸿蒙 PC `HAD-W32` / HarmonyOS 7.0.0.111 / API 26）：
+`hdc install` + `aa start` 跑通，**签名不需要在 DevEco 里登录**。
+同时落地 hdc 输出的纯函数解析层（`src/compiler/deploy.cj`）+ 6 例基于真实输出的单测。
+
+### Added
+
+- **`src/compiler/deploy.cj`**（`lingqu.compiler` 续）：hdc 输出的纯函数层
+  - `parseHdcTargets`：解析 `hdc list targets`，**挡掉 `COM1 UART Ready` 这类串口噪声**
+    （踩过"把 COM 口当设备"的幽灵设备坑），保留 USB 与 TCP（无线调试）目标
+  - `parseInstallResult` / `parseStartResult`：按**文本**判定成败 —— 实测 **hdc 失败时退出码仍是 0**，
+    只能靠 `install bundle successfully` / `start ability successfully` 判
+  - `hdcFailCodeOf` / `hdcFailHintOf`：9568322（签名不可信）/ 9568269（安装路径）/ 10106102（锁屏）
+    → 可执行处置，与 `diagnose.cj` 的 FP-012/013/014 同源
+  - `hilogTail` / `hilogLooksHealthy`：日志尾部 + panic/SIGABRT/FATAL 健康判断
+- **6 例新单测**（总 120），fixture 全部是 **2026-10-31 真机原始输出**
+- 真机截图入库：`samples/evidence/habit-tree-ohos-device.jpeg`（3120×2080，170 KB）
+
+### 签名调研结论（用户提出的问题，已实测验证）
+
+| 做法 | 结果 |
+|---|---|
+| 用 SDK 自带的 **OpenHarmony 默认材料**签名（`sdk/default/openharmony/toolchains/lib/OpenHarmony.p12`） | ❌ `hdc install` 被拒：`code:9568322 signature verification failed due to not trusted app source` |
+| 用 `~/.ohos/config` 里 **DevEco 自动签名的 debug 材料** | ✅ **`install bundle successfully`** |
+
+关键发现：**`~/.ohos/config` 里那套材料还在，且 profile 的 `device-ids` 已包含本机 UDID**
+（`B8861DAE97…6385`）。口令是 DevEco 加密串，但 **hvigor 自己会解密** ——
+所以把历史里那份 `signingConfigs` 写回 `build-profile.json5`，`hvigor assembleHap` 就能签出可装 HAP，
+**全程不需要打开 DevEco、也不需要重新登录**。
+
+参考的 [flutter 提交](https://gitcode.com/oh-flutter/flutter_flutter/commit/e2793de97e8744b5f675da52d72e7076420bca3c)
+是同一件事的自动化版（`DevEco-identical file naming + hap-sign-tool P12/CSR`、`OAuth loopback login`、
+`AGC APIs + hdc 设备注册`）——**它省掉的是 IDE，不是账号**；本次发现的是更省的一条：
+**复用机器上已有的签名材料，连账号都不需要**。
+
+### 验证证据（真机，2026-10-31）
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 设备识别 | `hdc list targets` | `3QC0124B20000048`（HAD-W32，API 26，HarmonyOS 7.0.0.111） |
+| 安装 | `hdc -t <sn> install -r entry-default-signed.hap` | **`install bundle successfully`** |
+| 启动 | `hdc shell aa start -a EntryAbility -b com.jiujiang.habit_tree` | **`start ability successfully`** |
+| 状态 | `hdc shell aa dump -a` | `Mission ID #77 … state #FOREGROUND`、`AbilityRecord #160 state #ACTIVE` |
+| 视觉 | `snapshot_display` + `hdc file recv` | 3120×2080 jpeg，170 KB（已入库） |
+| 崩溃 | `ls /data/log/faultlog/faultlogger/` | 空（无崩溃记录） |
+
+**未做（如实标注）**：`t2h:deploy` 命令（安装/启动/取日志）与 ⑥ 真机验证屏**尚未接线**——
+本轮只做手工链路验证 + 纯函数解析层；T5-4 签名两态（release/企业证书）仍未做。
+另：ArkWeb 渲染子进程未观察到，**界面是否完整渲染需人眼看截图确认**（我无视觉能力）。
+
+---
+
 ## [0.16.0] - 2026-10-30
 
 **主题**：**P5 第三刀 —— T5-3 HAP 装配**：`t2h:hap` 上线，用 DevEco 自带的 node + hvigor
