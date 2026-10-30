@@ -470,6 +470,13 @@ body.ai-hidden .ai-show{display:block}
           <div><h1>改造执行</h1><p>规则优先、AI 兜底；每一步都带验证探针，人工介入逐次计数（验收 A3 线 ≤5 处）。</p></div>
           <div class="acts"><input id="portPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_SCAN_PATH）" style="width:260px"><button class="btn" id="btnPortPreview">预览改造</button><button class="btn primary" id="btnPortApply">应用（落盘）</button><button class="btn" id="btnPortRevert">回滚</button></div>
         </div>
+        <div class="card" style="margin-bottom:12px;padding:10px 14px" id="diagCard">
+          <div class="legend" style="margin:0">
+            <input id="diagLogPath" class="mono" placeholder="构建/运行日志文件路径（错误指纹诊断）" style="flex:1;min-width:200px">
+            <button class="btn" id="btnDiagnose">诊断</button>
+            <span id="diagNote" class="muted">构建报错贴这里——命中指纹直接给修法（不调模型），未命中才走 AI</span>
+          </div>
+        </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="portCard">
           <div class="legend" style="margin:0">
             <span>规则改造（Cargo.toml 6 + 工具链 2 + lib.rs 1 + 前端 3）：<b id="portApplied">—</b></span>
@@ -1710,6 +1717,38 @@ withBridge(function(tauri){
   }
   function lingquDecide(rule, decision){ recordDecision(rule, decision); }
   window.lingquDecide = lingquDecide;
+  /* 错误指纹诊断：命中即给修法（rule 档建议重跑 t2h:port），未命中才走 AI 长尾 */
+  $('btnDiagnose').addEventListener('click', function(){
+    var lp = ($('diagLogPath').value || '').trim();
+    var note = $('diagNote');
+    if (!lp) { note.style.color = 'var(--warn)'; note.textContent = '请先填日志文件路径。'; return; }
+    note.style.color = '';
+    note.textContent = '诊断中：' + lp;
+    invoke('t2h:diagnose', { logPath: lp }).then(function(r){
+      var d = (r && r.diagnosis) || {};
+      var n = d.total || 0;
+      if (r && r.error) {
+        note.style.color = 'var(--err)';
+        note.textContent = r.error;
+      } else if (n === 0) {
+        note.style.color = 'var(--warn)';
+        note.textContent = '未命中任何指纹——长尾问题，转右栏 AI 对话（把日志粘给它）';
+      } else {
+        var parts = [];
+        ((d.items) || []).forEach(function(it){
+          var fp = it.fingerprint || {};
+          parts.push('[' + (fp.id || '?') + '] ' + (fp.rootCause || '') + ' → ' + (fp.fix || '') + (it.patchKind === 'rule' ? '（重跑「预览改造/应用」即可修）' : '（需人工）'));
+        });
+        note.style.color = '';
+        note.textContent = parts.join(' ｜ ');
+      }
+      reportUi('diagnose-done');
+    }).catch(function(e){
+      note.style.color = 'var(--err)';
+      note.textContent = '诊断失败：' + (e && e.message ? e.message : e);
+      reportUi('diagnose-error');
+    });
+  });
   function portInvoke(apply){
     var p = ($('portPath').value || '').trim();
     if (!p) { $('portNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_SCAN_PATH）。'; return; }

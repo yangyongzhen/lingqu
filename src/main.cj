@@ -466,6 +466,66 @@ public class DecisionsCommand <: CommandHandler {
     }
 }
 
+/**
+ * t2h:diagnose —— 错误指纹诊断（T4-7 Agent 兜底闭环的"不调模型"半边）。
+ *   输入：args.log（日志全文）或 args.logPath（日志文件路径）
+ *   输出：命中的指纹（现象→根因→修法）、rule 档建议（重跑 t2h:port 即可修）
+ *   与补丁提案的六道闸校验结果（默认 0 轮 0 失败——闸的轮次计数在 agent 闭环层持有）。
+ *   指纹未命中时如实返回空（长尾才走 LLM，见技术思路 §5.5）。
+ */
+public class DiagnoseCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var res = JsonObject()
+        var logText = argStr(args, "log", "")
+        let logPath = argStr(args, "logPath", "")
+        if (logText.size == 0 && logPath.size > 0) {
+            try {
+                logText = String.fromUtf8(File.readFrom(logPath))
+            } catch (e: Exception) {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString("读日志文件失败：${e}"))
+                return res
+            }
+        }
+        if (logText.size == 0) {
+            logText = envOr("LINGQU_DIAGNOSE_LOG", "")
+        }
+        if (logText.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:diagnose 需要参数 log（日志全文）或 logPath（日志文件路径）"))
+            return res
+        }
+
+        let items = diagnoseLog(logText)
+        let proposals = patchProposalsFromDiagnosis(items)
+        let rounds = argInt(args, "rounds", 0)
+        let sameFails = argInt(args, "sameFingerprintFails", 0)
+        let gates = checkGates(proposals, Int64(rounds), Int64(sameFails))
+
+        var proposalsArr = JsonArray()
+        for (p in proposals) {
+            var o = JsonObject()
+            o.put("file", JsonString(p.file))
+            o.put("ruleId", JsonString(""))
+            o.put("fingerprintId", JsonString(p.fingerprintId))
+            proposalsArr.add(o)
+        }
+
+        res.put("ok", JsonBool(true))
+        let dj = diagnosisJson(items)
+        res.put("diagnosis", dj)
+        res.put("proposals", proposalsArr)
+        res.put("gates", gates.toJson())
+        // rule 档命中 → 建议直接重跑 t2h:port（幂等修）；无命中 → 走 LLM 长尾（对话通道）
+        let suggest = dj.get("suggestRerunPort")
+        res.put("suggestRerunPort", suggest.getOrThrow())
+        eprintln("[lingqu][diagnose] 命中=${dj.get("total").toString()} gates.passed=${gates.passed}")
+        return res
+    }
+}
+
 // ============================================================
 // 业务装配点
 // ============================================================
@@ -990,6 +1050,7 @@ public func build(): AppSpec {
             app.register("t2h:port", PortCommand())
             app.register("t2h:revert", RevertCommand())
             app.register("t2h:decisions", DecisionsCommand())
+            app.register("t2h:diagnose", DiagnoseCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

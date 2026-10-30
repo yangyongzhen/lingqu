@@ -5,6 +5,61 @@
 
 ---
 
+## [0.13.0] - 2026-10-30
+
+**主题**：P4 收官 —— T4-7 Agent 兜底闭环（错误指纹库 + 结构化补丁建议 + 六道闸校验器），
+`t2h:diagnose` 命令上线。**P4 全部任务（T4-1～T4-9）完成**。
+
+### Added
+
+- **`src/port/diagnose.cj`（新）**——T4-7a/b：
+  - **错误指纹库 15 条**（FP-001~015，与 `skills/t2h-ohos-port/references/pitfalls.md` 同源）：
+    编译链接期 7 条（napi 缺依赖 / -lgcc_eh / 链接器未配置 / patch 绕过 / wry·tao 未一并 patch /
+    版本解析失败 / custom-protocol 白屏）+ 运行部署期 8 条（app_data_dir panic / SIGABRT /
+    9568322 签名 / 9568269 安装路径 / 10106102 锁屏 / rawfile 死资源）
+  - **patchKind 两档**：`rule`（现有规则可修 → 建议重跑 t2h:port，幂等只补缺口）/
+    `guide`（需人工或 AI）；**命中时不调用模型**——更快、更准、可审计（技术思路 §5.5 的差异化点）
+  - `diagnoseLog`：日志逐行字面量匹配，同指纹去重取首行证据（带日志行号）
+  - `patchProposalsFromDiagnosis`：rule 档按 ruleId 映射目标文件（按文件去重）
+- **`src/port/gates.cj`（新）**——T4-7c 六道闸（可纯函数化的四道 + 命令层两道）：
+  1. 文件白名单（白名单前缀 + 绝对禁碰 .git/target/node_modules/dist/Cargo.lock）
+  2. 单点原则（一次一文件）
+  3. 结构约束（删除 >80 行 ≈ 整体重写，拒；空补丁拒）
+  4. 轮次与经济性（>8 轮拒、同指纹失败 ≥2 转 guide——`FailLedger` 跨轮计数）
+  （编译闸/回归闸需 cargo 子进程，P5 落地后接入）
+- **`t2h:diagnose` 命令**（三处联动）：输入 `log` 全文或 `logPath` 文件路径 →
+  命中指纹（现象→根因→修法）+ 补丁提案过闸结果 + `suggestRerunPort`；
+  **未命中如实返回空**（长尾才走 LLM 对话通道）。④ 屏新增"诊断"入口
+  （日志路径 → 渲染"[FP-xxx] 根因 → 修法（重跑预览改造即可修 / 需人工）"）
+- **8 例新单测**（总 82）：指纹库形态、rule 档命中与证据行号、同指纹去重、
+  无命中返回空、补丁提案文件映射与去重、六道闸（白名单/单点/结构/轮次/经济性/正常放行）、
+  FailLedger 分指纹计数
+
+### Changed
+
+- **AGENTS.md §8 上游回馈纪律 + fork 先行策略**：cj-tauri/cjh 能力不满足 → 提 issue（有修法提 PR）；
+  **tauri/openharmony-ability 能力不满足时不等上游**——在 yangyongzhen fork 下建
+  `fix/<工程>-<问题>` 分支先解决，patch rev 钉住继续移植，后续整理 PR 贡献上游
+  （实证：cc-switch 官方 feat/open-harmony、habit-tree 的 ability feat/0.3.0 patch）
+- **§8 新增鸿蒙侧工具与技能生态表**：deveco-cli（`devecocli build/run`，P5 部署链实际使用）、
+  harmonyos-agent-skills（官方鸿蒙 skills 集合，skill 沉淀的参照形态与回馈对象）；
+  gitcode 反爬时按 atomgit 同路径域名访问
+
+### 验证证据
+
+| 断言项 | 值 |
+|---|---|
+| 指纹库 | 15 条（rule 7 + guide 8），marker 全部为报错原文稳定子串 |
+| 诊断匹配 | FP-001/002 主路径命中 + 证据带日志行号；同指纹去重；无命中返回空 |
+| 六道闸 | 白名单外/禁碰文件/多文件/大段删除/空补丁/超轮次/超失败全部拦截；干净补丁放行 |
+| 门禁 | 四道闸全绿，**82 例单测** |
+
+**P4 出口判据达成情况（如实标注）**：判据 2（人工介入 ≤5 有记录）、4（幂等可回滚）已达成并有
+单测与实测证据；判据 1（`cargo check --target ohos` 0 error）、3（规则命中率 ≥60%）**需 P5
+交叉编译流水线**才能取证——指纹库与六道闸就是为那一刻准备的（编译闸/回归闸届时接入）。
+
+---
+
 ## [0.12.0] - 2026-10-30
 
 **主题**：P4 第三刀 —— setup 接线机械化（R2-PORT-010）+ 对话框资源生成（R2-PORT-014）

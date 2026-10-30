@@ -214,7 +214,28 @@ python scripts/search_docs.py --query "string 切片" --domain language --view l
 | 仓 | 远程地址 | 说明 |
 |---|---|---|
 | cj-tauri | **https://atomgit.com/qq8864/cj-tauri** | 外壳/UI 框架；`examples/ai-chat` 是 cjh 托管的参照实现 |
-| cjh | **https://atomgit.com/qq8864/cjh** | 内嵌 AI 引擎；WS 协议见 `src/web/protocol.cj` |
+| cjh | **https://atomgit.com/qq8864/cjh** | 内嵌 AI 引擎；WS 协议见 `src/web/protocol.cj`；集成指南见本仓 `docs/集成cjh.md` |
+
+**上游回馈纪律**：使用 cj-tauri / cjh 过程中发现**能力不满足、行为异常或有新坑**时，
+不要只在本地绕过——到对应仓**提 issue**（现象 → 根因 → 复现/证据 → 建议），有通用修法的
+进一步提 PR（方法见 `cj-tauri-contribute` skill）。这是框架自进化的通道，也是课题"工具
+开源"验收的生态贡献证据。
+
+**移植阻塞的 fork 先行策略**：移植过程中发现 **tauri / openharmony-ability 的能力不满足**
+（缺 API、行为缺陷、真机专属问题）时，**不要等上游修复**——直接在
+https://github.com/yangyongzhen/tauri 或 https://github.com/yangyongzhen/openharmony-ability
+下**建分支先解决**（`fix/<工程>-<问题>` 命名，commit 注明动机），用 patch rev 钉住继续推进移植；
+**后续再把分支内容整理成 PR 贡献回上游**。等上游 = 移植流水线停摆，fork 先行 = 不阻塞交付，
+两边不矛盾（记录来源：cc-switch 官方 feat/open-harmony 分支与 habit-tree 的 ability
+feat/0.3.0 patch 都是这条路的实证）。
+
+鸿蒙侧工具与技能生态（P4/P5 构建·部署链与 skill 沉淀的直接相关方；gitcode 页面有反爬，
+**访问不到时按 atomgit 同路径域名试**）：
+
+| 仓 | 远程地址 | 说明 |
+|---|---|---|
+| **deveco-cli** | **https://atomgit.com/openharmony-sig/deveco-cli**（= gitcode.com/openharmony-sig/deveco-cli） | 集成 HarmonyOS 应用开发工具集（知识文档 + 精品 Skills，多智能体）。命令 `devecocli`：`devecocli build` 打 HAP、`devecocli run --device <serial>` 构建+安装+启动——habit-tree 真机部署链（P5）实际用它替代裸 hvigorw/hdc 序列 |
+| **harmonyos-agent-skills** | **https://atomgit.com/HarmonyOS_Skills/harmonyos-agent-skills**（= gitcode 同名仓，MIT） | 官方 HarmonyOS 应用开发 skills 集合——与本项目 `skills/t2h-ohos-port`（Tauri→鸿蒙移植 skill）同生态；新 skill 沉淀时参考其组织形态，成熟后可回馈 |
 
 拿到新环境后的一次性动作（路径不需要记，`setup.sh` 会问/给默认值）：
 
