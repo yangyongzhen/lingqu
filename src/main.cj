@@ -1086,6 +1086,7 @@ public class UiReportCommand <: CommandHandler {
         o.put("signAllowsDevice", JsonBool(argBool(args, "signAllowsDevice", false)))
         o.put("signType", JsonString(argStr(args, "signType", "")))
         o.put("signCandCount", JsonInt(argInt(args, "signCandCount", 0)))
+        o.put("signApplied", JsonBool(argBool(args, "signApplied", false)))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -1734,9 +1735,9 @@ public class SignCommand <: CommandHandler {
             buildProfileError = "找不到 ${buildProfile}（还没生成鸿蒙脚手架？）"
         }
         let proj = parseProjSigning(projText)
-        let certPath = resolveProjectPath(proj.certPath, ohosDir)
-        let storeFile = resolveProjectPath(proj.storeFile, ohosDir)
-        let profilePath = resolveProjectPath(proj.profilePath, ohosDir)
+        var certPath = resolveProjectPath(proj.certPath, ohosDir)
+        var storeFile = resolveProjectPath(proj.storeFile, ohosDir)
+        var profilePath = resolveProjectPath(proj.profilePath, ohosDir)
         var filesExist = false
         if (certPath != "" && storeFile != "" && profilePath != "") {
             filesExist = exists(Path(certPath)) && exists(Path(storeFile)) && exists(Path(profilePath))
@@ -1796,10 +1797,99 @@ public class SignCommand <: CommandHandler {
         }
 
         // ---- ④ 判定 ----
-        let hasConfig = proj.hasSigningConfigs && proj.signingConfigName != ""
+        var hasConfig = proj.hasSigningConfigs && proj.signingConfigName != ""
+        var outProfileType = configured.profileType
+        var outAllowsDevice = configured.allows(udid)
         let check = judgeSign(hasConfig, filesExist, configured.allows(udid), configured.profileType,
             udid, candidatePath != "")
         check.configuredName = proj.signingConfigName
+
+        // ---- ⑤ 写回签名配置（apply=true / LINGQU_SIGN_APPLY=1）----
+        //
+        // 这是把"体检工具"变成"省事工具"的一步：工程没配签名时，直接把它配好。
+        // 关键约束：**口令（storePassword/keyPassword）是 DevEco AesGcmKit 密文，我们无法生成**，
+        // 所以只能从"用同一套材料（同一个 .p12 文件名）的其它工程"原样搬过来——材料即身份，
+        // 那条规则由 `sameMaterialFile()` 保证。
+        // 界面传 apply=true 或置 LINGQU_SIGN_APPLY=1 都算（探针走环境变量；两者取「或」，
+        // 这样页面显式传 false 也不会把探针关掉）
+        let wantApply = argBool(args, "apply", false) || envOr("LINGQU_SIGN_APPLY", "") == "1"
+        var donorPath = argStr(args, "donor", envOr("LINGQU_SIGN_DONOR", ""))
+        var applyText = ""          // 写回后的 build-profile.json5（成功时）
+        var applySkipped = ""
+        var applyError = ""
+        var backupPath = ""
+        var appliedName = ""
+        if (wantApply) {
+            if (hasConfig && filesExist) {
+                applySkipped = "工程已经配好签名（${proj.signingConfigName}），不需要写回"
+            } else if (buildProfile == "") {
+                applyError = "找不到工程位置（要传 path 参数）"
+            } else if (!exists(Path(buildProfile))) {
+                applyError = "找不到 ${buildProfile}（先跑 `cargo tauri ohos init --ci` 生成脚手架）"
+            } else if (candidatePath == "") {
+                applyError = "机器上没有含本机 UDID 的可用材料，无可写回的内容（先在 DevEco 自动签名一次）"
+            } else {
+                // 比对基准必须是 p12（signingConfigs 里的 storeFile 就是 p12）——
+                // 拿 .p7b 去比会永远不匹配（实测踩到）
+                let (candP12, _) = materialSiblingsOf(candidatePath)
+                match (findDonorMaterial(candP12, donorPath)) {
+                    case Some(hit) =>
+                        donorPath = hit.donorPath
+                        let m = hit.material
+                        // 材料路径统一取本机这一套（donor 那份可能指向别的目录/旧路径）
+                        let (p12, cer) = materialSiblingsOf(candidatePath)
+                        m.storeFile = p12
+                        m.certpath = cer
+                        m.profile = candidatePath
+                        appliedName = m.name
+                        try {
+                            let origin = String.fromUtf8(File.readFrom(buildProfile))
+                            let (newText, err) = applySigningConfig(origin, m)
+                            if (err != "") {
+                                applyError = err
+                            } else {
+                                if (!exists(Path(".lingqu/sign"))) {
+                                    if (!exists(Path(".lingqu"))) {
+                                        Directory.create(Path(".lingqu"))
+                                    }
+                                    Directory.create(Path(".lingqu/sign"))
+                                }
+                                backupPath = ".lingqu/sign/${projName}.build-profile.json5.bak"
+                                File.writeTo(backupPath, origin.toArray())
+                                File.writeTo(buildProfile, newText.toArray())
+                                applyText = newText
+                                // 写回完**立刻重新判定**：让界面直接显示"现在可以直装了"，
+                                // 而不是让人再点一次体检（判定用的还是同一套材料/UDID）
+                                let proj2 = parseProjSigning(newText)
+                                hasConfig = proj2.hasSigningConfigs && proj2.signingConfigName != ""
+                                // 材料路径与存在性也要按**新配置**重算（旧配置里是空的，
+                                // 直接用旧值会误报"材料不存在"——实测踩到）
+                                let cert2 = resolveProjectPath(proj2.certPath, ohosDir)
+                                let prof2 = resolveProjectPath(proj2.profilePath, ohosDir)
+                                let store2 = resolveProjectPath(proj2.storeFile, ohosDir)
+                                filesExist = cert2 != "" && prof2 != "" && store2 != "" &&
+                                    exists(Path(cert2)) && exists(Path(prof2)) && exists(Path(store2))
+                                let type2 = profileTypeOf(prof2)
+                                let allows2 = profileAllows(prof2, udid)
+                                outProfileType = type2
+                                outAllowsDevice = allows2
+                                let fresh = judgeSign(hasConfig, filesExist, allows2, type2, udid, true)
+                                check.ok = fresh.ok
+                                check.reason = fresh.reason
+                                check.nextStep = fresh.nextStep
+                                check.configuredName = proj2.signingConfigName
+                                check.configuredFilesExist = filesExist
+                                check.configuredAllowsDevice = allows2
+                            }
+                        } catch (e: Exception) {
+                            applyError = "写回失败：${e}"
+                        }
+                    case None =>
+                        applyError = "没找到用同一套材料的工程（口令是 DevEco 加密串，只能从已有工程搬）：" +
+                            "可在 DevEco 里对该工程自动签名一次，或传 donor=<已有工程路径>"
+                }
+            }
+        }
 
         // ---- 落档（证据：hdc 原文 + 材料明细，供人复核） ----
         var outError = ""
@@ -1815,6 +1905,16 @@ public class SignCommand <: CommandHandler {
         logText += "[signing] name=${proj.signingConfigName} type=${proj.certType} " +
             "certpath=${certPath} profile=${profilePath} storeFile=${storeFile} filesExist=${filesExist}\n"
         logText += "[verdict] ok=${check.ok} reason=${check.reason}\n"
+        if (applyText != "") {
+            // 写回后重读一遍：日志里要留"改完之后长什么样"，否则事后只剩一个 applied=true
+            let after = parseProjSigning(applyText)
+            logText += "[signing/after-apply] name=${after.signingConfigName} type=${after.certType} " +
+                "certpath=${after.certPath} profile=${after.profilePath} storeFile=${after.storeFile}\n"
+        }
+        if (wantApply) {
+            logText += "[apply] applied=${applyText != ""} donor=${donorPath} backup=${backupPath} " +
+                "skipped=${applySkipped} error=${applyError}\n"
+        }
         try {
             if (!exists(Path(".lingqu/sign"))) {
                 if (!exists(Path(".lingqu"))) {
@@ -1843,6 +1943,15 @@ public class SignCommand <: CommandHandler {
             root.put("profiles", carr)
             root.put("signing", signingJson(proj, certPath, profilePath, storeFile, filesExist))
             root.put("check", check.toJson())
+            var applyObj = JsonObject()
+            applyObj.put("requested", JsonBool(wantApply))
+            applyObj.put("applied", JsonBool(applyText != ""))
+            applyObj.put("donor", JsonString(donorPath))
+            applyObj.put("backup", JsonString(backupPath))
+            applyObj.put("configName", JsonString(appliedName))
+            applyObj.put("skipped", JsonString(applySkipped))
+            applyObj.put("error", JsonString(applyError))
+            root.put("apply", applyObj)
             File.writeTo(outJson, root.toJsonString().toArray())
         } catch (e: Exception) {
             outError = "落档失败：${e}"
@@ -1856,18 +1965,27 @@ public class SignCommand <: CommandHandler {
         res.put("nextStep", JsonString(check.nextStep))
         res.put("hasConfig", JsonBool(hasConfig))
         res.put("filesExist", JsonBool(filesExist))
-        res.put("allowsDevice", JsonBool(configured.allows(udid)))
-        res.put("profileType", JsonString(configured.profileType))
+        res.put("allowsDevice", JsonBool(outAllowsDevice))
+        res.put("profileType", JsonString(outProfileType))
         res.put("signingName", JsonString(proj.signingConfigName))
         res.put("candidateCount", JsonInt(Int64(cands.size)))
         res.put("candidatePath", JsonString(candidatePath))
         res.put("candidateBundle", JsonString(candidateBundle))
         res.put("buildProfile", JsonString(buildProfile))
+        res.put("applyRequested", JsonBool(wantApply))
+        res.put("applied", JsonBool(applyText != ""))
+        res.put("applyDonor", JsonString(donorPath))
+        res.put("applyBackup", JsonString(backupPath))
+        res.put("applySkipped", JsonString(applySkipped))
+        res.put("applyError", JsonString(applyError))
         res.put("outJson", JsonString(outJson))
         res.put("outLog", JsonString(outLog))
         var em = outError
         if (em == "") {
             em = buildProfileError
+        }
+        if (em == "" && wantApply && applyText == "") {
+            em = applyError
         }
         res.put("error", JsonString(em))
         eprintln("[lingqu][sign] ${projName} udid=${udid} ok=${check.ok} candidates=${cands.size} " +
@@ -1876,8 +1994,35 @@ public class SignCommand <: CommandHandler {
     }
 }
 
-/** 签名配置 → JSON（落档用） */
-func signingJson(proj: ProjSigning, certPath: String, profilePath: String, storeFile: String,
+/** 读一份 `.p7b` 的 profile 类型（读不到返回 ""，不抛） */
+func profileTypeOf(p7bPath: String): String {
+    if (p7bPath == "" || !exists(Path(p7bPath))) {
+        return ""
+    }
+    try {
+        let raw = latin1Of(File.readFrom(p7bPath))
+        return parseOhosProfile(extractProfileJson(raw), p7bPath).profileType
+    } catch (e: Exception) {
+        let _ = e
+        return ""
+    }
+}
+
+/** 这份 `.p7b` 是否允许该 UDID 装机（读不到一律 false：宁可误报"不行"，也不误报"能装"） */
+func profileAllows(p7bPath: String, udid: String): Bool {
+    if (p7bPath == "" || udid == "" || !exists(Path(p7bPath))) {
+        return false
+    }
+    try {
+        let raw = latin1Of(File.readFrom(p7bPath))
+        return parseOhosProfile(extractProfileJson(raw), p7bPath).allows(udid)
+    } catch (e: Exception) {
+        let _ = e
+        return false
+    }
+}
+
+/** 签名配置 → JSON（落档用） */func signingJson(proj: ProjSigning, certPath: String, profilePath: String, storeFile: String,
     filesExist: Bool): JsonObject {
     var o = JsonObject()
     o.put("configuredName", JsonString(proj.signingConfigName))
@@ -1910,8 +2055,89 @@ func resolveProjectPath(p: String, base: String): String {
     return p
 }
 
-/** hdc 位置：OHOS_HOME / DEVECO_SDK_HOME / DEVECO_HOME 下的 toolchains（找不到返回 ""） */
-func hdcPathOr(): String {
+/** 找到"用同一套材料"的工程：返回 (donor 工程路径, 它的 signingConfigs 字段) */
+public class DonorHit {
+    public var donorPath: String = ""
+    public var material: SigningMaterial = SigningMaterial()
+}
+
+/**
+ * 找能提供口令密文的 donor 工程。
+ *
+ * 为什么要找：`storePassword` / `keyPassword` 是 DevEco **AesGcmKit 密文**（随机口令 + `material/`
+ * 密钥派生），我们既拿不到明文也造不出密文；但只要**同一个 `.p12`**，那份密文就是通用的，
+ * 于是从别的工程"搬"过来即可。搜索范围限定在几个常见的工程目录（深度有限），避免全盘扫。
+ */
+func findDonorMaterial(p12Path: String, explicitDonor: String): Option<DonorHit> {
+    var candidates = ArrayList<String>()
+    // 显式指定：可以是工程根（含 src-tauri/gen/ohos），也可以是直接指向 build-profile.json5
+    if (explicitDonor != "") {
+        if (exists(Path(explicitDonor))) {
+            collectBuildProfiles(explicitDonor, 0, 5, candidates)
+        }
+    }
+    if (candidates.size == 0) {
+        let home = firstNonEmpty([envOr("USERPROFILE", ""), envOr("HOME", "")])
+        if (home != "") {
+            for (sub in ["DevEcoStudioProjects", "Documents", "Desktop"]) {
+                let root = hostPath("${home}/${sub}")
+                if (exists(Path(root))) {
+                    collectBuildProfiles(root, 0, 4, candidates)
+                }
+            }
+        }
+    }
+    for (p in candidates) {
+        var text = ""
+        try {
+            text = String.fromUtf8(File.readFrom(p))
+        } catch (e: Exception) {
+            let _ = e
+            continue
+        }
+        let m = signingMaterialOf(text)
+        if (!m.complete()) {
+            continue
+        }
+        if (!sameMaterialFile(m.storeFile, p12Path)) {
+            continue
+        }
+        // donor 工程路径：build-profile.json5 往上两级（…/gen/ohos/build-profile.json5）
+        let hit = DonorHit()
+        hit.donorPath = p
+        hit.material = m
+        return Some(hit)
+    }
+    return None
+}
+
+/** 递归收集 `build-profile.json5`（限深度、跳过重型目录；Directory.walk 非递归，所以自己走） */
+func collectBuildProfiles(dir: String, depth: Int64, maxDepth: Int64, out: ArrayList<String>): Unit {
+    if (depth > maxDepth) {
+        return
+    }
+    var entries: Array<FileInfo>
+    try {
+        entries = Directory.readFrom(dir)
+    } catch (e: Exception) {
+        let _ = e
+        return
+    }
+    for (info in entries) {
+        if (info.isDirectory()) {
+            let n = info.name
+            if (n == ".git" || n == "node_modules" || n == "oh_modules" || n == "target" ||
+                n == "build" || n == ".hvigor" || n == ".gradle") {
+                continue
+            }
+            collectBuildProfiles("${dir}/${n}", depth + 1, maxDepth, out)
+        } else if (info.name == "build-profile.json5") {
+            out.add("${dir}/${info.name}")
+        }
+    }
+}
+
+/** hdc 位置：OHOS_HOME / DEVECO_SDK_HOME / DEVECO_HOME 下的 toolchains（找不到返回 ""） */func hdcPathOr(): String {
     var cands = ArrayList<String>()
     let ohosHome = envOr("OHOS_HOME", "")
     if (ohosHome != "") {

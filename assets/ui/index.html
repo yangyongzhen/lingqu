@@ -562,6 +562,7 @@ body.ai-hidden .ai-show{display:block}
           <button class="btn" id="btnVerifyAssets" title="不重编，只比对 .so 内嵌的前端产物与 dist/">校验前端指纹</button>
           <button class="btn primary" id="btnHap" title="跑 hvigor assembleHap 并做死资源校验">装配 HAP</button>
           <button class="btn" id="btnSign" title="查本机 UDID + 工程签名配置 + ~/.ohos/config 材料，判定能不能直装">签名体检</button>
+          <button class="btn" id="btnSignApply" title="工程没配签名时，从用同一套材料的已有工程把 signingConfigs 抄进 build-profile.json5（自动备份）">写回签名配置</button>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="buildCard">
           <div class="legend" style="margin:0 0 6px">
@@ -2198,7 +2199,7 @@ withBridge(function(tauri){
    * 真机实测的痛点：hvigor 有没有产出 signed.hap 跟"装不装得上"完全无关，
    * 判据是 profile 的 device-ids 里有没有本机 UDID。这条判定可以离线做（不需要账号）。 */
   var SIGN = { ok: false, hasUdid: false, hasConfig: false, filesExist: false,
-               allowsDevice: false, type: '', candCount: 0 };
+               allowsDevice: false, type: '', candCount: 0, applied: false };
   function renderSign(r){
     r = r || {};
     SIGN = {
@@ -2229,22 +2230,43 @@ withBridge(function(tauri){
     note.style.color = SIGN.ok ? 'var(--ok)' : 'var(--err)';
     note.textContent = (r.reason || r.error || '尚未体检。') + (r.nextStep ? ('　下一步：' + r.nextStep) : '');
     if (r.error) { note.textContent = String(r.error).split('\n')[0]; }
+    // 写回签名配置（apply）的结果：三种结局要分清，别把"已配好"当失败
+    if (r.applyRequested) {
+      SIGN.applied = r.applied === true;
+      if (r.applied === true) {
+        note.style.color = 'var(--ok)';
+        note.textContent = '已写回 signingConfigs（' + (r.applyDonor || '') + '）→ 现在可以「装配 HAP」了'
+          + (r.applyBackup ? '；原文件备份在 ' + r.applyBackup : '');
+      } else if (r.applySkipped) {
+        note.style.color = 'var(--warn)';
+        note.textContent = String(r.applySkipped);
+      } else if (r.applyError) {
+        note.style.color = 'var(--err)';
+        note.textContent = String(r.applyError);
+      }
+    }
   }
-  function runSign(path){
+  function runSign(path, apply){
     var note = $('signNote');
     note.style.color = 'var(--warn)';
-    note.textContent = '体检中（hdc 取 UDID + 解析 signingConfigs + 扫 ~/.ohos/config）…';
+    note.textContent = apply
+      ? '写回中（找同一套材料的工程 → 备份 → 改 build-profile.json5）…'
+      : '体检中（hdc 取 UDID + 解析 signingConfigs + 扫 ~/.ohos/config）…';
     $('btnSign').disabled = true;
-    invoke('t2h:sign', { path: path || '' }).then(function(r){
+    $('btnSignApply').disabled = true;
+    invoke('t2h:sign', { path: path || '', apply: apply === true }).then(function(r){
       renderSign(r || {});
-      reportUi('sign-done');
+      reportUi(apply ? 'sign-apply-done' : 'sign-done');
     }).catch(function(e){
       renderSign({ ok: false, error: e && e.message ? e.message : 'invoke error' });
-      reportUi('sign-error');
-    }).then(function(){ $('btnSign').disabled = false; });
+      reportUi(apply ? 'sign-apply-error' : 'sign-error');
+    }).then(function(){ $('btnSign').disabled = false; $('btnSignApply').disabled = false; });
   }
   $('btnSign').addEventListener('click', function(){
-    runSign(($('buildPath').value || '').trim());
+    runSign(($('buildPath').value || '').trim(), false);
+  });
+  $('btnSignApply').addEventListener('click', function(){
+    runSign(($('buildPath').value || '').trim(), true);
   });
 
   $('btnVerifyAssets').addEventListener('click', function(){    var p = ($('buildPath').value || '').trim();
@@ -2337,6 +2359,7 @@ withBridge(function(tauri){
       signAllowsDevice: SIGN.allowsDevice === true,
       signType: SIGN.type || '',
       signCandCount: (typeof SIGN.candCount === 'number') ? SIGN.candCount : 0,
+      signApplied: SIGN.applied === true,
       errorCount: window.__uiErrors.length,
       // tag / ts 让落盘序列可判定（以前 tag 只进 console.log，快照之间无法区分）
       tag: String(tag || ''),

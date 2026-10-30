@@ -75,6 +75,13 @@ D:\oh\DevEcoStudio\sdk\default\openharmony\toolchains\hdc.exe shell bm get --udi
 > 或点 ⑤ 屏「签名体检」）。它做四件事并落档 `.lingqu/sign/<工程>.{json,log}`：取 UDID → 解析工程
 > `build-profile.json5` 的 `signingConfigs` → 扫 `~/.ohos/config` 全部 `.p7b`（优先挑包名也对得上的）→
 > 给「装得上吗 + 要动什么」。**纯离线、免账号**。判定实现见 `src/compiler/sign.cj`。
+>
+> 连下面"把 signingConfigs 抄回工程"这一步也自动化了：**apply 模式**（点 ⑤ 屏「写回签名配置」，
+> 或置 `LINGQU_SIGN_APPLY=1`）会找一个**用同一套材料**的 donor 工程（`LINGQU_SIGN_DONOR=<已有工程>`，
+> 否则扫 `~/DevEcoStudioProjects`、`~/Documents`、`~/Desktop`），把它的 `signingConfigs` 原样搬进
+> `build-profile.json5`——**含 DevEco 加密口令**（那是 AesGcmKit 密文，我们造不出来，只能搬），
+> 改前自动备份 `.lingqu/sign/<工程>.build-profile.json5.bak`，写完立刻重判。机制细节（为什么口令只能搬）
+> 见 `docs/鸿蒙自动签名机制.md` §3.7。
 
 ### 3.3 配方（全程命令行，6 步）
 

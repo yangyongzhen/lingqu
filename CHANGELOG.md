@@ -5,6 +5,64 @@
 
 ---
 
+## [0.19.0] - 2026-11-01
+
+**主题**：**签名配置自动写回**（`t2h:sign` 的 apply 模式）—— 把"体检工具"变成"省事工具"。
+工程没配签名时，一条命令把 `signingConfigs` 写进 `build-profile.json5`（自动备份、幂等、写后可直装）。
+另沉淀长文 **`docs/鸿蒙自动签名机制.md`**：把 DevEco / flutter / deveco-cli 那套"签名材料工厂"
+拆成可复刻的步骤（这条链之前只有零散结论，没有一份能照着实现的说明书）。
+
+### Added
+
+- **`t2h:sign` 的 apply 模式**（`apply: true` 或 `LINGQU_SIGN_APPLY=1`）：
+  1. 判定工程缺签名（已有非空 `signingConfigs` 时**跳过而不是覆盖**）
+  2. 找一个**用同一套材料**的 donor 工程（比对 `storeFile` 的 p12 文件名；范围：显式 `donor` /
+     `LINGQU_SIGN_DONOR`，否则扫 `~/DevEcoStudioProjects`、`~/Documents`、`~/Desktop`，限深度 4）
+  3. 把它的 `signingConfigs`（含 **DevEco AesGcmKit 加密口令**——我们造不出来，只能搬）原样注入
+  4. 顺手把 `products[].signingConfig` 指到它；改动前存 `.lingqu/sign/<工程>.build-profile.json5.bak`
+  5. **写后立刻重新判定**并回填结果 → 界面直接显示"可直装"，不用再点一次
+- **纯函数层**（`src/compiler/sign.cj`）：`SigningMaterial` / `signingMaterialOf` / `signingBlockJson5` /
+  `json5EscapeOf` / `injectSigningConfigs` / `pointProductSigningConfig` / `applySigningConfig` /
+  `sameMaterialFile` / `fileNameOf` —— **纯文本手术，不重排整份 json5**
+- **4 例新单测**（总 **136**）：写回主路径（含"写得进去 = 读得出来"的闭环断言 + 括号配平）、
+  拒绝覆盖 / 材料不全 / 结构不认识、`signingConfig` 三种指向、材料身份与转义往返
+- **⑤ 屏「写回签名配置」按钮** + `ui_report` 新增 `signApplied`
+- **`docs/鸿蒙自动签名机制.md`**（长文，可直接改写为博客）：三方关系图、九步全链路、AGC 端点表、
+  材料命名规则（**本机实测确认** hash = `sha256(前向斜杠路径)` base64url 去 padding）、
+  `material/` 口令加密格式（PBKDF2 + AES-128-GCM）、C0–C10 复用检查、"上云生成 vs 离线复用"对比、
+  复刻清单，以及**每条事实的出处与核对方式**
+
+### Fixed（都是先红后绿）
+
+- **注入后 json5 变成 `]]`**：`injectSigningConfigs` 从原数组的 `]` 处开始接原文，而新 body 自己已带 `]`
+  → 多一个闭合括号，json5 语法错误。改为从 `]` 的**下一个字符**接；并加 `bracketBalance()` 断言防复发
+- **donor 比对拿 `.p7b` 去比 `.p12`**：`sameMaterialFile` 比的是文件名，材料身份是 p12 → 永远匹配不上
+  （实测 `applied=false`）。改为先把候选 `.p7b` 换成同 base 的 `.p12`
+- **写回后 `filesExist`/`profileType`/`allowsDevice` 仍是写回前的旧值**：先按新配置重算材料路径与
+  存在性、重解析 profile，再判定（否则会出现"已写回但报材料不存在"的自相矛盾）
+- 探针失效：页面显式传 `apply:false` 会盖掉 `LINGQU_SIGN_APPLY=1` → 改成两者取「或」
+
+### 验证证据（真机 + GUI 实测，2026-11-01）
+
+拿一份 `signingConfigs: []` 的模拟工程（`%TEMP%\lingqu-apply-demo`，包名 `com.jiujiang.habit_tree`）
+跑 `LINGQU_SIGN_PATH=<它> LINGQU_SIGN_APPLY=1 LINGQU_SIGN_DONOR=E:\test\rust\habit-tree`：
+
+```
+[verdict] ok=true reason=签名配置齐全，且 profile 绑定了本机 UDID，可直装
+[apply] applied=true donor=E:\test\rust\habit-tree\src-tauri\gen\ohos\build-profile.json5
+        backup=.lingqu/sign/lingqu-apply-demo.build-profile.json5.bak
+[signing/after-apply] name=default type=HarmonyOS
+        certpath=…default_ohos_m7Gx….cer  profile=…default_ohos_m7Gx….p7b  storeFile=…default_ohos_m7Gx….p12
+ui_report：signOk=true signApplied=true signHasConfig=true signFilesExist=true
+           signAllowsDevice=true signType=debug
+```
+
+写回后的 `build-profile.json5` 与 0.17.0 真机装成功的那份**同结构同材料**；demo 工程缺 entry 模块，
+所以本轮**没有**在它上面重跑 `hvigor assembleHap`（如实标注，未验证到"装配"这一步）。
+四道闸全绿：build 0 warning / test TOTAL=136 FAILED=0 / check / build-app 0 warning。
+
+---
+
 ## [0.18.0] - 2026-11-01
 
 **主题**：**签名体检 `t2h:sign`** —— 把 T5-5 挖到的"能不能装"判据做成一键体检。

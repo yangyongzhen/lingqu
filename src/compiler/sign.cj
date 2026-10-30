@@ -553,3 +553,282 @@ public func pickProfile(cands: ArrayList<OhosProfile>, udid: String, bundle: Str
     }
     return None
 }
+
+// ============================================================
+// 写回签名配置（apply）：把"体检通过但工程没配"变成"配好了"
+// ============================================================
+//
+// 为什么需要"抄别人的 signingConfigs"而不是自己造口令：
+// `storePassword` / `keyPassword` 是 **DevEco AesGcmKit 密文**，密钥在 `.p12` 旁边的
+// `material/` 目录里（PBKDF2 + AES-128-GCM，见 docs/鸿蒙自动签名机制.md §3.7b）。
+// 我们**拿不到明文口令**（它是随机生成的，只以密文存在），所以只能：
+//   ① 找一台/一个已经用**同一套材料**的工程（donor），把它那段 signingConfigs 原样搬过来；
+//   ② 或者让用户去 DevEco 点一次自动签名。
+// 好在"同一套材料"= 同一个 `.p12` 文件 → 口令密文通用，搬家是安全的。
+
+/** 一段 signingConfigs 里 material 的字段（口令是密文，原样搬运） */
+public class SigningMaterial {
+    public var name: String = "default"
+    public var certType: String = "HarmonyOS"
+    public var storeFile: String = ""
+    public var storePassword: String = ""
+    public var keyAlias: String = "debugKey"
+    public var keyPassword: String = ""
+    public var signAlg: String = "SHA256withECDSA"
+    public var profile: String = ""
+    public var certpath: String = ""
+
+    /** 口令齐了才算可用（缺口令的块搬过去 hvigor 也解不开） */
+    public func complete(): Bool {
+        if (this.storeFile == "" || this.profile == "" || this.certpath == "") {
+            return false
+        }
+        return this.storePassword != "" && this.keyPassword != ""
+    }
+}
+
+/** 路径取文件名（两种分隔符都认） */
+public func fileNameOf(p: String): String {
+    var cut: Int64 = -1
+    let bytes = p.toArray()
+    for (i in 0..bytes.size) {
+        if (bytes[i] == 47 || bytes[i] == 92) {
+            cut = i
+        }
+    }
+    if (cut < 0) {
+        return p
+    }
+    return p[(cut + 1)..]
+}
+
+/** 两个路径是不是指向同一份材料（只比文件名：材料都在 ~/.ohos/config 下，文件名即身份） */
+public func sameMaterialFile(a: String, b: String): Bool {
+    if (a == "" || b == "") {
+        return false
+    }
+    return lowerAsciiOf(fileNameOf(a)) == lowerAsciiOf(fileNameOf(b))
+}
+
+/** ASCII 小写化（不用 String 的大小写 API，避免踩标准库细节） */
+func lowerAsciiOf(s: String): String {
+    let bytes = s.toArray()
+    for (i in 0..bytes.size) {
+        let b = bytes[i]
+        if (b >= 65 && b <= 90) {
+            bytes[i] = b + 32
+        }
+    }
+    return String.fromUtf8(bytes)
+}
+
+/** 从工程 `build-profile.json5` 文本里读出那份 signingConfigs 的字段（读不到字段就留空） */
+public func signingMaterialOf(text: String): SigningMaterial {
+    let m = SigningMaterial()
+    let name = json5ValueAfter(text, "name")
+    if (name != "") {
+        m.name = name
+    }
+    let t = json5ValueAfter(text, "type")
+    if (t != "") {
+        m.certType = t
+    }
+    m.storeFile = json5ValueAfter(text, "storeFile")
+    m.storePassword = json5ValueAfter(text, "storePassword")
+    let alias = json5ValueAfter(text, "keyAlias")
+    if (alias != "") {
+        m.keyAlias = alias
+    }
+    m.keyPassword = json5ValueAfter(text, "keyPassword")
+    let alg = json5ValueAfter(text, "signAlg")
+    if (alg != "") {
+        m.signAlg = alg
+    }
+    m.profile = json5ValueAfter(text, "profile")
+    m.certpath = json5ValueAfter(text, "certpath")
+    return m
+}
+
+/** 按 DevEco 的结构生成 `signingConfigs` 数组里的那一块（缩进按 indent 对齐） */
+public func signingBlockJson5(m: SigningMaterial, indent: String): String {
+    let i1 = indent
+    let i2 = indent + "  "
+    let i3 = indent + "    "
+    return "${i1}{\n" +
+        "${i2}\"name\": \"${m.name}\",\n" +
+        "${i2}\"type\": \"${m.certType}\",\n" +
+        "${i2}\"material\": {\n" +
+        "${i3}\"certpath\": \"${json5EscapeOf(m.certpath)}\",\n" +
+        "${i3}\"storePassword\": \"${m.storePassword}\",\n" +
+        "${i3}\"keyAlias\": \"${m.keyAlias}\",\n" +
+        "${i3}\"keyPassword\": \"${m.keyPassword}\",\n" +
+        "${i3}\"profile\": \"${json5EscapeOf(m.profile)}\",\n" +
+        "${i3}\"signAlg\": \"${m.signAlg}\",\n" +
+        "${i3}\"storeFile\": \"${json5EscapeOf(m.storeFile)}\"\n" +
+        "${i2}}\n" +
+        "${i1}}"
+}
+
+/** 写进 json5 的字符串要做反向转义（Windows 路径的 `\` 必须成 `\\`） */
+public func json5EscapeOf(s: String): String {
+    let bytes = s.toArray()
+    let out = ArrayList<UInt8>()
+    for (b in bytes) {
+        if (b == 92) {
+            out.add(92)
+            out.add(92)
+        } else if (b == 34) {
+            out.add(92)
+            out.add(34)
+        } else {
+            out.add(b)
+        }
+    }
+    return String.fromUtf8(out.toArray())
+}
+
+/**
+ * 把一块 signingConfigs 注入 `build-profile.json5` 文本（**纯文本手术，不重排整份文件**）。
+ *
+ * 只处理"`signingConfigs` 是空数组"这一种情况（其余一律不动）：空数组里塞进 block，
+ * 缩进对齐到 `signingConfigs` 键所在行的缩进。
+ * 返回 (新文本, 错误)：错误非空时不写文件。
+ */
+public func injectSigningConfigs(text: String, m: SigningMaterial): (String, String) {
+    if (text == "") {
+        return ("", "build-profile.json5 内容为空")
+    }
+    if (parseProjSigning(text).hasSigningConfigs) {
+        return ("", "工程里已经有非空的 signingConfigs，不做覆盖（要重配请先手动清空）")
+    }
+    // 定位 signingConfigs 键（带引号 / 裸键两种写法）
+    var keyEnd: Int64 = -1
+    var lineStart: Int64 = 0
+    match (text.indexOf("\"signingConfigs\"")) {
+        case Some(at) =>
+            keyEnd = at + "\"signingConfigs\"".size
+            lineStart = at
+        case None => match (text.indexOf("signingConfigs:")) {
+            case Some(at) =>
+                keyEnd = at + "signingConfigs:".size
+                lineStart = at
+            case None => return ("", "找不到 signingConfigs 字段（build-profile.json5 结构不认识）")
+        }
+    }
+    let bytes = text.toArray()
+    // 该行的缩进：从键位置往回找到行首
+    while (lineStart > 0 && bytes[lineStart - 1] != 10 && bytes[lineStart - 1] != 13) {
+        lineStart--
+    }
+    var indentLen: Int64 = 0
+    while (lineStart + indentLen < keyEnd && (bytes[lineStart + indentLen] == 32 || bytes[lineStart + indentLen] == 9)) {
+        indentLen++
+    }
+    let keyIndent = String.fromUtf8(bytes[lineStart..(lineStart + indentLen)])
+    // 找紧邻的 [ ... ]
+    var i = keyEnd
+    while (i < bytes.size && bytes[i] != 91) {
+        if (bytes[i] == 123 || bytes[i] == 125) {   // { }
+            return ("", "signingConfigs 后面没找到数组")
+        }
+        i++
+    }
+    if (i >= bytes.size) {
+        return ("", "signingConfigs 后面没找到数组")
+    }
+    let open = i
+    var close: Int64 = -1
+    i++
+    while (i < bytes.size) {
+        let c = bytes[i]
+        if (c == 93) {   // ]
+            close = i
+            break
+        }
+        if (c != 32 && c != 9 && c != 10 && c != 13 && c != 44) {
+            // 空数组里居然有东西：解析口径与 hasSigningConfigs 不一致，别动
+            return ("", "signingConfigs 数组非空（或结构异常），不做覆盖")
+        }
+        i++
+    }
+    if (close < 0) {
+        return ("", "signingConfigs 数组没闭合")
+    }
+    let elemIndent = keyIndent + "  "
+    let body = "[\n${signingBlockJson5(m, elemIndent)}\n${keyIndent}]"
+    let head = String.fromUtf8(bytes[0..open])
+    // 从 `]` 的**下一个字符**开始接原文：body 自己已经带上了收尾的 `]`，
+    // 若从 `close` 起接会多出一个 `]`（实测把 json5 写成 `]]`，语法错误）
+    let tail = String.fromUtf8(bytes[(close + 1)..bytes.size])
+    return (head + body + tail, "")
+}
+
+/**
+ * 把 `products[].signingConfig` 指到 [name]。
+ * 三种情形：已指向目标（不动）／是空串（填上）／指向别的名字（报错，不猜）。
+ */
+public func pointProductSigningConfig(text: String, name: String): (String, String) {
+    if (text == "") {
+        return ("", "build-profile.json5 内容为空")
+    }
+    if (name == "") {
+        return ("", "签名配置名为空")
+    }
+    let marker = "\"signingConfig\""
+    var at: Int64 = -1
+    match (text.indexOf(marker)) {
+        case Some(i) => at = i
+        case None => return ("", "找不到 products[].signingConfig 字段")
+    }
+    let bytes = text.toArray()
+    var i = at + marker.size
+    // 跳冒号
+    while (i < bytes.size && bytes[i] != 58 && bytes[i] != 10) {
+        i++
+    }
+    if (i >= bytes.size || bytes[i] != 58) {
+        return ("", "products[].signingConfig 后面没有冒号")
+    }
+    i++
+    while (i < bytes.size && (bytes[i] == 32 || bytes[i] == 9 || bytes[i] == 10 || bytes[i] == 13)) {
+        i++
+    }
+    if (i >= bytes.size || bytes[i] != 34) {   // "
+        return ("", "products[].signingConfig 的值不是字符串")
+    }
+    let valueStart = i + 1
+    var valueEnd = valueStart
+    while (valueEnd < bytes.size && bytes[valueEnd] != 34) {
+        valueEnd++
+    }
+    if (valueEnd >= bytes.size) {
+        return ("", "products[].signingConfig 的字符串没闭合")
+    }
+    let current = String.fromUtf8(bytes[valueStart..valueEnd])
+    if (current == name) {
+        return (text, "")
+    }
+    if (current != "") {
+        return ("", "products[].signingConfig 已指向「${current}」，不自动改（请手动确认）")
+    }
+    let head = String.fromUtf8(bytes[0..valueStart])
+    let tail = String.fromUtf8(bytes[valueEnd..bytes.size])
+    return (head + name + tail, "")
+}
+
+/** 一次性做完「注入 signingConfigs + 指向 product」，任一步失败就返回原文本与错误 */
+public func applySigningConfig(text: String, m: SigningMaterial): (String, String) {
+    if (!m.complete()) {
+        return ("", "材料不完整（缺 .p12/.cer/.p7b 或口令密文），无法写回")
+    }
+    let (step1, err1) = injectSigningConfigs(text, m)
+    if (err1 != "") {
+        return ("", err1)
+    }
+    let (step2, err2) = pointProductSigningConfig(step1, m.name)
+    if (err2 != "") {
+        return ("", err2)
+    }
+    return (step2, "")
+}
+

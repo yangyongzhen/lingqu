@@ -236,8 +236,7 @@ public func testParseProjSigningEdgeCases(): Unit {
 /* ---------- hdc 输出解析 ---------- */
 
 @Test
-public func testParseUdidVariants(): Unit {
-    // 本机实测格式（前缀一行 + UDID 一行）
+public func testParseUdidVariants(): Unit {    // 本机实测格式（前缀一行 + UDID 一行）
     let real = "udid of current device is :\n" + UDID_IN_SAMPLE + "\n"
     @Assert(parseUdid(real), UDID_IN_SAMPLE)
     // 前缀与值同行
@@ -251,3 +250,168 @@ public func testParseUdidVariants(): Unit {
     // 太短的十六进制串不算
     @Assert(parseUdid("deadbeef"), "")
 }
+
+/* ---------- 写回签名配置（apply） ---------- */
+
+/** `cargo tauri ohos init` 生成的原样（signingConfigs 空、signingConfig 空串、尾逗号） */
+const PROFILE_EMPTY = """
+{
+  "app": {
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "",
+        "compatibleSdkVersion": "5.0.0(12)",
+        "runtimeOS": "HarmonyOS",
+      },
+    ],
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [{ "name": "default", "applyToProducts": ["default"] }],
+    },
+  ],
+}
+"""
+
+/** 从已配好的工程里"搬"来的那块（口令是密文，原样搬运） */
+func donorMaterial(): SigningMaterial {
+    let m = SigningMaterial()
+    m.name = "default"
+    m.storeFile = "C:\\Users\\me\\.ohos\\config\\default_demo_abc=.p12"
+    m.storePassword = "0000001B7D2E6E5C0D2E5F0E0A1B2C3D4E5F6071"
+    m.keyPassword = "0000001B2E6E5C0D2E5F0E0A1B2C3D4E5F607182"
+    m.profile = "C:\\Users\\me\\.ohos\\config\\default_demo_abc=.p7b"
+    m.certpath = "C:\\Users\\me\\.ohos\\config\\default_demo_abc=.cer"
+    return m
+}
+
+@Test
+public func testApplySigningConfigHappyPath(): Unit {
+    let m = donorMaterial()
+    @Assert(m.complete(), true)
+    let (out, err) = applySigningConfig(PROFILE_EMPTY, m)
+    @Assert(err, "")
+    // 结果必须能被自己的解析器读回来（这是闭环断言：写得进去 = 读得出来）
+    let parsed = parseProjSigning(out)
+    @Assert(parsed.hasSigningConfigs, true)
+    @Assert(parsed.signingConfigName, "default")
+    @Assert(parsed.certType, "HarmonyOS")
+    // 写进去的路径必须是转义后的，解析回来等于原值（Windows 双反斜杠往返）
+    @Assert(parsed.storeFile, m.storeFile)
+    @Assert(parsed.profilePath, m.profile)
+    @Assert(parsed.certPath, m.certpath)
+    // 口令密文与签名算法 / 别名也要原样带过去
+    @Assert(json5ValueAfter(out, "storePassword"), m.storePassword)
+    @Assert(json5ValueAfter(out, "keyPassword"), m.keyPassword)
+    @Assert(json5ValueAfter(out, "keyAlias"), "debugKey")
+    @Assert(json5ValueAfter(out, "signAlg"), "SHA256withECDSA")
+    // 其余结构（modules / products 的其它字段）不能被破坏
+    @Assert(out.contains("\"compatibleSdkVersion\": \"5.0.0(12)\""), true)
+    @Assert(out.contains("\"applyToProducts\""), true)
+    @Assert(out.contains("\"modules\""), true)
+    // 不能出现重复闭合（实测踩到 `]]`：注入时把原数组的 `]` 留下了，json5 直接语法错误）
+    @Assert(bracketBalance(out), 0)
+    @Assert(out.contains("]]"), false)
+}
+
+/** 方括号/花括号配平检查（0 = 平衡；>0 少闭合，<0 多闭合） */
+func bracketBalance(text: String): Int64 {
+    let bytes = text.toArray()
+    var square: Int64 = 0
+    var curly: Int64 = 0
+    var inStr = false
+    var esc = false
+    for (b in bytes) {
+        if (inStr) {
+            if (esc) {
+                esc = false
+            } else if (b == 92) {
+                esc = true
+            } else if (b == 34) {
+                inStr = false
+            }
+            continue
+        }
+        if (b == 34) {
+            inStr = true
+        } else if (b == 91) {
+            square++
+        } else if (b == 93) {
+            square--
+        } else if (b == 123) {
+            curly++
+        } else if (b == 125) {
+            curly--
+        }
+    }
+    return square + curly
+}
+
+@Test
+public func testApplySigningConfigRefusesOverwrite(): Unit {
+    // ① 已有非空 signingConfigs → 不覆盖（幂等的另一面：二次 apply 必须报错而不是叠加）
+    let m = donorMaterial()
+    let (out, err) = applySigningConfig(PROFILE_EMPTY, m)
+    @Assert(err, "")
+    let (out2, err2) = applySigningConfig(out, m)
+    @Assert(out2, "")
+    @Assert(err2.contains("已经有非空"), true)
+    // ② 材料不全（没有口令密文）→ 拒绝（否则写进去 hvigor 也解不开）
+    let partial = SigningMaterial()
+    partial.storeFile = "a.p12"
+    partial.profile = "a.p7b"
+    partial.certpath = "a.cer"
+    @Assert(partial.complete(), false)
+    let (_, err3) = applySigningConfig(PROFILE_EMPTY, partial)
+    @Assert(err3.contains("材料不完整"), true)
+    // ③ 结构里根本没有 signingConfigs → 明确报错，不乱插
+    let (_, err4) = applySigningConfig("{\"app\":{\"products\":[{\"name\":\"default\"}]}}", m)
+    @Assert(err4.contains("找不到 signingConfigs"), true)
+    // ④ 空文本
+    let (_, err5) = applySigningConfig("", m)
+    @Assert(err5 != "", true)
+}
+
+@Test
+public func testPointProductSigningConfigBranches(): Unit {
+    // 空串 → 填上
+    let (a, e1) = pointProductSigningConfig("{\"products\":[{\"signingConfig\":\"\"}]}", "default")
+    @Assert(e1, "")
+    @Assert(a.contains("\"signingConfig\":\"default\""), true)
+    // 已指向目标 → 原样返回（不改动，保证幂等）
+    let same = "{\"products\":[{\"signingConfig\":\"default\"}]}"
+    let (b, e2) = pointProductSigningConfig(same, "default")
+    @Assert(e2, "")
+    @Assert(b, same)
+    // 指向别的名字 → 不猜，报错
+    let (_, e3) = pointProductSigningConfig("{\"products\":[{\"signingConfig\":\"releaseCfg\"}]}", "default")
+    @Assert(e3.contains("releaseCfg"), true)
+    // 没有该字段 / 空名字
+    let (_, e4) = pointProductSigningConfig("{\"products\":[{\"name\":\"default\"}]}", "default")
+    @Assert(e4.contains("找不到"), true)
+    let (_, e5) = pointProductSigningConfig(same, "")
+    @Assert(e5 != "", true)
+}
+
+@Test
+public func testMaterialIdentityAndEscaping(): Unit {
+    // 同一份材料：目录不同、分隔符不同，但文件名相同 → 视为同一套
+    @Assert(sameMaterialFile("C:\\Users\\me\\.ohos\\config\\x=.p12", "D:/other/x=.p12"), true)
+    @Assert(sameMaterialFile("C:\\a\\X=.P12", "C:\\a\\x=.p12"), true)   // 大小写不敏感
+    @Assert(sameMaterialFile("C:\\a\\one.p12", "C:\\a\\two.p12"), false)
+    @Assert(sameMaterialFile("", "C:\\a\\one.p12"), false)
+    // 取文件名（两种分隔符）
+    @Assert(fileNameOf("C:\\a\\b\\c.p7b"), "c.p7b")
+    @Assert(fileNameOf("/a/b/c.p7b"), "c.p7b")
+    @Assert(fileNameOf("c.p7b"), "c.p7b")
+    // 转义：反斜杠翻倍、引号加反斜杠
+    @Assert(json5EscapeOf("C:\\a\\b"), "C:\\\\a\\\\b")
+    @Assert(json5EscapeOf("say \"hi\""), "say \\\"hi\\\"")
+    // 往返：转义后再还原，等于原值
+    @Assert(unescapeJson5(json5EscapeOf("D:\\oh\\x.cer")), "D:\\oh\\x.cer")
+}
+
