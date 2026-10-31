@@ -10,10 +10,21 @@
 > |---|---|---|
 > | `fix/declarative-tool-shell` | 第 1 条：`registry.cj` 的 `/bin/bash` → `ShellProvider` | build 0 warning / 540 例全绿 |
 > | `feat/ws-frame-limit` | **新增第 6 条**：入站帧超限显式回 `error`（`frame_too_large`）+ `/api/capabilities` 公告 `features.ws.max_frame_bytes` | 同上 |
+> | `fix/shell-provider-detect` | **新增第 7 条（本轮，最关键）**：`ShellProvider` 分层探测 + 死路径防护 + `features.shell` 自述 | `PASS=7 FAIL=0`，cjterm 98 例（+3） |
 >
 > 提 PR：
 > - https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=fix/declarative-tool-shell
 > - https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=feat/ws-frame-limit
+> - https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=fix/shell-provider-detect
+>
+> **第 7 条现场（灵渠 0.39.0 实测）**：agent 每次 bash 都报
+> `ProcessException: Created process failed, errMessage: "The system cannot find the file specified."`，
+> 同轮 `read_file`/`list_dir` 正常 → 能看能规划，但**跑不了命令**。
+> 根因：`ShellProvider` 只试三个**写死在 C 盘**的候选且不校验存在性；本机 Git 在
+> `D:\Program Files\Git`，三个候选全不存在 → `shellPath` 指向死路径，spawn 必失败。
+> **没装 Git 也一样**：现在降级 PowerShell（`isBash=false`），并把当前 shell 模式写进
+> `bash` 工具描述 + `features.shell`，让模型与客户端都知道边界。
+
 >
 > **第 2 条（REST 对话入口）经用户指出后撤回**：产品是桌面 GUI，页面永远在场，WS 通道够用；
 > 当初想加它其实是在给一个 WS bug 打补丁——而那个 bug 的**真因就是第 6 条**（超限帧静默丢弃）。
