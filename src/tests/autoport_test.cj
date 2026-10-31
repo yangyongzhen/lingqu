@@ -222,6 +222,17 @@ public func testFullAutoDirectiveHasNoHalfAutoClause(): Unit {
 }
 
 @Test
+public func testKickoffStaysShortAndPointsAtFile(): Unit {
+    // 0.37.2 的教训：任务书整段单帧发不进去（4.4KB 被静默丢弃），改为落文件 + 短 kickoff。
+    // 这条断言钉住"短"——否则等于把问题搬回去。
+    let k = buildAutoPortKickoff("E:/x/.lingqu/autoport-directive.md")
+    @Assert(k.contains("E:/x/.lingqu/autoport-directive.md"), true)
+    @Assert(k.contains("read"), true)
+    @Assert(k.contains("resume"), true)
+    @Assert(k.size < 400, true)
+}
+
+@Test
 public func testEveryScopeHasAGoal(): Unit {
     // 每个 scope 都要有收尾条件，否则半自动任务书会缺一段（写漏了 AI 会自己发挥）
     for (s in ["port", "deps", "build", "hap", "sign", "deploy", "verify"]) {

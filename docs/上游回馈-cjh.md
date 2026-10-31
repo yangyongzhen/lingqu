@@ -120,6 +120,16 @@ frames = 1, toolCards = 0
 
 **剩下的两个变量（下一步一次跑完就能二分）**
 
+> **已二分完成（0.37.2）**：`LINGQU_UI_PROBE=ai-short`（切完工作区**只发短句**）结果
+> `frames=5, delta:2, done:2, replyPreview=收到` → 排除"切换后状态"。
+> **根因是消息长度**：4448 字的任务书单帧发过去被静默丢弃，9 字短句正常。
+> 灵渠侧已改为「任务书落进目标工程 `.lingqu/autoport-directive.md` + 只发 <400 字 kickoff」，
+> 改后 agent 正常开工：`tool_start:40 / tool_result:40 / done:1`（886 帧）。
+>
+> **仍建议 cjh 侧做一件事**：WS 读侧对**超限帧显式回一个 `error` 帧**（现在是静默丢弃，
+> 客户端只能靠"没有回帧"猜），并在 `/api/capabilities` 里给出 `ws.max_frame_bytes`。
+> 这条比下面几条都省事，而且能救所有踩同一坑的调用方。
+
 1. **消息长度**：失败的都是 4448 字任务书，成功的是 9 字短句。怀疑 WS 读侧有单帧上限，
    超长帧被截断/丢弃（截断的 JSON 也不会有 error 帧，正好符合"静默"）。
 2. **`POST /api/workspaces/switch` 之后的状态**：失败路径都先切了 cjh 的 workspace

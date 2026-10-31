@@ -3777,6 +3777,27 @@ public class AutoPortStartCommand <: CommandHandler {
         inp.scope = scope
         let directive = buildAutoPortDirective(inp)
 
+        // 任务书**落进目标工程**（agent 的 cwd 就是那里），消息里只发短 kickoff。
+        // 实测依据：4.4 KB 单帧发过去 cjh 静默丢弃，9 字短句正常（见 docs/上游回馈-cjh.md 排障进度）。
+        let directivePath = path + cjhPathSep() + ".lingqu" + cjhPathSep() + "autoport-directive.md"
+        var directiveErr = ""
+        try {
+            let ddir = path + cjhPathSep() + ".lingqu"
+            if (!exists(Path(ddir))) {
+                Directory.create(Path(ddir))
+            }
+            File.writeTo(directivePath, directive.toArray())
+        } catch (e: Exception) {
+            directiveErr = "写任务书失败：${e}"
+            eprintln("[lingqu][autoport] ${directiveErr}")
+        }
+        let kickoff = if (directiveErr.size == 0) {
+            buildAutoPortKickoff(directivePath)
+        } else {
+            // 写不进盘就退回整段发（可能被丢，但至少不留空）；同时在返回里如实带上错误
+            directive
+        }
+
         synchronized(gAutoPortLock) {
             gAutoPort.reset(path, safe, budget, minutes)
         }
@@ -3792,6 +3813,11 @@ public class AutoPortStartCommand <: CommandHandler {
         res2.put("cliPath", JsonString(cliPath))
         res2.put("directive", JsonString(directive))
         res2.put("directiveChars", JsonInt(Int64(directive.size)))
+        res2.put("directivePath", JsonString(directivePath))
+        res2.put("directiveError", JsonString(directiveErr))
+        // 真正要发出去的是这条短消息（任务书靠 agent 自己 read）
+        res2.put("kickoff", JsonString(kickoff))
+        res2.put("kickoffChars", JsonInt(Int64(kickoff.size)))
         var prep = JsonObject()
         prep.put("skill", JsonBool(skillOk))
         prep.put("skillNote", JsonString(skillNote))

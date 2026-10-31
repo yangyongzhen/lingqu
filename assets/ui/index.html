@@ -3287,6 +3287,11 @@ withBridge(function(tauri){
       }
       AIP.directiveChars = Number(r.directiveChars || 0);
       AIP.cliPath = String(r.cliPath || '');
+      // 实际发出去的是**短 kickoff**（任务书已落进目标工程 .lingqu/，agent 用 read 工具读）——
+      // 4.4 KB 整段单帧会被 cjh 静默丢弃（0.37.2 二分实测）
+      var kick = String(r.kickoff || r.directive || '');
+      AIP.kickoffChars = kick.length;
+      if (r.directiveError) { aiPortNote('⚠ ' + String(r.directiveError) + '（改为整段发送，可能被丢弃）'); }
       var prep = r.prep || {};
       var prepText = '技能：' + (prep.skill ? '已装' : '未装（' + String(prep.skillNote || '') + '）')
         + '；工程上下文：' + (prep.agentContext ? '已写' : '未写（' + String(prep.agentNote || '') + '）')
@@ -3310,7 +3315,7 @@ withBridge(function(tauri){
             tries += 1;
             if (CJ.up) {
               clearInterval(t);
-              sendDirective(String(r.directive || ''));
+              sendDirective(kick);
               reportUi('autoport-sent-after-wait');
             } else if (tries >= 20) {
               clearInterval(t);
@@ -3319,7 +3324,7 @@ withBridge(function(tauri){
           }, 500);
           return;
         }
-        sendDirective(String(r.directive || ''));
+        sendDirective(kick);
         AIP.active = true;
         if ($('btnMigrateStop')) { $('btnMigrateStop').disabled = false; }
         aiPortNote('AI 已接手（任务书 ' + AIP.directiveChars + ' 字，' + autoPortScopeLabel(scope) + '）。' + prepText);
@@ -5741,6 +5746,30 @@ withBridge(function(tauri){
       setTimeout(function(){ reportUi('probe-ai-early'); }, 12000);
       setTimeout(function(){ reportUi('probe-ai-mid'); }, 60000);
       setTimeout(function(){ reportUi('probe-ai-done'); }, 150000);
+    }
+    // ⓪-二分：**切完工作区后只发短句**。用来分离两个变量：
+    //   短句有回 → 问题在"长任务书"（帧长度）；短句也没回 → 问题在"workspaces/switch 之后的会话状态"
+    if (mode === 'ai-short') {
+      window.__probePath = 'E:/test/rust/habit-tree';
+      setTimeout(function(){
+        invoke('t2h:autoport_start', { path: 'E:/test/rust/habit-tree', scope: 'port', budget: 8, minutes: 10 })
+          .then(function(r){
+            r = r || {};
+            AIP.directiveChars = Number(r.directiveChars || 0);
+            // 只发短句（与工作探针完全一样的 9 个字）
+            setTimeout(function(){
+              newAssistantTurn();
+              wsSend({ type: 'chat', message: '请只回复两个字：收到' });
+              AIP.active = true;
+              startAiPolling();
+              reportUi('ai-short-sent');
+            }, 500);
+          }).catch(function(e){
+            aiPortNote('autoport_start 失败：' + (e && e.message ? e.message : e));
+            reportUi('ai-short-start-failed');
+          });
+      }, 2600);
+      setTimeout(function(){ reportUi('probe-ai-short-done'); }, 25000);
     }
     // 审批自检：出现审批卡就**自动点「拒绝」**（模拟人工决策），
     // 既验证卡片渲染，也验证 approval_response 回执链路真的把回合推下去了。

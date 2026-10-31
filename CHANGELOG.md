@@ -5,6 +5,52 @@
 
 ---
 
+## [0.37.2] - 2026-11-01
+
+**主题**：**AI 终于真的开工了** —— 定位并修掉「任务书发过去 cjh 不干活」，第一次拿到
+agent 自主跑完一个回合的实据（**40 次工具调用、886 帧、done 收尾**）。
+
+### 二分定位（一次探针定死）
+
+| 变量 | 实验 | 结果 |
+|---|---|---|
+| 通道不通？ | 同会话发 9 字短句 | ❌ 排除：`frames=5, delta:2, done:2, replyPreview=收到` |
+| 发送失败？ | `wsSendFail` | ❌ 排除：`0` |
+| 多余 `new_session`？ | 已去掉再跑 | ❌ 排除：现象不变 |
+| **workspace 切换后状态坏了？** | **切完工作区只发短句**（新探针 `LINGQU_UI_PROBE=ai-short`） | ❌ 排除：短句照样正常 |
+| **消息太长？** | 同上：4448 字长文 vs 9 字短句 | ✅ **就是这个**：短句有回、长文静默 |
+
+### Fixed
+
+- **任务书改为「落文件 + 短 kickoff」**：写进**目标工程**的 `.lingqu/autoport-directive.md`，
+  只发一条 <400 字的开工信（`buildAutoPortKickoff`，纯函数 + 1 条"必须短"的单测），
+  让 agent 用自己的 `read` 工具去读。对任何单帧长度上限免疫，也更符合 agent 的工作习惯
+- 写盘失败时如实退回"整段发送"并在返回值里带 `directiveError`（不静默）
+
+### 证据（Windows x64，`LINGQU_UI_PROBE=ai`，habit-tree）
+
+```
+wsFrameTypes = "history_messages:1, delta:804, tool_start:40, tool_result:40, done:1"
+frames = 886    toolCards = 40    errorCount = 0
+任务书落盘：E:\test\rust\habit-tree\.lingqu\autoport-directive.md（4448 B）
+AI 的自述（实时回复节选）："任务书已读完。按指示先跑 resume 看落档。
+  .lingqu/ 里只有任务书本身，没有任何落档 JSON。我先核实落档是否存放在别处。"
+门禁：五道闸全绿（TOTAL=239）
+```
+
+### 新发现（下一步第一件事）
+
+**落档位置跟 agent 的 cwd 对不上**：界面/命令跑出来的落档在**灵渠应用的工作目录**
+（`E:\test\rust\test1\lingqu\.lingqu\`），而 agent 的工作目录是**目标工程**
+（`E:\test\rust\habit-tree\`）。`t2h:agent_context` 写进工程的 AGENTS.md 说"落在本工程的
+`.lingqu/` 下"——**与事实不符**，agent 因此先花了几轮去核实。
+
+两种修法，倾向第一种：
+
+1. **落档跟着工程走**（正解）：所有命令的落档路径改为 `<工程>/.lingqu/...`，工程自包含，
+   换机器/换会话都能自证；代价是每个命令的落档前缀要统一改（`lingquWorkDir(projectPath)`）。
+2. 只改文案：告诉 agent"落档在灵渠应用目录"，但这样 agent 与界面就永远各看一套落档。
+
 ## [0.37.1] - 2026-11-01
 
 **主题**：**两种自动化档次 + 把 WS 排障的证据补齐**。

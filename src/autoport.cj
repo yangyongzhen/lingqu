@@ -51,8 +51,25 @@ public class AutoPortInput {
     public init() {}
 }
 
-/** 作用域的中文标题（界面按钮、任务书标题共用一份，别各写各的） */
-public func autoPortScopeTitle(scope: String): String {
+/**
+ * 任务书**落盘**后的开工信（纯函数，保持短消息）。
+ *
+ * 为什么要落文件而不是整段发过去（0.37.2 实测）：4.4 KB 的任务书单帧发过去，cjh 静默不处理
+ * （`wsFrameTypes` 只有 `history_messages:1`，会话里也没有这条 user 消息）；同一状态下 9 个字的
+ * 短句完全正常（`frames=5 / delta:2 / done:2`）。所以改成：
+ *   ① 任务书写进**目标工程**的 `.lingqu/autoport-directive.md`（agent 的 cwd 就在那，它有 read 工具）
+ *   ② 只发一条短 kickoff，让它自己去读
+ * 这样对任何单帧长度上限都免疫，也符合 agent 的工作习惯（读文件比读长消息更可靠）。
+ *
+ * 纪律：这条 kickoff 必须**短**（<300 字），否则等于把问题搬回去——有单测钉住。
+ */
+public func buildAutoPortKickoff(directivePath: String): String {
+    return "【灵渠 · 开工】迁移任务书已写入：`${directivePath}`（范围、工具箱、纪律、预算、收尾条件都在里面）。\n" +
+        "第一步：用 read 工具把这个文件读完，然后照它开工——先跑 `resume` 看落档停在哪一步，再动手。\n" +
+        "注意：只看落档判定，不要问我确认。"
+}
+
+/** 作用域的中文标题（界面按钮、任务书标题共用一份，别各写各的） */public func autoPortScopeTitle(scope: String): String {
     if (scope == "port") {
         return "规则改造"
     }
