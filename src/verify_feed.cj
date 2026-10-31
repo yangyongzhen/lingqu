@@ -68,16 +68,45 @@ func readJsonOrNone(p: String): Option<JsonValue> {
 }
 
 /**
+ * `build` 落档 → 「编译通过 / 前端指纹一致」两个真值（纯函数）。
+ *
+ * 单拎出来的理由：这两个判定的字段形态违反直觉——`assetDiff.matched / staleInSo / missingInSo`
+ * **都是数组**（AGENTS §4-57）。当成整数取会永远得 0，于是"指纹一致"被误判成"不一致"，
+ * 可用率凭空掉一格（0.39.9 实测：habit-tree 明明 `matched=2 / stale=0 / missing=0`，
+ * 清单却报"前端指纹不一致"）。纯函数化之后这条能被单测钉住。
+ */
+public func buildAssetFlagsOf(root: JsonValue): (Bool, Bool) {
+    let exit = intFieldOf(root, "exitCode", -1)
+    let buildOk = exit == 0 && boolFieldOf(objFieldOf(root, "gates"), "passed")
+    let diff = objFieldOf(root, "assetDiff")
+    let matched = arraySizeFieldOf(diff, "matched")
+    let stale = arraySizeFieldOf(diff, "staleInSo")
+    let missing = arraySizeFieldOf(diff, "missingInSo")
+    let assetOk = matched > 0 && stale == 0 && missing == 0
+    return (buildOk, assetOk)
+}
+
+/** `deploy` 落档 → 「装上 / 起来 / 日志健康」（纯函数，字段名按 `lingqu/deploy/v1` 的 install.ok / start.ok） */
+public func deployFlagsOf(root: JsonValue): (Bool, Bool, Bool) {
+    let installed = boolFieldOf(objFieldOf(root, "install"), "ok")
+    let started = boolFieldOf(objFieldOf(root, "start"), "ok")
+    let hilog = boolFieldOf(root, "hilogHealthy")
+    return (installed, started, hilog)
+}
+
+/**
  * 把前面几轮的落档汇总成清单输入。
  *
  * 每段都刻意"读不到就当没跑过"——verify 的价值在于如实反映现状，
  * 不能因为缺一份落档就让整条流水线报错（那会让人误以为是 verify 坏了）。
  */
-func collectVerifyInput(projName: String): ChecklistInput {
+func collectVerifyInput(projName: String, projPath: String): ChecklistInput {
     let inp = ChecklistInput()
 
     // ② 迁移画像（扫描）：清单规模来自这里
-    match (readJsonOrNone(".lingqu/scan/${projName}.json")) {
+    // 读侧一律走 resolveLqPath（工程优先、CWD 兜底）：0.38.0 起落档落在 <工程>/.lingqu/，
+    // 还按相对 CWD 读会**读到上一次或别的工程的旧档**——实测把"刚部署成功"报成"装上了但没起来"。
+    match (readJsonOrNone(resolveLqPath(projPath, "scan/${projName}.json"))) {
         case Some(scan) =>
             let items = objFieldOf(scan, "items")
             inp.commandCount = arraySizeFieldOf(items, "commands")
@@ -93,32 +122,28 @@ func collectVerifyInput(projName: String): ChecklistInput {
     }
 
     // ⑤ 交叉编译：退出码 + 前端指纹比对
-    match (readJsonOrNone(".lingqu/build/${projName}.json")) {
+    match (readJsonOrNone(resolveLqPath(projPath, "build/${projName}.json"))) {
         case Some(build) =>
-            let exit = intFieldOf(build, "exitCode", -1)
-            let gates = objFieldOf(build, "gates")
-            inp.buildOk = exit == 0 && boolFieldOf(gates, "passed")
-            let diff = objFieldOf(build, "assetDiff")
-            let stale = intFieldOf(diff, "staleInSo", -1)
-            let missing = intFieldOf(diff, "missingInSo", -1)
-            let matched = intFieldOf(diff, "matched", 0)
-            inp.assetOk = matched > 0 && stale == 0 && missing == 0
+            let (bOk, aOk) = buildAssetFlagsOf(build)
+            inp.buildOk = bOk
+            inp.assetOk = aOk
         case None => ()
     }
 
     // ⑤ HAP 装配闸
-    match (readJsonOrNone(".lingqu/hap/${projName}.json")) {
+    match (readJsonOrNone(resolveLqPath(projPath, "hap/${projName}.json"))) {
         case Some(hap) =>
             inp.hapOk = boolFieldOf(objFieldOf(hap, "gates"), "passed") && boolFieldOf(hap, "built")
         case None => ()
     }
 
     // ⑥ 真机部署：装 / 启 / 日志
-    match (readJsonOrNone(".lingqu/deploy/${projName}.json")) {
+    match (readJsonOrNone(resolveLqPath(projPath, "deploy/${projName}.json"))) {
         case Some(dep) =>
-            inp.installed = boolFieldOf(objFieldOf(dep, "install"), "ok")
-            inp.started = boolFieldOf(objFieldOf(dep, "start"), "ok")
-            inp.hilogHealthy = boolFieldOf(dep, "hilogHealthy")
+            let (inst, started, hilog) = deployFlagsOf(dep)
+            inp.installed = inst
+            inp.started = started
+            inp.hilogHealthy = hilog
         case None => ()
     }
 
@@ -126,16 +151,16 @@ func collectVerifyInput(projName: String): ChecklistInput {
 }
 
 /** 部署落档里的设备序列号（没有给 ""） */
-func deploySerialOf(projName: String): String {
-    match (readJsonOrNone(".lingqu/deploy/${projName}.json")) {
+func deploySerialOf(projName: String, projPath: String): String {
+    match (readJsonOrNone(resolveLqPath(projPath, "deploy/${projName}.json"))) {
         case Some(dep) => return jsonStrField(dep, "serial")
         case None => return ""
     }
 }
 
 /** 部署落档里的 bundleName（没有给 ""） */
-func deployBundleOf(projName: String): String {
-    match (readJsonOrNone(".lingqu/deploy/${projName}.json")) {
+func deployBundleOf(projName: String, projPath: String): String {
+    match (readJsonOrNone(resolveLqPath(projPath, "deploy/${projName}.json"))) {
         case Some(dep) => return jsonStrField(dep, "bundleName")
         case None => return ""
     }
@@ -156,13 +181,15 @@ class EvidenceShot {
  *     不看退出码；`file recv` 之后 `exists()` 才算成功。
  *   · 采集失败不影响主流程：清单会把它记成 `unknown`（缺证据），而不是把"采不到"当"通过"。
  */
-func collectEvidence(projName: String, hdc: String, serial: String, wantShots: Bool): EvidenceShot {
+func collectEvidence(projName: String, projPath: String, hdc: String, serial: String,
+    wantShots: Bool): EvidenceShot {
     let ev = EvidenceShot()
     if (hdc == "" || serial == "") {
         ev.log = "[evidence] 跳过：没有 hdc 或设备序列号\n"
         return ev
     }
-    let dir = ".lingqu/evidence"
+    // 证据也跟着工程走（截图是对这个工程的真机取证）
+    let dir = lqDirOf(projPath) + cjhPathSep() + "evidence"
     try {
         if (!exists(Path(dir))) {
             Directory.create(Path(dir), recursive: true)

@@ -1,6 +1,8 @@
 package lingqu.tests
 
 import std.collection.*
+import stdx.encoding.json.*
+import lingqu.*
 import lingqu.verify.*
 
 /*
@@ -172,4 +174,70 @@ public func testCountCrashRecordsOnlyCountsRealCrashes(): Unit {
     // 读得到且为空：既不是崩溃也不是读不到
     @Assert(countCrashRecords(""), 0)
     @Assert(faultlogUnreadable(""), false)
+}
+
+// ============================================================
+// 0.39.9：verify 取数层的两处「照着 schema 抄错类型」缺陷（先红后绿）
+// ============================================================
+//
+// 缺陷 ①：build 落档的 assetDiff.matched / staleInSo / missingInSo **都是数组**，
+//   原先用 intFieldOf 当整数取 → 永远 0 → "指纹一致"被误判成"不一致"，
+//   清单里出现"前端指纹不一致（会白屏）"，可用率凭空掉一格。
+//   现场：habit-tree 的 build 落档是 matched=[…2 项]、staleInSo=[]、missingInSo=[]。
+// 缺陷 ②：verify 读落档用的是**相对 CWD** 的 `.lingqu/...`（0.38.0 之前的落档位置），
+//   于是读到上一次/别的工程的旧档——实测把"刚部署成功"报成"装上了但没起来"。
+//   读侧现在一律 resolveLqPath（工程优先、CWD 兜底），这里钉解析层。
+
+@Test
+public func testBuildAssetFlagsTreatsAssetDiffAsArrays(): Unit {
+    // 与真实落档同形：三个字段都是数组
+    let ok = """
+    {"exitCode":0,"gates":{"passed":true},"assetDiff":{"ok":true,"matched":["index-a.js","index-b.css"],"staleInSo":[],"missingInSo":[]}}
+    """
+    let (bOk, aOk) = buildAssetFlagsOf(JsonValue.fromStr(ok))
+    @Assert(bOk, true)
+    @Assert(aOk, true)          // ← 修之前这里是 false（intFieldOf 取数组得 0）
+    // 旧 .so 带旧前端：staleInSo 有 1 项 → 必须判不一致
+    let stale = """
+    {"exitCode":0,"gates":{"passed":true},"assetDiff":{"matched":["a.js"],"staleInSo":["assets/index-OLD.js"],"missingInSo":[]}}
+    """
+    let (_, aOk2) = buildAssetFlagsOf(JsonValue.fromStr(stale))
+    @Assert(aOk2, false)
+    // 新前端没打包：missingInSo 有 1 项 → 同样不一致
+    let missing = """
+    {"exitCode":0,"gates":{"passed":true},"assetDiff":{"matched":["a.js"],"staleInSo":[],"missingInSo":["assets/index-NEW.js"]}}
+    """
+    let (_, aOk3) = buildAssetFlagsOf(JsonValue.fromStr(missing))
+    @Assert(aOk3, false)
+    // 编译失败 / 没有指纹信息（matched 为空）：编译不过 → 两条都 false
+    let bad = """
+    {"exitCode":101,"gates":{"passed":false},"assetDiff":{"matched":[],"staleInSo":[],"missingInSo":[]}}
+    """
+    let (bOk4, aOk4) = buildAssetFlagsOf(JsonValue.fromStr(bad))
+    @Assert(bOk4, false)
+    @Assert(aOk4, false)        // matched=0 时不能靠"没 stale"蒙成一致
+}
+
+@Test
+public func testDeployFlagsReadInstallAndStartSeparately(): Unit {
+    // 真机成功那次：装/启/日志 三项都 true
+    let ok = """
+    {"install":{"ok":true,"detail":"install bundle successfully"},"start":{"ok":true,"detail":"ability started"},"hilogHealthy":true}
+    """
+    let (inst, started, hilog) = deployFlagsOf(JsonValue.fromStr(ok))
+    @Assert(inst, true)
+    @Assert(started, true)
+    @Assert(hilog, true)
+    // 0.39.7 锁屏那次的真实形态：装上但没起来 —— 不能因为装上了就算通过
+    let lock = """
+    {"install":{"ok":true},"start":{"ok":false,"detail":"10106102"},"hilogHealthy":true}
+    """
+    let (inst2, started2, _) = deployFlagsOf(JsonValue.fromStr(lock))
+    @Assert(inst2, true)
+    @Assert(started2, false)
+    // 空对象：三项全 false（缺档 = 没跑过，不猜）
+    let (i3, s3, h3) = deployFlagsOf(JsonObject())
+    @Assert(i3, false)
+    @Assert(s3, false)
+    @Assert(h3, false)
 }

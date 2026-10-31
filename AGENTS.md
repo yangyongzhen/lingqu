@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.9**（2026-11-01），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.10**（2026-11-01），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -225,6 +225,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 72 | 实机探针跑到一半应用**凭空退出**，日志里只剩几行 `[PASS]` | **别一边跑 `scripts/test.bat` 一边跑实机探针**：第 ④ 闸发现 `targets/desktop` 的 `main.exe` 在跑时会**结束进程以释放产物**（日志原文 `[!] 上一版 main.exe 仍在运行，先结束它以释放产物`）。要边看边改就先只跑 `cjpm test` 或第 ①②③ 闸，整个五道闸留到探针结束之后 |
 | 73 | 改 `cjpm.toml` / `cj-tauri.toml` 的版本号或注释，改完中文全成乱码、还多了 BOM | **别用 `Get-Content \| Set-Content` 回写含中文的文件**（PS 5.1 按 GBK 误解码无 BOM 的 UTF-8，还顺手加 BOM）。单行改动（版本号）用编辑器/工具的精确替换；非要在 PowerShell 里写就用 `[System.IO.File]::WriteAllText($p, $t, (New-Object System.Text.UTF8Encoding($false)))`，改完 `git diff` 逐行复核 |
 | 74 | `t2h:hap` 报 `assembleHap 没成功`，把 `signingConfigs` 从"不存在的材料"改成 `~/.ohos/config` 里**现存那套**（文件齐全、含本机 UDID）后仍然失败，错误变成 `00303074 Configuration Error: The bundleName in app.json5/hvigorfile.ts does not match the bundleName in the generated SigningConfigs` | **签名材料（profile）是按包名签发的**：`AppScope/app.json5` 的 `bundleName` 与 profile 的 `bundle-name` 不一致时，hvigor 在 `default@SignHap` 直接拦下。"有材料 + 含本机 UDID"只过了两道门里的一道。新包名**只能**去 DevEco 自动签名一次（需登录，计入 A3 人工介入）；`00303107 Invalid storeFile` 才是材料文件缺失。工具已把两条都翻成闸门失败行（`hapSignHint`）与指纹 FP-018/FP-019，别再去猜路径。见 ADR D-017 |
+| 75 | `t2h:verify` 把**刚成功的部署**判成"装上了但没起来"，可用率凭空掉一大截；或 `t2h:report` 的数字与现场不符 | 两种"读档读错"叠在一起：① 取数还在按**相对 CWD** 读 `.lingqu/...`（0.38.0 起落档已改到 `<工程>/.lingqu/`）→ 读到上一次/别的工程的旧档，实测到的是 0.39.7 锁屏那轮的 `start.ok=false`；② `assetDiff.matched / staleInSo / missingInSo` 是**数组**（§4-57），用 `intFieldOf` 取永远得 0 → "指纹一致"被判"不一致"。**判据：落档里的每个字段先确认形态再取值**；读侧一律 `resolveLqPath(projPath, …)`，并把解析收成纯函数（`buildAssetFlagsOf` / `deployFlagsOf`）用单测钉住 |
 
 ---
 

@@ -2495,13 +2495,13 @@ public class VerifyCommand <: CommandHandler {
         let wantShots = argBool(args, "screenshot", true)
         var serial = argStr(args, "serial", "")
         if (serial == "") {
-            serial = deploySerialOf(projName)
+            serial = deploySerialOf(projName, path)
         }
         let hdc = hdcPathOr()
 
         // ① + ② 取数与采证
-        let inp = collectVerifyInput(projName)
-        let ev = collectEvidence(projName, hdc, serial, wantShots)
+        let inp = collectVerifyInput(projName, path)
+        let ev = collectEvidence(projName, path, hdc, serial, wantShots)
         if (ev.saved > 0) {
             inp.screenshotCount = ev.saved
         }
@@ -2511,7 +2511,7 @@ public class VerifyCommand <: CommandHandler {
         let items = buildChecklist(inp)
         let stats = computeStats(items)
         let ctx = ReportContext(projName)
-        ctx.bundleName = deployBundleOf(projName)
+        ctx.bundleName = deployBundleOf(projName, path)
         ctx.deviceSerial = serial
         ctx.generatedAt = nowText()
         let md = renderMarkdown(ctx, items, stats)

@@ -5,6 +5,52 @@
 
 ---
 
+## [0.39.10] - 2026-11-01
+
+**主题**：**habit-tree 首次拿到真机的完整链路与 100% 可用率**，同时修掉让可用率"假低分"的两个
+取数缺陷。签名这条也终于在**包名匹配**的样本上跑通（`signed=true` → 装 → 启）。
+
+### 真机实跑证据（Windows x64 · 鸿蒙 PC `3QC0124B20000048` · habit-tree @ `ohos` 分支）
+
+    lingqu-cli sign   --path E:\test\rust\habit-tree
+      ok=true  udid=B8861DAE…6385  hasConfig=true filesExist=true allowsDevice=true profileType=debug
+      projectBundle=com.jiujiang.habit_tree  candidateBundle=com.jiujiang.habit_tree  candidateBundleMatch=true
+    lingqu-cli hap    --path E:\test\rust\habit-tree
+      built=true  signed=true  hapBytes=7,249,833  gates.passed=true  errorCount=0
+      hvigor：BUILD SUCCESSFUL（SignHap UP-TO-DATE）
+    lingqu-cli deploy --path E:\test\rust\habit-tree
+      installed=true（install bundle successfully） started=true（ability started）
+      hilogHealthy=true（40 行，无崩溃）  serial=3QC0124B20000048
+    lingqu-cli verify --path E:\test\rust\habit-tree
+      清单 6 项：通过 5 / 平台限制 1 / 未验证 0
+      → **核心功能可用率 100%**（分母剔除平台限制），截图 .lingqu/evidence/habit-tree-verify.jpeg
+
+### Fixed
+
+- **verify 取数读到别处/过期的旧档（假低分主因）**：`collectVerifyInput` / `deploySerialOf` /
+  `deployBundleOf` / `collectEvidence` 用的是**相对 CWD** 的 `.lingqu/...`（0.38.0 之前的落档位置）。
+  实测后果：`t2h:deploy` 刚报 `start.ok=true`，紧接着 `t2h:verify` 却按应用目录里 0.39.7 份旧档
+  （`start.ok=false`，锁屏那轮）判定"装上了但没起来"。现在读侧一律 `resolveLqPath(projPath, …)`
+  （工程优先、CWD 兜底），截图证据也落到**工程**的 `.lingqu/evidence/`。
+- **`assetDiff` 三个字段是数组，被当整数取**（AGENTS §4-57 的老坑复发）：`matched / staleInSo /
+  missingInSo` 用 `intFieldOf` 永远得 0 → "前端指纹一致"被误判成"不一致（会白屏）"，
+  连带可用率掉一格。改为 `arraySizeFieldOf`，并把解析收成纯函数 `buildAssetFlagsOf` /
+  `deployFlagsOf`（`src/verify_feed.cj`），单测钉住字段形态。
+
+### Added
+
+- `src/verify_feed.cj`：`buildAssetFlagsOf(root)` / `deployFlagsOf(root)` 纯函数（两条判定单点定义）。
+- `src/tests/verify_test.cj`：`testBuildAssetFlagsTreatsAssetDiffAsArrays`（数组形态 / stale / missing /
+  编译失败四态）与 `testDeployFlagsReadInstallAndStartSeparately`（装≠起）。
+
+### 说明（签名这条的口径，别读错）
+
+`t2h:sign` 的包名门槛（0.39.9）在 habit-tree 上按预期放行：材料 bundle-name 与工程 bundleName 一致
+→ `candidateBundleMatch=true` → `signed=true`。**m3u8dl-tauri 仍是不可签**（本机没有
+`com.atomgit.m3u8dl_tauri` 的 profile），需 DevEco 登录自动签名一次——那是外部人工步骤，
+工具已给出可执行说明（见 ADR D-017），不是本仓能脚本化的（`devecocli` 只有 build/run，
+`~/.ohos/config` 里没有登录态）。
+
 ## [0.39.9] - 2026-11-01
 
 **主题**：**签名链路的真根因是「包名」，不是「材料路径」**。0.39.7 把 `hap/sign` 的 `ok=false`
