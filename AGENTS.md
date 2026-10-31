@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.36.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.37.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -199,6 +199,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 66 | 右栏 372px 里再套一层气泡，内容只剩 299px（25 头像 + 9 间距 + 11 内边距全吃掉），看着"左侧一片空白" | 窄栏的 assistant 消息要**平铺**（`.msg:not(.me)` 去头像栏与气泡框，正文贴内容区左缘）；用 `ui_report` 的 `aiFlatLeft / aiBubbleW / aiAvatarsShown` 量化，别用"看起来差不多"。用户自己的消息保留气泡以便区分"谁说的" |
 | 67 | 返回值类型写成 `func f(...) -> T`（Rust 肌肉记忆）→ 编译器报的是**下一个**函数声明：`body of function 'X' is missing` + `expected ';' or '<NL>', found '->'`，照报错位置改永远改不对 | 仓颉的返回值类型是 **`func f(...): T`**（冒号，同 Kotlin/C#）。0.36.0 为此查了半小时：报错位置指向的 `migrateResultMarkdown` 完全正常，真凶是同文件里唯一一个 `->`。**看到 `found '->'` 就在全文件 grep `->`**，别再顺着 `X` 往下找 |
 | 68 | 一键迁移这类"分钟级 + 多步"的命令写成同步 handler → 整个 IPC 命令面被堵死，页面连进度、点「停止」都发不出去 | 长任务一律**起后台线程 + 状态放内存**，命令只返回"已启动"，进度用另一条只读命令轮询（本项目 900ms）。见 `t2h:migrate` / `t2h:migrate_status`；`wait` 只给命令行用 |
+| 69 | 改了 `src/` 却只重建业务包 → `run-dev.sh` 起的还是旧行为（"改了没生效"） | `run-dev.sh` 跑的是 **`targets/desktop`** 的产物；业务包改了必须 `cd targets/desktop && cjpm build`（或直接跑 `scripts/test.sh` 的第 ④ 闸）。0.37.0 的绝对路径修复因此白跑了一轮实机探针 |
+| 70 | 交给 agent 的工具有了，但它「跑不动」：任务书里写相对路径 `cli\target\release\bin\main.exe` | agent 的 bash **cwd = 目标工程**（`workspaces/switch` 之后），相对路径全部失效。凡是要给 agent 用的路径一律**绝对**（`getWorkingDirectory()` 拼），而且要先把工程上下文/工作区切好**再**发任务书 |
 
 ---
 

@@ -1261,6 +1261,13 @@ public class UiReportCommand <: CommandHandler {
         o.put("migrateRows", JsonInt(argInt(args, "migrateRows", 0)))
         o.put("migrateResultChars", JsonInt(argInt(args, "migrateResultChars", 0)))
         o.put("migrateReport", JsonString(argStr(args, "migrateReport", "")))
+        // AI 自动迁移（0.37.0）：agent 在不在跑 / 轮询数 / 停滞 / 任务书字数 / 工具路径
+        o.put("aiPortActive", JsonBool(argBool(args, "aiPortActive", false)))
+        o.put("aiPortPolls", JsonInt(argInt(args, "aiPortPolls", 0)))
+        o.put("aiPortStalled", JsonBool(argBool(args, "aiPortStalled", false)))
+        o.put("aiPortVerdict", JsonString(argStr(args, "aiPortVerdict", "")))
+        o.put("aiPortDirective", JsonInt(argInt(args, "aiPortDirective", 0)))
+        o.put("aiPortCli", JsonString(argStr(args, "aiPortCli", "")))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
@@ -3624,6 +3631,266 @@ public class MigrateCancelCommand <: CommandHandler {
     }
 }
 
+// ============================================================
+// ⓪ AI 自动迁移（t2h:autoport_*）——**正题**：agent 是执行者，我们是眼睛与手刹
+// ============================================================
+
+/*
+ * 与 `t2h:migrate`（确定性流程）的分工，别混：
+ *   · migrate  ：我们按固定顺序跑 8 个命令（无模型、可复现）——它是 agent 的工具，也是无 AI 时的兜底
+ *   · autoport ：把目标与工具箱交给 cjh，**它自己读落档 → 改代码 → 重跑**；我们只负责
+ *                ① 准备现场（技能 / 工程 AGENTS.md / cjh 工作区 / 工具绝对路径）
+ *                ② 写任务书（`buildAutoPortDirective`）
+ *                ③ 盯落档：进度、停滞、预算；把"要人定的事"变成卡片
+ * 判定永远只认落档 —— AI 说"迁好了"不算。
+ */
+
+let gAutoPortLock = Mutex()
+let gAutoPort = AutoPortState()
+
+/** `lingqu-cli` 可执行文件的候选位置（纯路径拼接；逐个判存在在 `resolveCliExe`） */
+func cliExeCandidates(): Array<String> {
+    let out = ArrayList<String>()
+    let env = envOr("LINGQU_CLI", "")
+    if (env.size > 0) {
+        out.add(env)
+    }
+    // 开发态：cli/ 自己的产物
+    out.add("cli/target/release/bin/main.exe")
+    out.add("cli/target/release/bin/lingqu-cli.exe")
+    // 发布态：和主程序同目录（packaging 会把 lingqu-cli 放旁边）
+    out.add("lingqu-cli.exe")
+    out.add("bin/lingqu-cli.exe")
+    return out.toArray()
+}
+
+/** 找到能给 agent 用的 `lingqu-cli` **绝对路径**；找不到回空串（任务书会退化，不编假路径） */
+func resolveCliExe(): String {
+    // 必须是绝对路径：agent 的 bash cwd 是**目标工程**，相对路径 `cli\target\...` 在那里不存在。
+    // 0.37.0 首次实跑就是这么断的（任务书里给了相对路径，AI 一次工具都没调起来）。
+    let cwd = getWorkingDirectory().toString()
+    for (c in cliExeCandidates()) {
+        if (exists(Path(c))) {
+            return hostPath(cwd + cjhPathSep() + c)
+        }
+    }
+    return ""
+}
+
+/**
+ * t2h:autoport_start —— 准备现场 + 交出任务书（真的干活的推理由页面走 WS 发给 cjh）。
+ *
+ *   {path, budget?, minutes?} → {ok, project, directive, cliPath, device, prep:{…}, steps:[…]}
+ *
+ * 为什么由页面发提问：cjh 的对话只有 WS 一条通道（`/ws` 的 `{type:"chat"}`），
+ * 后端没有 WS 客户端；页面本来就连着，且能把流式回复直接显示给人看。
+ */
+public class AutoPortStartCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("AI 自动迁移需要工程路径（或置 LINGQU_SCAN_PATH）"))
+            return res
+        }
+        var name = projectNameOf(path)
+        if (name.size == 0) {
+            name = "project"
+        }
+        let safe = sanitizeFileName(name)
+        let budget = argInt(args, "budget", AUTOPORT_MAX_ITERATIONS)
+        let minutes = argInt(args, "minutes", AUTOPORT_MAX_MINUTES)
+
+        // ---- ① 准备现场：技能 / 工程 AGENTS.md + 工作区 / 工具路径 ----
+        // 三件都是幂等的；缺哪件 agent 就"看不见工具"，所以每次开始前补一遍（不猜、不静默失败）
+        var skillNote = ""
+        var skillOk = false
+        try {
+            var sargs = JsonObject()
+            sargs.put("action", JsonString("install"))
+            let sv = SkillCommand().handle("t2h:skill", sargs, IpcContext("autoport", IpcHub()))
+            skillOk = cmdOkOf(sv)
+            skillNote = if (skillOk) { "已装（~/.cjh/skills）" } else { "安装失败：见 t2h:skill 返回" }
+        } catch (e: Exception) {
+            skillNote = "安装异常：${e}"
+        }
+        var agentOk = false
+        var agentNote = ""
+        try {
+            var aargs = JsonObject()
+            aargs.put("action", JsonString("install"))
+            aargs.put("path", JsonString(path))
+            let av = AgentContextCommand().handle("t2h:agent_context", aargs, IpcContext("autoport", IpcHub()))
+            agentOk = cmdOkOf(av)
+            agentNote = if (agentOk) { "已写工程 AGENTS.md 区块并把 cjh 工作区切到该工程" }
+                else { "写入失败：见 t2h:agent_context 返回" }
+        } catch (e: Exception) {
+            agentNote = "写入异常：${e}"
+        }
+        let cliPath = resolveCliExe()
+        let device = migrateHasDevice()
+
+        // ---- ② 当前落档（让 AI 一上手就知道从哪继续）----
+        let rows = ArrayList<MigrateRow>()
+        for (step in MIGRATE_STEPS) {
+            let obs = observeTaskStep(safe, step)
+            let row = MigrateRow()
+            row.step = step
+            row.title = taskStepTitle(step)
+            row.ran = obs.exists
+            row.ok = obs.exists && obs.ok
+            row.note = obs.note
+            rows.add(row)
+        }
+        var stateLines = ""
+        for (r in rows) {
+            if (stateLines.size > 0) {
+                stateLines += "\n"
+            }
+            stateLines += migrateRowLine(r)
+        }
+
+        // ---- ③ 任务书 ----
+        let inp = AutoPortInput()
+        inp.project = name
+        inp.projectDir = path
+        inp.cliPath = cliPath
+        inp.device = device
+        inp.budget = budget
+        inp.minutes = minutes
+        inp.stateLines = stateLines
+        let directive = buildAutoPortDirective(inp)
+
+        synchronized(gAutoPortLock) {
+            gAutoPort.reset(path, safe, budget, minutes)
+        }
+        var res2 = JsonObject()
+        res2.put("ok", JsonBool(true))
+        res2.put("project", JsonString(name))
+        res2.put("path", JsonString(path))
+        res2.put("budget", JsonInt(budget))
+        res2.put("minutes", JsonInt(minutes))
+        res2.put("device", JsonBool(device))
+        res2.put("cliPath", JsonString(cliPath))
+        res2.put("directive", JsonString(directive))
+        res2.put("directiveChars", JsonInt(Int64(directive.size)))
+        var prep = JsonObject()
+        prep.put("skill", JsonBool(skillOk))
+        prep.put("skillNote", JsonString(skillNote))
+        prep.put("agentContext", JsonBool(agentOk))
+        prep.put("agentNote", JsonString(agentNote))
+        res2.put("prep", prep)
+        res2.put("stateLines", JsonString(stateLines))
+        eprintln("[lingqu][autoport] start project=${name} device=${device} cli=${cliPath} " +
+            "skill=${skillOk} agent=${agentOk} 任务书=${directive.size} 字")
+        return res2
+    }
+}
+
+/**
+ * t2h:autoport_status —— AI 自动迁移的进度（纯读落档 + 监管状态）。
+ *
+ *   {path?} → {ok, active, polls, stalled, verdict, escalation, percent, rows:[…], doneCount}
+ *
+ * 页面 3 秒轮一次：时间轴因此反映的是**AI 打到哪一步了**，而不是我们跑到哪一步了。
+ */
+public class AutoPortStatusCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        var project = ""
+        var active = false
+        var budget: Int64 = AUTOPORT_MAX_ITERATIONS
+        var minutes: Int64 = AUTOPORT_MAX_MINUTES
+        synchronized(gAutoPortLock) {
+            if (path.size == 0) {
+                path = gAutoPort.path
+            }
+            project = gAutoPort.project
+            active = gAutoPort.active
+            budget = gAutoPort.budget
+            minutes = gAutoPort.minutes
+        }
+        var name = project
+        if (name.size == 0) {
+            name = sanitizeFileName(projectNameOf(path))
+        }
+        if (name.size == 0) {
+            name = "project"
+        }
+        let rows = ArrayList<MigrateRow>()
+        for (step in MIGRATE_STEPS) {
+            let obs = observeTaskStep(name, step)
+            let row = MigrateRow()
+            row.step = step
+            row.title = taskStepTitle(step)
+            row.ran = obs.exists
+            row.ok = obs.exists && obs.ok
+            row.note = obs.note
+            if (migrateNeedsDevice(step) && !migrateHasDevice()) {
+                row.skipped = "未连接真机"
+            }
+            rows.add(row)
+        }
+        let sig = autoportSnapshot(rows)
+        var stalled = false
+        var polls: Int64 = 0
+        synchronized(gAutoPortLock) {
+            if (gAutoPort.active) {
+                gAutoPort.pushSig(sig)
+                polls = gAutoPort.polls
+                stalled = isStalled(gAutoPort.history, AUTOPORT_STALL_POLLS)
+            }
+        }
+        let done = autoportDoneCount(rows)
+        var arr = JsonArray()
+        for (r in rows) {
+            arr.add(r.toJson())
+        }
+        var o = JsonObject()
+        o.put("ok", JsonBool(true))
+        o.put("active", JsonBool(active))
+        o.put("project", JsonString(name))
+        o.put("path", JsonString(path))
+        o.put("polls", JsonInt(polls))
+        o.put("budget", JsonInt(budget))
+        o.put("minutes", JsonInt(minutes))
+        o.put("doneCount", JsonInt(done))
+        o.put("total", JsonInt(Int64(MIGRATE_STEPS.size)))
+        o.put("percent", JsonInt(done * 100 / Int64(MIGRATE_STEPS.size)))
+        o.put("stalled", JsonBool(stalled))
+        o.put("verdict", JsonString(autoportVerdict(rows, !active, stalled)))
+        o.put("escalation", JsonString(escalationLine(stalled, false, minutes)))
+        o.put("rows", arr)
+        return o
+    }
+}
+
+/** t2h:autoport_stop —— 监管状态收尾（页面同时会发 WS abort 真正打断模型回合） */
+public class AutoPortStopCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, _: JsonObject, _: IpcContext): JsonValue {
+        var was = false
+        synchronized(gAutoPortLock) {
+            was = gAutoPort.active
+            gAutoPort.stop()
+        }
+        var res = JsonObject()
+        res.put("ok", JsonBool(true))
+        res.put("wasActive", JsonBool(was))
+        eprintln("[lingqu][autoport] stop wasActive=${was}")
+        return res
+    }
+}
+
 /**
  * t2h:cli_run —— 把 AI 建议的命令**一键执行**（AI 接入第 4 步）。
  *
@@ -4204,6 +4471,10 @@ public func build(): AppSpec {
         app.register("t2h:migrate", MigrateCommand())
         app.register("t2h:migrate_status", MigrateStatusCommand())
         app.register("t2h:migrate_cancel", MigrateCancelCommand())
+        // ⓪ AI 自动迁移：agent 是执行者（页面走 WS 发任务书，后端只准备现场 + 盯落档）
+        app.register("t2h:autoport_start", AutoPortStartCommand())
+        app.register("t2h:autoport_status", AutoPortStatusCommand())
+        app.register("t2h:autoport_stop", AutoPortStopCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

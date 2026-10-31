@@ -508,11 +508,13 @@ body.ai-hidden .ai-show{display:block}
       <!-- ⓪ 一键迁移（0.36.0）：一个按钮跑完 8 步，过程看得见，最后给结果 -->
       <section class="screen on" data-screen="migrate">
         <div class="whead">
-          <div><h1>一键迁移</h1>
-            <p>填一个 Tauri 工程路径，点开始就行：扫描 → 依赖 → 改造 → 编译 → HAP → 签名 →（有真机）部署 → 验证 → 报告。
-              哪一步没过就停下，把现场交给 AI 分析；没插设备或签名是 release 态时，真机两步会<b>跳过</b>（不算失败）。</p></div>
+          <div><h1>AI 自动迁移</h1>
+            <p><b>AI 是执行者，不是顾问</b>：它自己读落档、自己改代码、自己重跑工具，卡住了才找你。
+              下面这条时间轴读的是<b>落档</b>——AI 真正打到哪一步，就以这里为准（不是看它说了什么）。</p></div>
           <div class="acts">
-            <button class="btn primary" id="btnMigrateStart">⚡ 开始一键迁移</button>
+            <button class="btn primary" id="btnAiPort" title="把目标与工具箱交给 AI（cjh），它自己迭代到迁完">🤖 开始 AI 自动迁移</button>
+            <button class="btn" id="btnAiPortContinue" title="AI 回合结束了但还没迁完：让它按任务书接着干" style="display:none">继续</button>
+            <button class="btn" id="btnMigrateStart" title="不用 AI 的确定性流程：按固定顺序跑 8 个命令（可复现，失败就停）">▶ 确定性流程</button>
             <button class="btn" id="btnMigrateStop" disabled>停止</button>
           </div>
         </div>
@@ -3034,6 +3036,7 @@ withBridge(function(tauri){
 
   function renderMigrate(st){
     st = st || {};
+    var running = (st.running === true) || (st.active === true);
     MIG.percent = (typeof st.percent === 'number') ? st.percent : 0;
     MIG.verdict = String(st.verdict || '');
     if ($('migratePct')) {
@@ -3041,12 +3044,14 @@ withBridge(function(tauri){
     }
     if ($('migrateBar')) { $('migrateBar').style.width = MIG.percent + '%'; }
     if ($('migrateNote')) {
-      var note = '还没开始。填好路径点「开始一键迁移」。';
-      if (st.running) { note = String(st.message || '进行中…'); }
-      else if (st.done) { note = MIG.verdict; }
+      var note = '还没开始。填好路径点「🤖 开始 AI 自动迁移」。';
+      if (running) { note = String(st.message || 'AI 正在干活…'); }
+      else if (st.stalled === true) { note = String(st.escalation || MIG.verdict); }
+      else if (st.done === true || st.active === false) { note = MIG.verdict; }
       else if (st.error) { note = '异常：' + String(st.error); }
       $('migrateNote').textContent = note;
-      $('migrateNote').style.color = (st.done && st.verdict && String(st.verdict).indexOf('停在') === 0) ? 'var(--err)' : '';
+      $('migrateNote').style.color = (st.stalled === true) ? 'var(--err)'
+        : ((MIG.verdict && MIG.verdict.indexOf('停在') === 0) ? 'var(--err)' : '');
     }
     var rows = st.rows || [];
     var html = '';
@@ -3180,18 +3185,141 @@ withBridge(function(tauri){
   if ($('btnMigrateStop')) {
     $('btnMigrateStop').onclick = function(){
       $('btnMigrateStop').disabled = true;
-      invoke('t2h:migrate_cancel').then(function(r){
-        if ($('migrateNote')) { $('migrateNote').textContent = String((r && r.note) || '已请求停止'); }
-        reportUi('migrate-cancel');
-      });
+      // 两条通道都收：确定性流程停线程；AI 迁移先 abort 模型回合，再收监管状态
+      invoke('t2h:migrate_cancel').then(function(){});
+      invoke('t2h:autoport_stop').then(function(){});
+      stopMigratePolling();
+      try { wsSend({ type: 'abort' }); } catch (e) {}
+      AIP.active = false;
+      if ($('migrateNote')) { $('migrateNote').textContent = '已请求停止。'; }
+      reportUi('autoport-stop');
     };
   }
-  // 顶栏的「⚡ 一键迁移」：切到这一屏；没有路径就只切屏，别空跑一次
+
+  /* ===== AI 自动迁移（0.37.0，本项目的正题）=====
+   * 与「确定性流程」的分界：这里**不是**我们按顺序跑命令，而是把目标与工具箱交给 cjh，
+   * 它自己读落档 → 改代码 → 重跑；我们只做三件事：
+   *   ① 准备现场（t2h:autoport_start：技能 / 工程 AGENTS.md / cjh 工作区 / 工具绝对路径）
+   *   ② 把任务书发过去（走已有 WS 通道，流式回复直接给人看）
+   *   ③ 盯落档（t2h:autoport_status）：进度、停滞、预算；要人定的用确认卡
+   * 判定只认落档：AI 说"迁好了"，时间轴没变就是没变。 */
+  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0 };
+
+  function aiPortNote(msg){
+    if ($('migrateNote')) { $('migrateNote').textContent = msg; }
+  }
+
+  function renderAiPort(st){
+    st = st || {};
+    AIP.active = st.active === true;
+    AIP.polls = (typeof st.polls === 'number') ? st.polls : 0;
+    AIP.stalled = st.stalled === true;
+    AIP.verdict = String(st.verdict || '');
+    renderMigrate(st);
+    if ($('btnAiPortContinue')) {
+      $('btnAiPortContinue').style.display = (AIP.active || String(st.verdict || '').indexOf('通过') >= 0) ? 'none' : 'inline-block';
+    }
+  }
+
+  function aiPortElapsedMin(){
+    if (!AIP.started) { return 0; }
+    return Math.round((Date.now() - AIP.started) / 60000);
+  }
+
+  function pollAiPort(){
+    invoke('t2h:autoport_status', { path: migratePathValue() }).then(function(st){
+      st = st || {};
+      renderAiPort(st);
+      // 停滞/超时：只提示，不自动停——停不停由人决定（手刹在人这边）
+      if (st.stalled === true) {
+        aiPortNote(String(st.escalation || 'AI 好像绕圈了'));
+        reportUi('autoport-stalled');
+      } else if (aiPortElapsedMin() > (st.minutes || 40)) {
+        aiPortNote('已超过时间预算（' + aiPortElapsedMin() + ' 分钟）：建议点「停止」让它收尾。');
+        reportUi('autoport-overbudget');
+      }
+      reportUi('autoport-poll');
+    }).catch(function(){});
+  }
+
+  function startAiPolling(){
+    stopMigratePolling();
+    AIP.timer = setInterval(pollAiPort, 3000);
+    setTimeout(pollAiPort, 800);
+    MIG.timer = AIP.timer;
+  }
+
+  function sendDirective(text){ newAssistantTurn(); wsSend({ type: 'chat', message: text }); }
+
+  function startAiPort(){
+    var p = migratePathValue();
+    if (!p) { aiPortNote('请先填 Tauri 工程路径。'); if ($('migratePath')) { $('migratePath').focus(); } return; }
+    if (!CJ.up) { aiPortNote('引擎没连上：等它就绪（右栏「一键部署并启动引擎」）再开始。'); reportUi('autoport-noengine'); return; }
+    if ($('migratePath')) { $('migratePath').value = p; }
+    if ($('btnAiPort')) { $('btnAiPort').disabled = true; }
+    if ($('migrateResultCard')) { $('migrateResultCard').style.display = 'none'; }
+    aiPortNote('准备现场（技能 / 工程上下文 / 工具路径）…');
+    AIP.started = Date.now();
+    var budget = 40;
+    invoke('t2h:autoport_start', { path: p, budget: budget, minutes: 40 }).then(function(r){
+      r = r || {};
+      if (r.ok !== true) {
+        if ($('btnAiPort')) { $('btnAiPort').disabled = false; }
+        aiPortNote('准备失败：' + String(r.error || '未知原因'));
+        reportUi('autoport-start-failed');
+        return;
+      }
+      AIP.directiveChars = Number(r.directiveChars || 0);
+      AIP.cliPath = String(r.cliPath || '');
+      var prep = r.prep || {};
+      var prepText = '技能：' + (prep.skill ? '已装' : '未装（' + String(prep.skillNote || '') + '）')
+        + '；工程上下文：' + (prep.agentContext ? '已写' : '未写（' + String(prep.agentNote || '') + '）')
+        + '；工具：' + (AIP.cliPath ? AIP.cliPath : '未找到（让 AI 用 lingqu-cli 命令名试）')
+        + '；真机：' + (r.device ? '在线' : '不在线');
+      // 把轮次预算推给 cjh（软顶 + 收尾总结），否则 agent 十几轮就停。
+      // 注意：**任务书不能挂在这个调用之后**——它失败（比如 settings 接口不通）也必须照发，
+      // 否则表现就是"AI 一直没动静"，很难看出是预算设置挂了（0.37.0 首次实跑踩到）。
+      invoke('t2h:cjh_settings_save', { data: { maxIterations: Number(r.budget || budget) } })
+        .catch(function(){});
+      // 关键顺序：autoport_start 里把 cjh 的 workspace 切到了目标工程（会重置它的持久 bash 会话），
+      // 这时候旧会话已经不认新消息了——所以先开一次新会话，再把任务书发进去。
+      // 0.37.0 前两次实跑就是漏了这一步：消息发出去，cjh 建了个只有 system 的会话，一个字都没回。
+      wsSend({ type: 'new_session' });
+      CJ.session = '';
+      setTimeout(function(){
+        sendDirective(String(r.directive || ''));
+        AIP.active = true;
+        if ($('btnMigrateStop')) { $('btnMigrateStop').disabled = false; }
+        aiPortNote('AI 已接手（任务书 ' + AIP.directiveChars + ' 字）。' + prepText);
+        startAiPolling();
+        reportUi('autoport-started');
+      }, 600);
+    }).catch(function(e){
+      if ($('btnAiPort')) { $('btnAiPort').disabled = false; }
+      aiPortNote('invoke 失败：' + (e && e.message ? e.message : e));
+      reportUi('autoport-start-error');
+    });
+  }
+
+  function continueAiPort(){
+    if (!CJ.up) { aiPortNote('引擎没连上。'); return; }
+    newAssistantTurn();
+    wsSend({ type: 'chat', message: '继续，按任务书接着干：先跑 resume 看落档，只处理没过的步骤；'
+      + '落档没变化说明上次的修法没生效，换个思路再试；实在不行就升级给人。' });
+    AIP.active = true;
+    if ($('btnMigrateStop')) { $('btnMigrateStop').disabled = false; }
+    startAiPolling();
+    reportUi('autoport-continue');
+  }
+
+  if ($('btnAiPort')) { $('btnAiPort').onclick = startAiPort; }
+  if ($('btnAiPortContinue')) { $('btnAiPortContinue').onclick = continueAiPort; }
+  // 顶栏的「⚡ 一键迁移」：切到这一屏并**起 AI 自动迁移**（这才是这个按钮该干的事）
   if ($('btnMigrateTop')) {
     $('btnMigrateTop').onclick = function(){
       var btn = document.querySelector('.step[data-s="migrate"]');
       if (btn) { btn.click(); }
-      if (migratePathValue()) { startMigrate(); }
+      if (migratePathValue()) { startAiPort(); }
       else if ($('migratePath')) { $('migratePath').focus(); }
     };
   }
@@ -5291,6 +5419,13 @@ withBridge(function(tauri){
         var e = document.getElementById('migrateFiles');
         return e ? e.textContent.slice(0, 160) : '';
       })(),
+      // AI 自动迁移（0.37.0）：agent 是否在跑 / 轮询次数 / 是否停滞 / 任务书字数 / 工具路径
+      aiPortActive: AIP.active === true,
+      aiPortPolls: (typeof AIP.polls === 'number') ? AIP.polls : 0,
+      aiPortStalled: AIP.stalled === true,
+      aiPortVerdict: AIP.verdict || '',
+      aiPortDirective: (typeof AIP.directiveChars === 'number') ? AIP.directiveChars : 0,
+      aiPortCli: AIP.cliPath || '',
       // 工程上下文（AGENTS.md 受管区块 + cjh workspace）
       agentHasBlock: AGENT.hasBlock === true,
       agentPath: AGENT.path || "",
@@ -5475,7 +5610,7 @@ withBridge(function(tauri){
     // WS 通道自检：连上就发一条真实提问，靠 frames/delta/replyPreview 断言"通道真的通了"
     setTimeout(function(){
       if (!CJ.up) return;
-      if (mode === 'auto') { return; }   // auto 模式自己安排提问时机（见下方 ⑤ 序列）
+      if (mode === 'auto' || mode === 'ai') { return; }   // 这两个模式自己安排提问时机
       if (mode === 'approval') {
         // 触发 cjh 的危险操作审批（approval_request → 卡片 → 我们不作答，等它超时按拒绝收场）
         $('aiInput').value = '请用 bash 工具执行这条命令：rm -rf /tmp/lingqu-probe-approval';
@@ -5537,6 +5672,18 @@ withBridge(function(tauri){
         autoRunSuggestions();
       }, 29000);
       setTimeout(function(){ reportUi('probe-auto-done'); }, 34000);
+    }
+    // ⓪ AI 自动迁移自检（0.37.0）：起一次真的 agent 循环，用 ui_report 断言
+    //   aiPortDirective>0（任务书发出去了）、aiPortPolls>0（在盯落档）、toolCards>0（它真的调了工具）
+    if (mode === 'ai') {
+      window.__probePath = 'E:/test/rust/habit-tree';
+      setTimeout(function(){
+        if ($('migratePath')) { $('migratePath').value = 'E:/test/rust/habit-tree'; }
+        startAiPort();
+      }, 2600);
+      setTimeout(function(){ reportUi('probe-ai-early'); }, 12000);
+      setTimeout(function(){ reportUi('probe-ai-mid'); }, 60000);
+      setTimeout(function(){ reportUi('probe-ai-done'); }, 150000);
     }
     // 审批自检：出现审批卡就**自动点「拒绝」**（模拟人工决策），
     // 既验证卡片渲染，也验证 approval_response 回执链路真的把回合推下去了。

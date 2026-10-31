@@ -1,0 +1,261 @@
+package lingqu
+
+import std.collection.*
+
+/*
+ * AI 自动迁移（0.37.0）——**这是本项目的正题**，0.36.0 的「一键迁移」只是它的兜底通道。
+ *
+ * 两者的区别必须记牢（做反了就是把 AI 降级成"失败后给建议的顾问"）：
+ *
+ *   · 0.36.0 一键迁移 = **确定性流水线**：我们按固定顺序跑 8 个命令，失败就把现场问一次 AI，
+ *     AI 只出建议、命令还得人来点。AI 在**边缘**。
+ *   · 0.37.0 AI 自动迁移 = **agent 主循环**：目标与工具箱交给 cjh，它自己读落档、自己改代码、
+ *     自己重跑，卡住了才找人。AI 在**中心**，我们是它的眼睛（落档）、手刹（预算/停止）与
+ *     记录员（人工介入次数 = 验收指标 A3）。
+ *
+ * 所以本文件只产出三样东西（都是纯函数，可单测）：
+ *   ① `buildAutoPortDirective` —— 任务书：目标 / 工具箱 / 工作循环 / 纪律 / 预算 / 何时升级给人
+ *   ② `isStalled` —— 停滞判定：连续 N 次快照一模一样 → 它绕圈了，叫停比继续烧钱好
+ *   ③ `autoportVerdict` / `escalationLine` —— 结论与"要人做什么"的一句话
+ *
+ * 判定依旧只认落档（`observeTaskStep`）：AI 说"迁好了"不算，`.lingqu/` 里写着才算。
+ */
+
+/** 默认轮次预算：够"读落档 → 改码 → 重跑"迭代十几次，又不至于失控烧钱 */
+public let AUTOPORT_MAX_ITERATIONS: Int64 = 40
+
+/** 默认时间预算（分钟）：到点就让 AI 收尾总结，别无限挂着 */
+public let AUTOPORT_MAX_MINUTES: Int64 = 40
+
+/** 停滞判定阈值：连续多少次轮询快照完全一样就认为绕圈 */
+public let AUTOPORT_STALL_POLLS: Int64 = 6
+
+/** 一次 AI 自动迁移的输入（命令层填，纯函数只读） */
+public class AutoPortInput {
+    public var project: String = ""
+    public var projectDir: String = ""
+    /** `lingqu-cli` 的绝对路径（找不到给空串——任务书会退化到"用 lingqu-cli 命令名试"） */
+    public var cliPath: String = ""
+    /** 真机在不在线：决定它要不要跑 deploy/verify */
+    public var device: Bool = false
+    public var budget: Int64 = AUTOPORT_MAX_ITERATIONS
+    public var minutes: Int64 = AUTOPORT_MAX_MINUTES
+    /** 当前落档一句话一行（"扫描分析｜通过｜R=24…"），让 AI 一上手就知道从哪继续 */
+    public var stateLines: String = ""
+
+    public init() {}
+}
+
+/**
+ * 迁移任务书（纯函数）。
+ *
+ * 写这份文本有三个"必须"：
+ *   ① 必须说清**它是执行者不是顾问** —— 否则模型会给建议然后停下等确认（0.36.0 就是这么退化的）
+ *   ② 必须给**可复制的工具路径** —— 它跑不动 `lingqu-cli` 时整条循环就断了
+ *   ③ 必须给**纪律与预算** —— 平台限制不算失败、未验证不算通过、同样错误最多两个修法
+ */
+public func buildAutoPortDirective(inp: AutoPortInput): String {
+    let budget = if (inp.budget > 0) { inp.budget } else { AUTOPORT_MAX_ITERATIONS }
+    let minutes = if (inp.minutes > 0) { inp.minutes } else { AUTOPORT_MAX_MINUTES }
+    var d = "【灵渠 · AI 自动迁移任务书】\n\n"
+    d += "工程：`${inp.project}`　目录：`${inp.projectDir}`（你的工作目录就是这里）\n\n"
+    d += "**你是这次迁移的执行者，不是顾问。** 自己读落档、自己改代码、自己重跑工具，"
+    d += "直到落档证明迁完；不要输出\"建议你执行…\"然后停下等人。\n"
+    d += "人只在你明确要求时才介入——每次介入都算一次人工干预，验收指标是 **≤5 次/应用**。\n\n"
+
+    d += "## 工具箱（在 bash 里直接调用；每条命令都会打印 JSON 并把结果落到 `.lingqu/`）\n"
+    if (inp.cliPath.size > 0) {
+        d += "```bash\n" + inp.cliPath + " resume --path .     # 先看停在哪一步\n" +
+            inp.cliPath + " scan   --path .     # 扫描画像\n" +
+            inp.cliPath + " deps   --path .     # 依赖矩阵\n" +
+            inp.cliPath + " port   --path . --apply   # 规则改造（会改源码，逐文件留 .bak，可回滚）\n" +
+            inp.cliPath + " build  --path .     # 交叉编译（--verifyOnly 只比前端指纹）\n" +
+            inp.cliPath + " hap    --path .     # 装配 HAP\n" +
+            inp.cliPath + " sign   --path .     # 签名体检（--apply 写回 signingConfigs）\n" +
+            inp.cliPath + " deploy --path .     # 真机装启 + hilog\n" +
+            inp.cliPath + " verify --path .     # 采证 + 功能清单 + 可用率\n" +
+            inp.cliPath + " report --path .     # 三段式报告\n```\n"
+        d += "（路径里有空格就整条用双引号括起来。）\n"
+    } else {
+        d += "```bash\nlingqu-cli resume --path .\nlingqu-cli scan --path .\n```\n"
+        d += "（`lingqu-cli` 不在 PATH 里的话，让应用帮你定位，或直接读 `.lingqu/` 落档做判断。）\n"
+    }
+    d += "\n**判断只认落档**：`.lingqu/<步骤>/<工程>.json` 里的判定字段才算数，退出码为 0 不等于通过。\n"
+    d += "日志在 `.lingqu/<步骤>/<工程>.log`；失败先读它的最后 40 行，再动手。\n\n"
+
+    d += "## 工作循环（照顺序做，别跳步、别重复跑已通过的步骤）\n"
+    d += "1. `resume` 定位当前步骤；\n"
+    d += "2. 跑那一步 → 读落档与日志 → 判定过没过；\n"
+    d += "3. **没过就你动手修**：Cargo.toml、Rust 源码、前端、`src-tauri/gen/ohos` 的配置都算你的活；"
+    d += "改完重跑那一步；\n"
+    d += "4. 同一个失败**最多试 2 种不同修法**，还不过就换思路，或升级给人；\n"
+    d += "5. 循环到 `verify` 落档，或用完预算。\n\n"
+
+    if (inp.stateLines.size > 0) {
+        d += "## 当前落档（灵渠刚读的，别重复造）\n```text\n${inp.stateLines}\n```\n\n"
+    }
+    d += "## 真机：" + (if (inp.device) { "在线 —— `deploy` / `verify` 要跑，装不上先看签名态\n" }
+        else { "**不在线** —— 跳过 deploy/verify（落档会是\"未跑\"，如实报告即可，别当成失败）\n" }) + "\n"
+
+    d += "## 纪律（说错一句就露馅）\n"
+    d += "- **平台限制 ≠ 失败**：鸿蒙没有的能力登记为限制，不算 bug，更不许写\"已修复\"；\n"
+    d += "- **未验证 ≠ 通过**：没证据的项写 unknown；\n"
+    d += "- 改代码前先 `git status` 看看工作区；**别动与迁移无关的文件**；\n"
+    d += "- 真机装不上先看 `.lingqu/sign/<工程>.json` 的签名态：release 态装不上（9568322）是正常的，别去修；\n"
+    d += "- 不确定就先用 `git stash` 或用我们 `.lingqu` 里的备份兜底，再重试。\n\n"
+
+    d += "## 预算与收尾\n"
+    d += "- 最多 ${budget} 轮工具调用、约 ${minutes} 分钟；到上限就收尾，别硬撑；\n"
+    d += "- **每完成一步用一行报进度**：`[步骤] 通过/未过 ｜ 一句话`；\n"
+    d += "- 收尾分三段、每段不超过 3 行：**做了什么 / 没做什么 / 需要你做什么**；\n"
+    d += "- 需要人拍板的（要不要 patch 某依赖、签名走 debug 还是 release、要不要装某 SDK）："
+    d += "用 `lingqu-decision` 代码块写，块里一行 JSON `{\"rule\":\"…\",\"decision\":\"accepted|ignored\",\"why\":\"…\"}`，"
+    d += "界面会渲染成确认卡；\n"
+    d += "- 现在开始：先跑 `resume`，然后按上面的循环干活，不要等我确认。\n"
+    return d
+}
+
+/**
+ * 停滞判定（纯函数）：最近 [window] 次快照是否**完全一样**。
+ *
+ * 为什么要它：agent 绕圈是真实风险（同一个错改两遍又改回去）。落档不动 = 它没在推进，
+ * 这时候叫停、让它总结、把主动权交回人，比继续烧 token 好。
+ * 空历史/样本不足 → false（**不许**把"刚开始"误判成卡住）。
+ */
+public func isStalled(history: ArrayList<String>, window: Int64): Bool {
+    if (window <= 1) {
+        return false
+    }
+    if (Int64(history.size) < window) {
+        return false
+    }
+    let first = history[0]
+    if (first.size == 0) {
+        return false
+    }
+    for (h in history) {
+        if (h != first) {
+            return false
+        }
+    }
+    return true
+}
+
+/** 快照签名：把 8 步的 (步骤, 在不在, 过没过, 摘要) 压成一行，用于停滞比较 */
+public func autoportSnapshot(rows: ArrayList<MigrateRow>): String {
+    var s = ""
+    for (r in rows) {
+        var state = "none"
+        if (r.skipped.size > 0) {
+            state = "skip"
+        } else if (r.ran && r.ok) {
+            state = "ok"
+        } else if (r.ran) {
+            state = "bad"
+        }
+        if (s.size > 0) {
+            s += "|"
+        }
+        s += "${r.step}:${state}:${r.note}"
+    }
+    return s
+}
+
+/** 有多少步已经有结论（ran 且 ok） */
+public func autoportDoneCount(rows: ArrayList<MigrateRow>): Int64 {
+    var n: Int64 = 0
+    for (r in rows) {
+        if (r.ran && r.ok) {
+            n += 1
+        }
+    }
+    return n
+}
+
+/**
+ * 一句话结论（AI 自动迁移版）。
+ *
+ * 与确定性流程的区别：这里的"通过"只认落档，而且**跳过也算进了进度**（没插设备是环境事实）。
+ */
+public func autoportVerdict(rows: ArrayList<MigrateRow>, finished: Bool, stalled: Bool): String {
+    if (rows.size == 0) {
+        return "还没开始"
+    }
+    if (stalled) {
+        return "AI 好像在绕圈（落档连续没变化）——建议停下看它卡在哪"
+    }
+    var failed = ""
+    var skipped = 0
+    for (r in rows) {
+        if (r.ran && !r.ok && r.skipped.size == 0 && failed.size == 0) {
+            failed = r.title
+        }
+        if (r.skipped.size > 0) {
+            skipped += 1
+        }
+    }
+    let done = autoportDoneCount(rows)
+    if (failed.size > 0) {
+        if (finished) {
+            return "停在「${failed}」（已通过 ${done} 步）"
+        }
+        return "进行中：正在处理「${failed}」"
+    }
+    if (skipped > 0) {
+        return "代码链 ${done} 步通过；真机步骤跳过 ${skipped} 步"
+    }
+    return "全部通过（${done} 步）"
+}
+
+/** 升级给人的一句话（预算/停滞/失败都走它，界面直接显示在结果卡顶部） */
+public func escalationLine(stalled: Bool, overBudget: Bool, minutes: Int64): String {
+    if (stalled) {
+        return "AI 连续 ${AUTOPORT_STALL_POLLS} 次轮询落档没有变化，建议点「停止」后让它总结，或直接接管。"
+    }
+    if (overBudget) {
+        return "已超过时间预算（${minutes} 分钟）：点「停止」让它收尾，别硬等。"
+    }
+    return ""
+}
+
+/**
+ * AI 自动迁移的**监管状态**（命令层持有；页面轮询 `t2h:autoport_status` 读它）。
+ *
+ * 只记"人看得懂的那点东西"：跑到哪、第几次轮询、最近几次落档快照（给停滞判定用）。
+ * 落档本身永远是真相来源——这里丢了也不影响结论（重启后重新读盘即可）。
+ */
+public class AutoPortState {
+    public var active: Bool = false
+    public var path: String = ""
+    public var project: String = ""
+    public var budget: Int64 = AUTOPORT_MAX_ITERATIONS
+    public var minutes: Int64 = AUTOPORT_MAX_MINUTES
+    public var polls: Int64 = 0
+    public var history: ArrayList<String> = ArrayList<String>()
+
+    public init() {}
+
+    /** 压入一次快照签名，只保留最后 [AUTOPORT_STALL_POLLS] 条 */
+    public func pushSig(sig: String): Unit {
+        history.add(sig)
+        while (Int64(history.size) > AUTOPORT_STALL_POLLS) {
+            history.remove(at: 0)
+        }
+        polls += 1
+    }
+
+    /** 清空（开始新一轮时） */
+    public func reset(newPath: String, newProject: String, budgetNow: Int64, minutesNow: Int64): Unit {
+        active = true
+        path = newPath
+        project = newProject
+        budget = budgetNow
+        minutes = minutesNow
+        polls = 0
+        history = ArrayList<String>()
+    }
+
+    public func stop(): Unit {
+        active = false
+    }
+}
