@@ -5,6 +5,46 @@
 
 ---
 
+## [0.39.1] - 2026-11-01
+
+**主题**：**AI 真的能动手了** —— cjh 的三个 PR 合入后，实机验证 agent 从"能看不能跑"变成"能看能跑"。
+
+### 证据（Windows x64，`LINGQU_UI_PROBE=ai-port`，habit-tree，用**合入后重新构建**的 cjh）
+
+```
+① 合并后的二进制接口自述（不是单测，是 GET /api/capabilities）：
+   shell = {"path":"D:\\Program Files\\Git\\bin\\bash.exe","mode":"bash","source":"GIT_BASH"}
+   ws    = {"max_frame_bytes":262144}
+   → Git 装在 D 盘也能找到；WS 帧上限也公告出来了
+
+② 端到端（半自动档 ④「🤖 交给 AI 改造」）：
+   ui_report：toolCards=19  frames=45  errorCount=0  agentTraceLines=38
+   trace.jsonl：bash 调用 33 次，**真正的 ProcessException 失败 = 0**，`exit code: 0` 共 14 条
+   逐条节选（trace 原文）：
+     exit code: 0  stdout: Counter({'可用': 443, '不可用': 10})        ← 读 deps 落档
+     exit code: 0  stdout: "id": "R2-PORT-011", "applied": false ...   ← 读 port 落档
+     exit code: 0  stdout: .lingqu/port/habit-tree/Cargo.toml.bak === git status === M src-tauri/gen/ohos…
+     exit code: 0  stdout: .lingqu/port: total 4 …
+   → 它在真跑 `port --apply`、看备份、看 git status
+```
+
+对照 0.39.0：25 次 bash **全部** ProcessException；本轮 33 次**零**失败。
+
+### 本轮暴露的下一处（诚实记录）
+
+- **停滞判定会误报**：`aiPortVerdict` 报"AI 好像在绕圈（落档连续没变化）"，实际它一直在干活（33 次 bash）——
+  因为判定**只看落档**；habit-tree 已迁移完、`port --apply` 不产生改动 → 落档自然不动。
+  修法：把 `agentTraceLines`（工具活动）纳入停滞判据，**落档不动且没有工具活动**才算卡住。
+
+## [0.39.0] - 2026-11-01
+
+**主题**：agent 行为轨迹落成工程证据（`<工程>/.lingqu/agent/trace.jsonl`）。
+
+cjh 的 web 会话只在销毁时落盘，跑完的回合在 `~/.cjh/sessions/` 里仍只有 system 消息（实测 158 B），
+"AI 改了什么、跑了哪些命令"因此没有留痕。现在由**我们**记：`src/agent_trace.cj`（纯函数 + 4 例单测）
++ 命令 `t2h:agent_trace` + 页面 `onFrame` 挂钩（tool_start / tool_result / done），
+`ui_report` 新增 `agentTraceLines`。分工依据见 ADR D-015（我们是记录员）。
+
 ## [0.38.1] - 2026-11-01
 
 **主题**：**落档跟着工程走 —— 全部写入者迁完**（12 个产出者里 11 个在工程内，2 个按设计留在应用目录）。
