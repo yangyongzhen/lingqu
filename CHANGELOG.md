@@ -37,6 +37,27 @@
 - 用例改成常量驱动：`testStatePushSigKeepsWindow` 原先硬编码"推 12 条、留 6 条"，
   阈值一改就假红——现在按 `AUTOPORT_STALL_POLLS + 5` 推、按常量断言。
 
+### 追加：这一轮把「整轮被打断」的**真凶**找到了（cjh 侧已修）
+
+复跑时观察到 `Agent.interrupt` 出现但 `abortSource=""`（两处 UI abort 入口都没被点），
+顺着 `~/.cjh/logs/cjh.log` 定位到 cjh 的**断连处理本身**就打断回合：
+
+    [23:54:12] Agent.interrupt 已请求：interruptFlag=true + abort() 已调用
+    [23:56:21] WebChannel 发送失败，连接判定为断开，后续帧跳过（上一轮的 WsSendGuard 生效）
+    [23:56:21] Agent.run 被用户中断（24 轮后）
+
+调用点是 `gateway/channel.cj` 的 `interruptSession()`（WS 断连时调用）。对交互式合理，
+对**无人值守的长任务**是灾难：WebView 只重连一次（`wsReconnects=1`），
+40 次工具调用、交叉编译已经跑到 `exitCode=0` 的整轮迁移当场作废。
+
+cjh 已加 `web.keep_running_on_disconnect`（默认 false 保持老行为；开着则断开后本轮跑完、
+结果落会话、重连靠 `history_messages` 补看）。**本机 `~/.cjh/settings.json` 已置 true 用于验证**
+（备份在 `%TEMP%\cjh_settings_backup.json`）。灵渠侧下一步要做的：`t2h:autoport_start` 时
+把这条设置自动写进去，别让用户手改。
+
+
+  阈值一改就假红——现在按 `AUTOPORT_STALL_POLLS + 5` 推、按常量断言。
+
 ---
 
 ## [0.39.6] - 2026-11-01
