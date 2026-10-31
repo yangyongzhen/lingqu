@@ -80,7 +80,20 @@ public func agentContextBody(projName: String, projDir: String): String {
     text += "### 你可以做什么\n\n"
     text += "- 读上面的落档，回答「这个工程迁到哪一步了、还差什么、下一步点哪个按钮」；\n"
     text += "- 改工程源码（`src-tauri/`、前端）——改完提醒用户重跑对应工具（改前端就要重编 `.so`）；\n"
-    text += "- 不要凭空编造评分/可用率：这两个数字只能来自 `scan` 与 `verify` 的落档。\n"
+    text += "- 不要凭空编造评分/可用率：这两个数字只能来自 `scan` 与 `verify` 的落档。\n\n"
+    text += "### 让界面能执行你的建议（0.36.0 起，两个约定，请照格式写）\n\n"
+    text += "灵渠的界面会**解析你的回复**并渲染成可点的卡片，所以格式固定：\n\n"
+    text += "1. **建议命令**：一行一条，写成 `lingqu-cli <命令> --path <工程目录>`。" +
+        "只读命令（scan/deps/sign/verify/report/batch/resume/env/diagnose）在用户开了" +
+        "「自动跑只读命令」时会**自动执行**；会改工程或动真机的（port --apply/revert/hap/deploy）" +
+        "也会渲染成按钮，但必须人点。\n"
+    text += "2. **要人定的取舍**：写成围栏代码块（语言标记 `lingqu-decision`），块里一行 JSON：\n\n"
+    text += "```lingqu-decision\n" +
+        "{\"rule\":\"一句话决策点，例如：reqwest 改用 rustls 后端\",\"decision\":\"accepted\",\"why\":\"为什么这么建议\"}\n" +
+        "```\n\n"
+    text += "   `decision` 取 `accepted`（建议采纳）或 `ignored`（建议忽略）。界面会渲染成确认卡，" +
+        "**人点一下才落进 `.lingqu/port/${projName}/decisions.json`**——你只是提案，决定权在人。\n" +
+        "   同一 rule 重复提案按最后一次算（与 decisions 的覆盖语义一致）。\n"
     return text
 }
 

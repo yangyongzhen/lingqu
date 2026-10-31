@@ -75,6 +75,30 @@ lingqu-cli batch  --samples "a|b|c"          # 多工程矩阵
 规则：**先 `resume` 看停在哪步，再跑那一步**；判断"能不能用"只认 `verify` 的落档，
 不要拿 `build` 通过就宣称可用。真机装不上先 `sign` 体检再看 `deploy` 的 hilog。
 
+## 让灵渠的界面能执行你的建议（回复格式约定）
+
+灵渠会**解析你的回复**渲染成可点卡片，所以这两条格式要照写：
+
+1. **建议命令**一行一条，写成 `lingqu-cli <命令> --path <工程目录>`。只读命令
+   （scan / deps / sign / verify / report / batch / resume / env / diagnose）在用户开了
+   「自动跑只读命令」时会自动执行；会改工程或动真机的（`port --apply` / `revert` / `hap` /
+   `deploy`）也渲染成按钮，但必须人点。
+2. **要人定的取舍**写成围栏块（语言标记 `lingqu-decision`），块里一行 JSON：
+
+   ```lingqu-decision
+   {"rule":"reqwest 改用 rustls 后端","decision":"accepted","why":"ohos 没有 openssl"}
+   ```
+
+   `decision` 取 `accepted`（建议采纳）或 `ignored`（建议忽略）。界面会渲染成确认卡，
+   **人点一下才落进 `.lingqu/port/<工程>/decisions.json`**——你只提案，决定权在人。
+   同一 rule 重复提案按最后一次算。
+
+## 失败现场怎么来（别自己猜）
+
+某一步没过时，灵渠会**自动**把「落档正文 + 日志尾 40 行 + 该步判据」发给你（`t2h:ai_brief`）。
+收到这种【灵渠 · 自动诊断】开头的消息时：先给一句话根因（引用具体某行），再给可执行动作，
+判不准就写"需要哪份证据"——**不要编造修复步骤**，也不要复述现场。
+
 ## references（按需读，不要全读）
 
 | 文件 | 什么时候读 |

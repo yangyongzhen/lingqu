@@ -26,8 +26,42 @@ public class StepObservation {
     public var artifact: String = ""
 }
 
-/** 数组字段里第一个字符串元素（没有给空串）：失败原因、第一条产物名这类取"第一条就够" */
-func firstArrayStrOf(v: JsonValue, key: String): String {
+/**
+ * deploy 落档 → 一句话摘要（**纯函数**，单测覆盖）。
+ *
+ * 规矩：失败时**必须把最有用的那句带上**。优先级：
+ *   ① `start.detail`（hdc 原文 + 我们给的处置提示，如"设备在锁屏，拒绝自动解锁 → 解锁后重试"）
+ *   ② `verdict.reason`（判定层的一句话）
+ * 只写"启 失败"等于把信息丢掉——0.36.0 真机实测：真实原因是设备锁屏，摘要里却只剩"启 失败"，
+ * 人看到会去查签名/ability。
+ */
+public func deployNoteOf(installed: Bool, started: Bool, hilogLines: Int64, hilogHealthy: Bool,
+    startDetail: String, reason: String): String {
+    let insText = if (installed) { "成功" } else { "失败" }
+    let staText = if (started) { "成功" } else { "失败" }
+    let healthy = if (hilogHealthy) { "健康" } else { "未见关键行" }
+    var note = "装 ${insText} / 启 ${staText} / hilog ${hilogLines} 行（${healthy}）"
+    if (installed && started) {
+        return note
+    }
+    let detail = startDetail.trimAscii()
+    if (detail.size > 0) {
+        // hdc 原文前缀（"error: failed to start ability."）对读者没价值，只留我们给的处置提示。
+        // 用 `处置：` 做切点而不是按字节去掉前缀——切点必须落在字符边界上（AGENTS §4-67 相邻坑），
+        // 也顺手避免了 "｜｜" 这种叠分隔符。
+        match (detail.indexOf("处置：")) {
+            case Some(i) => return note + "｜" + detail[i..detail.size]
+            case None => return note + "｜" + detail
+        }
+    }
+    let why = reason.trimAscii()
+    if (why.size > 0) {
+        return note + "｜" + why
+    }
+    return note
+}
+
+/** 数组字段里第一个字符串元素（没有给空串）：失败原因、第一条产物名这类取"第一条就够" */func firstArrayStrOf(v: JsonValue, key: String): String {
     let arr = objFieldOf(v, key)
     match (arr.kind()) {
         case JsonKind.JsArray =>
@@ -149,11 +183,11 @@ func fillObservation(obs: StepObservation, stepId: String, root: JsonValue): Uni
     if (stepId == "deploy") {
         let installed = boolFieldOf(objFieldOf(root, "install"), "ok")
         let started = boolFieldOf(objFieldOf(root, "start"), "ok")
-        let insText = if (installed) { "成功" } else { "失败" }
-        let staText = if (started) { "成功" } else { "失败" }
-        let healthy = if (boolFieldOf(root, "hilogHealthy")) { "健康" } else { "未见关键行" }
         obs.ok = installed && started
-        obs.note = "装 ${insText} / 启 ${staText} / hilog ${intFieldOf(root, "hilogLines", 0)} 行（${healthy}）"
+        obs.note = deployNoteOf(installed, started, intFieldOf(root, "hilogLines", 0),
+            boolFieldOf(root, "hilogHealthy"),
+            jsonStrField(objFieldOf(root, "start"), "detail"),
+            jsonStrField(objFieldOf(root, "verdict"), "reason"))
         return
     }
     if (stepId == "verify") {

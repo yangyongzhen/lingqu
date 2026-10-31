@@ -5,6 +5,83 @@
 
 ---
 
+## [0.36.0] - 2026-11-01
+
+**主题**：**从"AI 副驾"到"AI 干活"** —— ① 一键迁移（一个按钮跑完 8 步）、
+② 失败自动问 AI（现场由落档拼成提问正文）、③ 只读命令自动执行、④ 决策块回写 decisions.json。
+本轮先回答了一个尖锐的问题：「当前这些工具、命令或技能，有主动调用 agent 吗？」答案是**没有**——
+cjh 只被用于生命周期与配置，迁移八步一次模型都不问，AI 只是"人叫才动"的聊天窗。0.36.0 开始接闭环。
+
+### Added
+
+- **一键迁移 `t2h:migrate` / `t2h:migrate_status` / `t2h:migrate_cancel`（三处联动齐全）**
+
+  | 环节 | 做法 |
+  |---|---|
+  | 跑在哪 | `t2h:migrate` 只起**后台线程**并立即返回（一次迁移以分钟计，堵住 IPC 就连进度都读不到）；页面 900ms 轮询 `t2h:migrate_status` |
+  | 判定 | 每步跑完都 `observeTaskStep` **读盘上的落档**，不信命令返回值的乐观字段（存在 ≠ 成功，§4-63） |
+  | 步骤 | scan → deps → port(apply) → build → hap → sign(体检→必要时写回) → deploy → verify → 出报告 |
+  | 跳过 | 没插设备 / 签名是 release 态 → deploy+verify **跳过并写明原因**，不算失败 |
+  | 失败 | 就地停下，用 `migrateAskPrompt`（复用 G1/G2 模板）拼好提问正文交给 AI |
+  | 结果 | 结果卡 Markdown + `.lingqu/migrate/<工程>.md` + 三段式报告 `.lingqu/report/<工程>.{md,html}` |
+
+- **新屏「⚡ 一键迁移」**（左栏第一项、默认屏）+ 顶栏按钮：路径框、`自动应用代码改造`（留 `.bak` 可回滚）、
+  进度条、8 步时间轴（待跑/进行中/通过/未过/跳过 五态）、结果卡（`renderMd` 渲染，含报告路径）
+- **`lingqu-cli migrate --path <工程>`**：命令行一条命令跑完整条链（内部强制 `--wait`，
+  跑到出结果才返回，直接打印结果 JSON/Markdown）——这是 agent 能真正"干完所有的活"的入口
+- **`t2h:ai_brief`（G1+G2）**：`{path, step}` → 把该步的**落档正文（截断 3000 字）+ 日志尾 40 行 +
+  该步判据**拼成提问正文。判定权在后端（`observeTaskStep`），**没跑过（落档不存在）不算失败**、
+  不打扰模型；`force` 仅供界面探针
+- **`t2h:ai_decide`（G4）**：从 AI 回复里抽 `lingqu-decision` 围栏块 → 确认卡（采纳/忽略）→
+  人点一下才落 `.lingqu/port/<工程>/decisions.json`，`source=ai` 标出"AI 提案、人确认"
+- 前端两个开关（localStorage 记住）：`失败自动问 AI`（默认开）、`自动跑只读命令`（默认关）
+- `cliAutoRunAllowed`（纯函数 + 单测）：自动执行的**更严一层**白名单
+  （`scan/deps/sign/verify/report/batch/resume/env/diagnose`），`build/hap/port/revert/deploy/migrate` 一律不自动跑
+- `t2h:cli_run` 新增 `preflight`（只回答能不能跑、不执行）与 `auto`（是否在自动白名单）
+- 纯函数层：`src/agent_prompt.cj`（`tailLinesOf` / `clipCharsOf`（按字符切，不切坏汉字）/
+  `stepAskCaveat` 八步判据 / `buildAutoAskPrompt` / `parseDecisionBlocks`）、
+  `src/migrate.cj`（步骤编排、`MigrateState` 深拷贝快照、`migrateVerdict` 四态、
+  `migrateResultMarkdown`、`migrateAskPrompt`）
+- `ui_report` 新增：`autoDiag*/autoRun*/decide*/migrate*` 共 15 个字段（页面 + 后端白名单两处一起加）
+- 技能与工程上下文同步写进两个新约定（建议命令一行一条、`lingqu-decision` 决策块格式），
+  否则模型不会产出界面能解析的东西
+
+### Fixed
+
+- **写错返回值语法时编译器指错位置**：`func f(...) -> T` 少写冒号会把错误报到**下一个**函数声明
+  （`body of function 'X' is missing` / `found '->'`），照报错位置改永远改不对（§4-67）
+- **`t2h:port` 的 `apply` 在新工程上必失败**（0.11.0 起潜伏）：`ensurePortDirs()` 只建到
+  `.lingqu/port`，逐文件备份目录 `.lingqu/port/<工程>/` 要等 `t2h:decisions` 记过决策才碰巧存在 →
+  第一次「应用改造」抛 `The input path 'parent' … does not exist`、`ok=false`。现在 apply 前自建
+- 一键迁移结果卡写不进去：把**文件**路径传给了 `ensureDirOf`（它按目录逐段建）→ 先建 `.lingqu/migrate`
+- 「规则改造」在已迁移工程上显示**未跑**：port 的落档是可选的（没东西可改就不写 decisions.json /
+  不留 .bak）。改为"命令 ok 且落档不存在 → 通过（幂等）"
+- deploy 摘要把最有用的那句丢了：只写"启 失败"，看不出为什么。抽纯函数 `deployNoteOf`
+  在失败时带上 `start.detail` 的处置提示（真机实测：设备锁屏 `10106102`），且不叠 `｜｜`
+
+### 证据（本机 Windows x64，2026-11-01）
+
+```
+门禁：五道闸全绿 build-biz:PASS test:PASS(TOTAL=226) check:PASS build-app:PASS build-cli:PASS
+
+① 一键迁移真机实跑（`lingqu-cli migrate --path E:\test\rust\habit-tree --wait`，约 60 秒）：
+   扫描分析｜通过｜单元 R=24 / D=24 / U=0 / 评分 63 / 阻塞 1 项
+   依赖评估｜通过｜依赖 453 包 / 需 patch 0 / 不可用 10
+   规则改造｜通过｜已应用改造（有备份，未记人工决策）
+   交叉编译｜通过｜exit=0 / 错误 0 / 前端指纹 一致 0、过期 0、缺 0
+   HAP 装配｜通过｜HAP 7249833 字节 / arm64 库条目 3 个 / rawfile 0 个死资源
+   签名体检｜通过｜签名态 debug（开发直装）｜profile 绑定了本机 UDID，可直装
+   真机部署｜未过｜装 成功 / 启 失败｜处置：设备在锁屏，拒绝自动解锁 → 解锁后重试（FP-014）
+   → percent=87，结论「停在真机部署」；报告 .lingqu/report/habit-tree.{md,html}；
+     结果卡 .lingqu/migrate/habit-tree.md；askPrompt 已拼好（含落档 + 日志尾 40 行 + 判据）
+
+② 新屏无 JS 错误（`LINGQU_UI_PROBE=1` 实机）：
+   ui_report：screens=8 activeScreen=migrate migrateRows=8 autoDiag=true autoRun=false
+              gridColumns=240px 652px 372px wsState=connected frames=3 mdOk=true errorCount=0
+   同一次运行的断点板：resumeDone=7 resumeFailed=1 resumePercent=87 resumeNext=deploy
+   —— 与一键迁移的 percent=87 /「停在真机部署」逐字一致（两条链路读同一份落档）
+```
+
 ## [0.35.0] - 2026-11-01
 
 **主题**：**AI 接入第 4 步 —— 一键执行 + 结果回填**：AI 回复里出现的 `lingqu-cli …` 建议

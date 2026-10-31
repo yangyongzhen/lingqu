@@ -24,13 +24,14 @@ import stdx.encoding.json.*
 
 /** CLI 支持的命令（与注册表一致；GUI 专属的 quit/cjh_* 不开放） */
 public let CLI_COMMANDS: Array<String> = [
-    "scan", "deps", "port", "revert", "decisions", "diagnose", "build", "hap", "sign",
+    "migrate", "scan", "deps", "port", "revert", "decisions", "diagnose", "build", "hap", "sign",
     "deploy", "verify", "report", "batch", "resume", "env", "skill", "agent_context"
 ]
 
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
 func cliIsBoolFlag(key: String): Bool {
-    for (k in ["screenshot", "verifyOnly", "apply", "start", "all", "json"]) {
+    for (k in ["screenshot", "verifyOnly", "apply", "start", "all", "json", "wait", "applyPort",
+               "preflight", "force"]) {
         if (k == key) {
             return true
         }
@@ -160,6 +161,7 @@ public func cliUsage(): String {
         text += "  ${c}\n"
     }
     text += "\n示例：\n"
+    text += "  lingqu-cli migrate --path E:/work/habit-tree    # 一条命令跑完 8 步（跑到出结果才返回）\n"
     text += "  lingqu-cli scan --path E:/work/habit-tree\n"
     text += "  lingqu-cli build --path E:/work/habit-tree --verifyOnly\n"
     text += "  lingqu-cli sign --path E:/work/habit-tree\n"
@@ -278,11 +280,43 @@ public func cliRunAllowed(cmd: String, args: JsonObject): (Bool, String) {
     if (cmd == "deploy") {
         return (false, "真机部署会安装并启动应用，请在 ⑥ 屏点「安装并启动」")
     }
+    if (cmd == "migrate") {
+        // 一键迁移会改用户工程、占机器几分钟、还可能动真机：只允许在「一键迁移」屏由人点开始。
+        // （agent 自己要用整条链，走 `lingqu-cli migrate --path …`，那条路是 bash 直调、有人盯着。）
+        return (false, "一键迁移会改工程并占用机器几分钟，请在「一键迁移」屏点「开始」")
+    }
     if (cmd == "decisions") {
         return (false, "人工决策要留痕到落档，请在 ④ 屏操作")
     }
     return (false, "不开放的命令：${cmd}")
 }
+
+/**
+ * ⑤ 允许**自动执行**的命令（G3，比 `cliRunAllowed` 更严一档，纯函数）。
+ *
+ * 分层理由：`cliRunAllowed` 管的是"人点一下按钮，这条能不能跑"；这里管的是
+ * "**没人点**，agent 建议了就直接跑"——代价必须是零：
+ *   · 只读或幂等（scan/deps/resume/report/verify/env/diagnose/batch/sign 体检）
+ *   · 不产生产物、不改工程、不占机器分钟级（所以 build/hap/port/revert/deploy 一律不进）
+ * 与 `cliRunAllowed` 是**合取**关系：前者说不行，这里也一定不行（比如 `sign --apply`）。
+ */
+public let CLI_AUTO_OK: Array<String> = [
+    "scan", "deps", "sign", "verify", "report", "batch", "resume", "env", "diagnose"
+]
+
+public func cliAutoRunAllowed(cmd: String, args: JsonObject): Bool {
+    let (allowed, _) = cliRunAllowed(cmd, args)
+    if (!allowed) {
+        return false
+    }
+    for (c in CLI_AUTO_OK) {
+        if (c == cmd) {
+            return true
+        }
+    }
+    return false
+}
+
 
 /** 参数里某个布尔开关是否开着（`true` 或非空字符串都算开） */
 func cliFlagOn(args: JsonObject, key: String): Bool {
@@ -383,6 +417,11 @@ public func cliArgvCommand(argv: Array<String>): String {
 }
 /** 命令名 → handler（新增命令时两处一起加：这里 + `main.build()` 的 register） */
 func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcContext): JsonValue {
+    if (cmd == "migrate") {
+        // CLI 一律等它跑完（--wait 由这里强制打开）：命令行要的是"一行命令跑到出结果"
+        args.put("wait", JsonBool(true))
+        return MigrateCommand().handle(fullName, args, ctx)
+    }
     if (cmd == "scan") {
         return ScanCommand().handle(fullName, args, ctx)
     }

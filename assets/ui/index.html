@@ -351,6 +351,28 @@ body.ai-hidden .dock{display:none}
   background:var(--acc);opacity:.75;animation:mdblink 1s steps(2) infinite;vertical-align:-2px}
 @keyframes mdblink{50%{opacity:0}}
 
+/* ⓪ 一键迁移：进度条 + 8 步时间轴（每行一条，状态色）+ 结果区 */
+.migbar{height:6px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);overflow:hidden}
+.migbar-fill{height:100%;width:0;background:linear-gradient(90deg,#6c8cff,#5fd0c8);transition:width .4s ease}
+.migrows{margin-top:9px;display:flex;flex-direction:column;gap:4px}
+.migrows .mrow{display:grid;grid-template-columns:96px 62px 1fr;gap:8px;align-items:baseline;
+  font-size:12px;padding:3px 0;border-top:1px dashed var(--line)}
+.migrows .mrow:first-child{border-top:0}
+.migrows .mstep{font-weight:600;white-space:nowrap}
+.migrows .mstate{font-size:11px;color:var(--dim)}
+.migrows .mrow.ok .mstate{color:var(--ok)}
+.migrows .mrow.err .mstate{color:var(--err)}
+.migrows .mrow.run .mstate{color:var(--warn)}
+.migrows .mrow.skip .mstate{color:var(--dim)}
+.migrows .mnote{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.migresult{font-size:12.8px;line-height:1.7}
+.migresult table{border-collapse:collapse;width:100%;font-size:11.8px;margin:6px 0}
+.migresult th,.migresult td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
+.migresult th{background:rgba(108,140,255,.10);font-weight:600}
+.migresult code{font-family:var(--mono);font-size:11.5px;background:var(--panel2);border-radius:4px;padding:1px 4px}
+.chk{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--dim);cursor:pointer;user-select:none}
+.chk input{accent-color:var(--acc);margin:0}
+
 /* ④ AI 建议命令（一键执行）：一排小按钮 + 结果卡（含 JSON 预览与"让 AI 分析"） */
 .cli-sug{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
 .cli-sug-label{font-size:11px;color:var(--dim)}
@@ -362,6 +384,24 @@ body.ai-hidden .dock{display:none}
 .cli-result.warn{border-color:rgba(255,184,107,.45);background:var(--warnsoft)}
 .cli-result .cli-json{margin-top:4px;max-height:96px;overflow:auto;word-break:break-all;color:var(--dim)}
 .cli-result .cli-ask{margin-top:6px;padding:2px 9px;font-size:11px}
+
+/* G4 决策卡（AI 提议的取舍 → 人点一下落进 decisions.json） */
+.decide{margin-top:8px;border:1px solid rgba(122,162,255,.45);background:rgba(122,162,255,.07);
+  border-radius:8px;padding:8px 10px}
+.decide .dh{font-size:11px;color:var(--dim);margin-bottom:6px}
+.decide .drow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11.5px;padding:4px 0;
+  border-top:1px dashed var(--line)}
+.decide .drow:first-child{border-top:0}
+.decide .drule{font-weight:600}
+.decide .dwhy{color:var(--dim);flex:1 1 100%;font-size:11px;line-height:1.55}
+.decide .dbtns{display:flex;gap:6px;margin-left:auto}
+.decide .dbtns .btn{padding:1px 8px;font-size:11px}
+.decide .drow.err .drule{color:var(--err)}
+
+/* G1/G3 两个开关（失败自动问 AI / 自动跑只读命令）：放在输入框上方一行 */.composer .autorow{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:11px;color:var(--dim)}
+.composer .autorow label{display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none}
+.composer .autorow input{accent-color:var(--acc);margin:0}
+.composer .autorow .on{color:var(--ok)}
 .tool{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
 .tool .th{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:11.5px;border-bottom:1px solid var(--line)}
 .tool .th .nm{font-family:var(--mono);font-weight:600;color:var(--acc)}
@@ -437,6 +477,7 @@ body.ai-hidden .ai-show{display:block}
     <div class="chip"><span class="dot" id="dotEnv"></span><span id="txtEnv">环境检查中…</span></div>
     <div class="chip"><span class="dot" id="dotCjh"></span><span id="txtCjh">引擎状态未知</span></div>
     <button class="btn sm" id="btnTheme" title="切换深浅色">◐</button>
+    <button class="btn sm primary" id="btnMigrateTop" title="一键迁移：跑完整个 8 步链路（有真机就一起跑）">⚡ 一键迁移</button>
     <button class="btn sm ghost" id="btnAiToggle" title="展开/收起 AI 助手（Ctrl+B）">AI 助手</button>
     <button class="btn sm ghost" id="btnQuit" title="退出（会同时收尾本应用拉起的 cjh）">退出</button>
   </header>
@@ -446,7 +487,8 @@ body.ai-hidden .ai-show{display:block}
     <nav class="rail">
       <div class="rail-h">迁移流程</div>
       <div class="steps" id="steps">
-        <button class="step active" data-s="env"><span class="n">①</span>项目 / 环境</button>
+        <button class="step active" data-s="migrate"><span class="n">⚡</span>一键迁移</button>
+        <button class="step" data-s="env"><span class="n">①</span>项目 / 环境</button>
         <button class="step" data-s="profile"><span class="n">②</span>迁移画像<span class="badge">待接入</span></button>
         <button class="step" data-s="deps"><span class="n">③</span>依赖扫描<span class="badge">待接入</span></button>
         <button class="step" data-s="port"><span class="n">④</span>改造执行<span class="badge">待接入</span></button>
@@ -463,8 +505,40 @@ body.ai-hidden .ai-show{display:block}
     <!-- ==================== 中栏 ==================== -->
     <main class="work">
 
+      <!-- ⓪ 一键迁移（0.36.0）：一个按钮跑完 8 步，过程看得见，最后给结果 -->
+      <section class="screen on" data-screen="migrate">
+        <div class="whead">
+          <div><h1>一键迁移</h1>
+            <p>填一个 Tauri 工程路径，点开始就行：扫描 → 依赖 → 改造 → 编译 → HAP → 签名 →（有真机）部署 → 验证 → 报告。
+              哪一步没过就停下，把现场交给 AI 分析；没插设备或签名是 release 态时，真机两步会<b>跳过</b>（不算失败）。</p></div>
+          <div class="acts">
+            <button class="btn primary" id="btnMigrateStart">⚡ 开始一键迁移</button>
+            <button class="btn" id="btnMigrateStop" disabled>停止</button>
+          </div>
+        </div>
+
+        <div class="acts-row">
+          <input id="migratePath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_SCAN_PATH）" style="flex:1 1 320px;min-width:240px">
+          <label class="chk" title="关闭则只预览改造（不改源码）；打开则逐文件留 .bak，随时可用 ④ 屏「回滚」还原">
+            <input type="checkbox" id="migrateApplyPort" checked> 自动应用代码改造（留 .bak，可回滚）</label>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <div class="card-h"><h3>进度</h3><span class="right mono small" id="migratePct">—</span></div>
+          <div class="migbar"><div class="migbar-fill" id="migrateBar"></div></div>
+          <div class="sethint" id="migrateNote" style="margin-top:8px">还没开始。填好路径点「开始一键迁移」。</div>
+          <div id="migrateRows" class="migrows"></div>
+        </div>
+
+        <div class="card" style="margin-top:12px;display:none" id="migrateResultCard">
+          <div class="card-h"><h3>结果</h3><span class="right mono small" id="migrateVerdictShort"></span></div>
+          <div class="migresult" id="migrateResult"></div>
+          <div class="sethint" id="migrateFiles"></div>
+        </div>
+      </section>
+
       <!-- ① 项目 / 环境（真数据） -->
-      <section class="screen on" data-screen="env">
+      <section class="screen" data-screen="env">
         <div class="whead">
           <div><h1>项目与环境</h1>
             <p>左边是最近项目，右边是这台机器的体检结果。迁移这条链路上缺什么、在哪、怎么补，一次说清。</p></div>
@@ -967,6 +1041,12 @@ body.ai-hidden .ai-show{display:block}
       </div>
 
       <div class="composer" id="aiComposer">
+        <div class="autorow">
+          <label title="某一步的落档判定未过时，自动把落档 + 日志尾拼成提问发给 AI（只读，不改任何文件）">
+            <input type="checkbox" id="autoDiagOn"> 失败自动问 AI</label>
+          <label title="AI 建议的只读命令（scan/deps/sign/verify/report/batch/resume）不再等点击就直接跑；改工程/动真机的仍要人点">
+            <input type="checkbox" id="autoRunOn"> 自动跑只读命令</label>
+        </div>
         <div class="row">
           <textarea id="aiInput" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
           <button class="btn primary sm" id="aiSend">发送</button>
@@ -2315,7 +2395,11 @@ withBridge(function(tauri){
       // 这样「版面对不对、通道通不通」不再依赖肉眼看截图，CI / 无视觉能力场景也能验证。
       if (d && d.uiProbe) { window.__uiProbeMode = String(d.uiProbe); runUiProbe(); }
       // 扫描探针：后端把 LINGQU_SCAN_PATH 透传下来，就在启动时跑一次 t2h:scan
-      if (d && d.scanPath) { runScanProbe(String(d.scanPath)); }
+      if (d && d.scanPath) {
+        // 「一键迁移」屏的路径框跟着带上，省得再手填一遍（一键迁移的主入口）
+        if ($('migratePath') && !$('migratePath').value) { $('migratePath').value = String(d.scanPath); }
+        runScanProbe(String(d.scanPath));
+      }
       // 编译探针（T5-1）：LINGQU_BUILD_PATH 显式设置时才跑（交叉编译以分钟计）
       if (d && d.buildPath) {
         $('buildPath').value = String(d.buildPath);
@@ -2610,6 +2694,10 @@ withBridge(function(tauri){
     CJ.acc = '';
     // ④ 一键执行：回复里若有 `lingqu-cli …` 建议，就在气泡下方挂一排可点按钮
     attachCliSuggestions();
+    // G4 决策回写：回复里若有 ```lingqu-decision 块，挂确认卡（点了才落 decisions.json）
+    attachDecisionCards();
+    // G3 自动执行：开了开关就把只读建议直接跑掉（改了工程/动真机的仍等人点）
+    autoRunSuggestions();
   }
 
   /* ===== ④ AI 建议命令的一键执行（2026-11-01，AI 接入第 4 步）=====
@@ -2676,6 +2764,8 @@ withBridge(function(tauri){
       b.className = 'btn cli-run';
       b.textContent = '▶ ' + s.replace('lingqu-cli ', '');
       b.title = '点一下就跑：' + s;
+      // 原始建议串挂在自己身上：自动执行要按它重新解析（不靠按钮文案反推）
+      b.setAttribute('data-sugg', s);
       b.onclick = function(){ runCliSuggestion(s); };
       box.appendChild(b);
     });
@@ -2728,6 +2818,386 @@ withBridge(function(tauri){
       reportUi('cli-run-error');
     });
   }
+
+  /* ===== G1+G2 失败自动诊断：把失败现场自动交给 AI（0.36.0，AI 一体化第 5~6 步）=====
+   * 这一条把「人看结果 → 人复述一遍 → 人问 AI」压成「落档判定未过就自动问」。
+   * 三条安全设计：
+   *   ① 现场由**后端**拼（t2h:ai_brief 复用断点板同一套观测），页面不造任何数字；
+   *   ② 判定权在后端：落档说通过就绝不打扰模型（省一次调用，也避免"没事找事"）；
+   *   ③ 引擎没连上就如实说"没发出去"，不假装问过。
+   * 失败现场**不当用户消息回显**（那是机器写的，不是人说的），只留一行说明。
+   */
+  var AUTODIAG = { on: true, asked: 0, step: '', chars: 0, note: '', busy: false };
+  var AUTORUN = { on: false, ran: 0, skipped: 0, rounds: 0 };
+  var AUTORUN_MAX_ROUNDS = 2;   // 每轮人话最多自动跑 2 批：防止"建议→跑→再建议"无限转
+  var DECIDE = { cards: 0, recorded: 0, last: '' };
+
+  function prefGet(k, dft){
+    try { var v = localStorage.getItem(k); return (v === null) ? dft : (v === '1'); } catch (e) { return dft; }
+  }
+  function prefSet(k, v){ try { localStorage.setItem(k, v ? '1' : '0'); } catch (e) {} }
+
+  /** 当前工程路径：与断点板同一套取值顺序，再补一个 ③ 屏的输入框 */
+  function projectPathValue(){
+    var p = resumePathValue();
+    if (p) { return p; }
+    return ($('buildPath') && $('buildPath').value ? $('buildPath').value : '').trim();
+  }
+
+  function addSystemNote(text){
+    return insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+      '<div class="small muted">' + esc(text) + '</div></div></div>'));
+  }
+
+  /** 某一步跑完后调用：后端按落档判定，未过就自动发一次提问（force=探针用，跳过判定） */
+  function autoDiag(step, force){
+    if (!AUTODIAG.on) { return; }
+    if (AUTODIAG.busy) { AUTODIAG.note = '上一条简报还没回来，跳过 ' + step; return; }
+    var p = projectPathValue() || window.__probePath || '';
+    if (!p) { AUTODIAG.note = '没有工程路径，跳过 ' + step; reportUi('auto-diag-nopath'); return; }
+    AUTODIAG.busy = true;
+    AUTODIAG.step = step;
+    var arg = { path: p, step: step };
+    if (force === true) { arg.force = true; }
+    invoke('t2h:ai_brief', arg).then(function(r){
+      r = r || {};
+      AUTODIAG.busy = false;
+      if (r.ok !== true) {
+        // 该步不值得自动诊断（比如 scan 的路径填错）或参数不对：如实记一句，不弹卡
+        AUTODIAG.note = String(r.error || '简报生成失败');
+        reportUi('auto-diag-skip');
+        return;
+      }
+      if (r.verdictOk === true) {
+        AUTODIAG.note = step + '：落档判定通过，不打扰 AI';
+        reportUi('auto-diag-pass');
+        return;
+      }
+      AUTODIAG.chars = Number(r.promptChars || 0);
+      if (!CJ.up) {
+        AUTODIAG.note = '引擎未连接（简报 ' + AUTODIAG.chars + ' 字没发出去）';
+        addSystemNote('⚠ 自动诊断没发出去：' + AUTODIAG.note);
+        reportUi('auto-diag-offline');
+        return;
+      }
+      if (CJ.curBubble) {
+        AUTODIAG.note = 'AI 正在回合中，跳过 ' + step;
+        reportUi('auto-diag-busy');
+        return;
+      }
+      addSystemNote('自动诊断「' + String(r.stepTitle || step) + '」：落档判定未过（'
+        + String(r.note || '无摘要') + '），已把落档与日志尾部共 ' + AUTODIAG.chars + ' 字交给 AI。');
+      newAssistantTurn();
+      wsSend({ type: 'chat', message: String(r.prompt || '') });
+      AUTODIAG.asked += 1;
+      AUTODIAG.note = step + '：已发送 ' + AUTODIAG.chars + ' 字';
+      reportUi('auto-diag-sent');
+    }).catch(function(e){
+      AUTODIAG.busy = false;
+      AUTODIAG.note = '简报命令出错：' + (e && e.message ? e.message : e);
+      reportUi('auto-diag-error');
+    });
+  }
+
+  /** G3：AI 建议里的只读命令不用等点击（白名单在后端 cliAutoRunAllowed，前端先 preflight 问一次） */
+  function autoRunSuggestions(){
+    if (!AUTORUN.on) { return; }
+    var all = Array.prototype.slice.call(chatBox().querySelectorAll('.cli-sug .cli-run:not([data-auto])'));
+    if (!all.length) { return; }
+    if (AUTORUN.rounds >= AUTORUN_MAX_ROUNDS) {
+      AUTORUN.skipped += all.length;
+      addSystemNote('自动执行已达上限（每轮最多 ' + AUTORUN_MAX_ROUNDS + ' 批），剩下 '
+        + all.length + ' 条请手动点。');
+      reportUi('auto-run-capped');
+      return;
+    }
+    AUTORUN.rounds += 1;
+    all.slice(0, 3).forEach(function(b){
+      var sugg = b.getAttribute('data-sugg') || '';
+      if (!sugg) { return; }
+      var parsed = cliSuggestParseArgs(sugg);
+      invoke('t2h:cli_run', { cmd: parsed.cmd, flags: parsed.flags, preflight: true }).then(function(r){
+        r = r || {};
+        // 只读白名单之外（会改工程 / 动真机 / 分钟级）：交回人手点，不自动跑
+        if (r.auto !== true) { AUTORUN.skipped += 1; return; }
+        b.setAttribute('data-auto', '1');
+        AUTORUN.ran += 1;
+        b.click();
+      }).catch(function(){ AUTORUN.skipped += 1; });
+    });
+  }
+
+  /** G4：回复里的 ```lingqu-decision 块 → 确认卡（解析在后端，与 decisions.json 同一套 schema） */
+  function attachDecisionCards(){
+    var text = CJ.lastReply || '';
+    if (!text || text.indexOf('lingqu-decision') < 0) { return; }
+    invoke('t2h:ai_decide', { text: text }).then(function(r){
+      r = r || {};
+      var list = (r && r.proposals) ? r.proposals : [];
+      if (!list.length) { return; }
+      var bubbles = chatBox().querySelectorAll('.msg:not(.me) .bubble');
+      if (!bubbles.length) { return; }
+      var host = bubbles[bubbles.length - 1];
+      if (host.querySelector('.decide')) { return; }
+      var box = document.createElement('div');
+      box.className = 'decide';
+      box.innerHTML = '<div class="dh">AI 提议的取舍（点一下落进 decisions.json，算一次人工决策）</div>';
+      list.forEach(function(p){
+        var row = document.createElement('div');
+        row.className = 'drow';
+        row.innerHTML = '<span class="pill ' + (p.decision === 'accepted' ? 'ok' : 'warn') + '">'
+          + (p.decision === 'accepted' ? '建议采纳' : '建议忽略') + '</span>'
+          + '<span class="drule">' + esc(String(p.rule || '')) + '</span>'
+          + (p.why ? '<span class="dwhy">' + esc(String(p.why)) + '</span>' : '');
+        var btns = document.createElement('div');
+        btns.className = 'dbtns';
+        [['accepted', '采纳'], ['ignored', '忽略']].forEach(function(pair){
+          var b = document.createElement('button');
+          b.className = 'btn sm';
+          b.textContent = pair[1];
+          b.setAttribute('data-dec', pair[0]);
+          b.onclick = function(){ recordAiDecision(p, pair[0], row); };
+          btns.appendChild(b);
+        });
+        row.appendChild(btns);
+        box.appendChild(row);
+      });
+      host.appendChild(box);
+      DECIDE.cards += list.length;
+      reportUi('decide-cards');
+    }).catch(function(){});
+  }
+
+  /** 落档：source=ai 标出"AI 提案、人点确认"（报告要能把两种决策分开数） */
+  function recordAiDecision(p, decision, row){
+    var arg = {
+      action: 'record', path: (projectPathValue() || window.__probePath || ''), rule: String(p.rule || ''),
+      decision: decision, note: String(p.why || ''), source: 'ai'
+    };
+    invoke('t2h:decisions', arg).then(function(r){
+      r = r || {};
+      if (r.ok !== true) {
+        DECIDE.last = '落档失败：' + String(r.error || r.outError || '');
+        if (row) { row.className = 'drow err'; }
+        reportUi('decide-error');
+        return;
+      }
+      DECIDE.recorded += 1;
+      DECIDE.last = (decision === 'accepted' ? '采纳' : '忽略') + '｜' + String(p.rule || '');
+      if (row) {
+        var btns = row.querySelector('.dbtns');
+        if (btns) {
+          btns.innerHTML = '<span class="pill ok">已落档：'
+            + (decision === 'accepted' ? '采纳' : '忽略') + '</span>';
+        }
+      }
+      reportUi('decide-recorded');
+    });
+  }
+
+  // 两个开关的初值来自上次会话（localStorage）；写盘类默认关——自动化不能默认替人做决定
+  AUTODIAG.on = prefGet('lq.autoDiag', true);
+  AUTORUN.on = prefGet('lq.autoRun', false);
+  if ($('autoDiagOn')) {
+    $('autoDiagOn').checked = AUTODIAG.on;
+    $('autoDiagOn').onchange = function(){
+      AUTODIAG.on = this.checked;
+      prefSet('lq.autoDiag', AUTODIAG.on);
+      reportUi('pref-autodiag');
+    };
+  }
+  if ($('autoRunOn')) {
+    $('autoRunOn').checked = AUTORUN.on;
+    $('autoRunOn').onchange = function(){
+      AUTORUN.on = this.checked;
+      AUTORUN.rounds = 0;
+      prefSet('lq.autoRun', AUTORUN.on);
+      reportUi('pref-autorun');
+    };
+  }
+
+  /* ===== ⓪ 一键迁移（0.36.0）：一个按钮跑完 8 步，过程看得见，最后给结果 =====
+   * 为什么要轮询而不是事件：一次迁移以分钟计（cargo build + hvigor assembleHap），
+   * 命令面必须保持可用（用户还要点停止、切屏、问 AI）。后端 `t2h:migrate` 只起线程就返回，
+   * 页面 900ms 读一次 `t2h:migrate_status`——简单、不会丢事件、也不依赖事件通道的权限。
+   * 失败时后端已经把「落档 + 日志尾 + 该步判据」拼成提问正文（askPrompt），
+   * 这里直接发给 AI —— 一键迁移因此是"AI 自动干完所有的活"的入口，而不是又一个按钮。 */
+  var MIG = { running: false, done: false, timer: null, percent: 0, verdict: '' };
+  var MIG_STEPS = [['scan', '扫描分析'], ['deps', '依赖评估'], ['port', '规则改造'], ['build', '交叉编译'],
+                   ['hap', 'HAP 装配'], ['sign', '签名体检'], ['deploy', '真机部署'], ['verify', '真机验证']];
+
+  function migratePathValue(){
+    var p = ($('migratePath') && $('migratePath').value ? $('migratePath').value : '').trim();
+    if (p) { return p; }
+    return projectPathValue() || window.__probePath || '';
+  }
+
+  function renderMigrate(st){
+    st = st || {};
+    MIG.percent = (typeof st.percent === 'number') ? st.percent : 0;
+    MIG.verdict = String(st.verdict || '');
+    if ($('migratePct')) {
+      $('migratePct').textContent = MIG.percent + '%　' + (st.hasDevice ? '真机已连接' : '未连接真机');
+    }
+    if ($('migrateBar')) { $('migrateBar').style.width = MIG.percent + '%'; }
+    if ($('migrateNote')) {
+      var note = '还没开始。填好路径点「开始一键迁移」。';
+      if (st.running) { note = String(st.message || '进行中…'); }
+      else if (st.done) { note = MIG.verdict; }
+      else if (st.error) { note = '异常：' + String(st.error); }
+      $('migrateNote').textContent = note;
+      $('migrateNote').style.color = (st.done && st.verdict && String(st.verdict).indexOf('停在') === 0) ? 'var(--err)' : '';
+    }
+    var rows = st.rows || [];
+    var html = '';
+    MIG_STEPS.forEach(function(pair){
+      var row = null;
+      rows.forEach(function(r){ if (r && r.step === pair[0]) { row = r; } });
+      var state = '待跑', cls = '';
+      if (row) {
+        if (row.skipped) { state = '跳过'; cls = 'skip'; }
+        else if (row.ran && row.ok) { state = '通过'; cls = 'ok'; }
+        else if (row.ran) { state = '未过'; cls = 'err'; }
+        else { state = '未跑'; }
+      } else if (st.running && pair[0] === String(st.current || '')) {
+        state = '进行中'; cls = 'run';
+      }
+      var detail = row ? String(row.skipped || row.note || '') : '';
+      html += '<div class="mrow ' + cls + '"><span class="mstep">' + esc(pair[1]) + '</span>'
+        + '<span class="mstate">' + state + '</span>'
+        + '<span class="mnote" title="' + esc(detail) + '">' + esc(detail) + '</span></div>';
+    });
+    if ($('migrateRows')) { $('migrateRows').innerHTML = html; }
+  }
+
+  function stopMigratePolling(){
+    if (MIG.timer) { clearInterval(MIG.timer); MIG.timer = null; }
+  }
+
+  function pollMigrate(){
+    invoke('t2h:migrate_status').then(function(st){
+      st = st || {};
+      renderMigrate(st);
+      if (st.running) {
+        MIG.running = true;
+        if ($('migratePath') && !$('migratePath').value && st.path) { $('migratePath').value = String(st.path); }
+        return;
+      }
+      // 结束：收尾一次（结果卡 + 断点板 + 失败现场交给 AI）
+      MIG.running = false;
+      stopMigratePolling();
+      $('btnMigrateStart').disabled = false;
+      $('btnMigrateStop').disabled = true;
+      if (st.done && !MIG.done) {
+        MIG.done = true;
+        showMigrateResult(st);
+        if (typeof loadResumeBoard === 'function') { loadResumeBoard(migratePathValue()); }
+        reportUi('migrate-done');
+      }
+    }).catch(function(e){
+      stopMigratePolling();
+      MIG.running = false;
+      $('btnMigrateStart').disabled = false;
+      $('btnMigrateStop').disabled = true;
+      if ($('migrateNote')) { $('migrateNote').textContent = '读进度失败：' + (e && e.message ? e.message : e); }
+    });
+  }
+
+  function showMigrateResult(st){
+    var card = $('migrateResultCard');
+    if (card) { card.style.display = 'block'; }
+    if ($('migrateVerdictShort')) { $('migrateVerdictShort').textContent = String(st.verdict || ''); }
+    if ($('migrateResult')) {
+      var md = String(st.markdown || '');
+      $('migrateResult').innerHTML = md ? renderMd(md) : '<div class="muted small">（没有结果正文）</div>';
+    }
+    if ($('migrateFiles')) {
+      var parts = [];
+      if (st.reportMd) { parts.push('报告：<span class="mono">' + esc(String(st.reportMd)) + '</span>'); }
+      if (st.reportHtml) { parts.push('HTML：<span class="mono">' + esc(String(st.reportHtml)) + '</span>'); }
+      if (st.resultMd) { parts.push('结果卡：<span class="mono">' + esc(String(st.resultMd)) + '</span>'); }
+      $('migrateFiles').innerHTML = parts.length ? parts.join('　·　') : '（没生成报告）';
+    }
+    // 失败现场交给 AI：后端已把落档 + 日志尾 + 判据拼好，这里只负责发
+    var ask = String(st.askPrompt || '');
+    if (ask.length > 0 && AUTODIAG.on) {
+      if (!CJ.up) {
+        AUTODIAG.note = '一键迁移失败现场没发出去：引擎未连接（' + ask.length + ' 字）';
+        addSystemNote('⚠ ' + AUTODIAG.note);
+        return;
+      }
+      if (CJ.curBubble) {
+        AUTODIAG.note = '一键迁移失败现场：AI 正在回合中，跳过（可手动重发）';
+        return;
+      }
+      addSystemNote('一键迁移中断在「' + String(st.currentTitle || '') + '」——已把失败现场（' + ask.length + ' 字）交给 AI 分析。');
+      newAssistantTurn();
+      wsSend({ type: 'chat', message: ask });
+      AUTODIAG.asked += 1;
+      AUTODIAG.step = 'migrate';
+      AUTODIAG.chars = ask.length;
+      AUTODIAG.note = 'migrate：已发送 ' + AUTODIAG.chars + ' 字';
+      reportUi('migrate-ask-sent');
+    }
+  }
+
+  function startMigrate(){
+    var p = migratePathValue();
+    if (!p) {
+      if ($('migrateNote')) { $('migrateNote').textContent = '请先填 Tauri 工程路径。'; }
+      if ($('migratePath')) { $('migratePath').focus(); }
+      return;
+    }
+    if ($('migratePath')) { $('migratePath').value = p; }
+    MIG.done = false;
+    if ($('migrateResultCard')) { $('migrateResultCard').style.display = 'none'; }
+    $('btnMigrateStart').disabled = true;
+    if ($('migrateNote')) { $('migrateNote').style.color = ''; $('migrateNote').textContent = '启动中…'; }
+    var applyPort = $('migrateApplyPort') ? $('migrateApplyPort').checked : true;
+    invoke('t2h:migrate', { path: p, applyPort: applyPort }).then(function(r){
+      r = r || {};
+      if (r.ok !== true) {
+        $('btnMigrateStart').disabled = false;
+        if ($('migrateNote')) { $('migrateNote').textContent = '启动失败：' + String(r.error || '未知原因'); }
+        reportUi('migrate-start-failed');
+        return;
+      }
+      MIG.running = true;
+      $('btnMigrateStop').disabled = false;
+      if ($('migrateNote')) { $('migrateNote').textContent = '已启动：正在跑第 1 步…'; }
+      reportUi('migrate-started');
+      stopMigratePolling();
+      MIG.timer = setInterval(pollMigrate, 900);
+      setTimeout(pollMigrate, 300);
+    }).catch(function(e){
+      $('btnMigrateStart').disabled = false;
+      if ($('migrateNote')) { $('migrateNote').textContent = 'invoke 失败：' + (e && e.message ? e.message : e); }
+      reportUi('migrate-start-error');
+    });
+  }
+
+  if ($('btnMigrateStart')) { $('btnMigrateStart').onclick = startMigrate; }
+  if ($('btnMigrateStop')) {
+    $('btnMigrateStop').onclick = function(){
+      $('btnMigrateStop').disabled = true;
+      invoke('t2h:migrate_cancel').then(function(r){
+        if ($('migrateNote')) { $('migrateNote').textContent = String((r && r.note) || '已请求停止'); }
+        reportUi('migrate-cancel');
+      });
+    };
+  }
+  // 顶栏的「⚡ 一键迁移」：切到这一屏；没有路径就只切屏，别空跑一次
+  if ($('btnMigrateTop')) {
+    $('btnMigrateTop').onclick = function(){
+      var btn = document.querySelector('.step[data-s="migrate"]');
+      if (btn) { btn.click(); }
+      if (migratePathValue()) { startMigrate(); }
+      else if ($('migratePath')) { $('migratePath').focus(); }
+    };
+  }
+  // 时间轴先画出来（8 行待跑）：进来就能看到"要做哪几步"，也让 ui_report 断言得着。
+  // 放在这里而不是文件开头：MIG 是 var，前面的初始化块先跑，这里赋值已完成。
+  renderMigrate({ rows: [] });
 
   /* 代码块「复制」：事件委托绑在聊天容器上——气泡是动态重绘的，逐块绑会在下次 flush 后失效。
    * 复制的内容取自 MD_CODES（原文），不是 DOM 里的转义文本。 */
@@ -2993,6 +3463,7 @@ withBridge(function(tauri){
     if (!CJ.up) { addError('通道未连接——等引擎就绪会自动连上；也可点右栏「一键部署并启动引擎」重试。', 'ws_down'); return; }
     addMsg('me', esc(v));
     newAssistantTurn();
+    AUTORUN.rounds = 0;   // 人又发话了 = 新的自动化预算
     ta.value = '';
     wsSend({ type: 'chat', message: v });
   }
@@ -3733,6 +4204,8 @@ withBridge(function(tauri){
       // 先读完决策再回投：以前 reportUi 在前，portDecided 发的是加载前的旧值
       loadDecisions(p, function(){
         reportUi(apply ? 'port-applied' : 'port-preview');
+        // 只有"应用改造"真正改了工程之后失败才值得自动诊断（崩溃/写盘失败这类现场）
+        if (apply === true) { autoDiag('port'); }
       });
     }).catch(function(e){
       renderPort({ error: e && e.message ? e.message : 'invoke error' });
@@ -3912,6 +4385,8 @@ withBridge(function(tauri){
     invoke('t2h:build', verifyOnly ? { path: path, verifyOnly: true } : { path: path }).then(function(r){
       renderBuild(r || {});
       reportUi('build-done');
+      // G1/G2：判定权在后端（读落档），未过就自动把现场交给 AI
+      if (!verifyOnly) { autoDiag('build'); }
     }).catch(function(e){
       renderBuild({ ok: false, error: e && e.message ? e.message : 'invoke error' });
       reportUi('build-error');
@@ -3963,6 +4438,7 @@ withBridge(function(tauri){
     invoke('t2h:hap', { path: path }).then(function(r){
       renderHap(r || {});
       reportUi('hap-done');
+      autoDiag('hap');
     }).catch(function(e){
       renderHap({ ok: false, error: e && e.message ? e.message : 'invoke error' });
       reportUi('hap-error');
@@ -4074,6 +4550,8 @@ withBridge(function(tauri){
     invoke('t2h:sign', { path: path || '', apply: apply === true }).then(function(r){
       renderSign(r || {});
       reportUi(apply ? 'sign-apply-done' : 'sign-done');
+      // 只有"体检"这一步值得自动诊断；写回签名配置（apply）失败是操作问题，交回人手看
+      if (apply !== true) { autoDiag('sign'); }
     }).catch(function(e){
       renderSign({ ok: false, error: e && e.message ? e.message : 'invoke error' });
       reportUi(apply ? 'sign-apply-error' : 'sign-error');
@@ -4135,6 +4613,7 @@ withBridge(function(tauri){
     invoke('t2h:deploy', { path: path || '', start: start === true }).then(function(r){
       renderDeploy(r || {});
       reportUi(start === true ? 'deploy-done' : 'deploy-install-only');
+      autoDiag('deploy');
     }).catch(function(e){
       renderDeploy({ ok: false, error: e && e.message ? e.message : 'invoke error' });
       reportUi('deploy-error');
@@ -4212,6 +4691,7 @@ withBridge(function(tauri){
     invoke('t2h:verify', { path: path || '', screenshot: true }).then(function(r){
       renderVerify(r || {});
       reportUi('verify-done');
+      autoDiag('verify');
     }).catch(function(e){
       renderVerify({ ok: false, error: e && e.message ? e.message : 'invoke error' });
       reportUi('verify-error');
@@ -4784,6 +5264,33 @@ withBridge(function(tauri){
       cliResultCards: (function(){
         return document.querySelectorAll('#aiChat .cli-result').length;
       })(),
+      // G1+G2 失败自动诊断 / G3 自动执行 / G4 决策回写（0.36.0）
+      // 断言方式：autoDiagStep 非空 + autoDiagChars>0 才说明"现场真的发出去过"；
+      // decideCards>0 但 decideRecorded=0 说明卡片渲染了、还没落档（两者要分开看）
+      autoDiag: AUTODIAG.on === true,
+      autoDiagStep: AUTODIAG.step || '',
+      autoDiagAsked: (typeof AUTODIAG.asked === 'number') ? AUTODIAG.asked : 0,
+      autoDiagChars: (typeof AUTODIAG.chars === 'number') ? AUTODIAG.chars : 0,
+      autoDiagNote: AUTODIAG.note || '',
+      autoRun: AUTORUN.on === true,
+      autoRan: (typeof AUTORUN.ran === 'number') ? AUTORUN.ran : 0,
+      autoBlocked: (typeof AUTORUN.skipped === 'number') ? AUTORUN.skipped : 0,
+      decideCards: (typeof DECIDE.cards === 'number') ? DECIDE.cards : 0,
+      decideRecorded: (typeof DECIDE.recorded === 'number') ? DECIDE.recorded : 0,
+      decideLast: DECIDE.last || '',
+      // ⓪ 一键迁移：在不在跑 / 百分比 / 结论 / 时间轴 8 行是否都在 / 结果正文长度
+      migrateRunning: MIG.running === true,
+      migratePercent: (typeof MIG.percent === 'number') ? MIG.percent : 0,
+      migrateVerdict: MIG.verdict || '',
+      migrateRows: (function(){ return document.querySelectorAll('#migrateRows .mrow').length; })(),
+      migrateResultChars: (function(){
+        var e = document.getElementById('migrateResult');
+        return e ? e.textContent.length : 0;
+      })(),
+      migrateReport: (function(){
+        var e = document.getElementById('migrateFiles');
+        return e ? e.textContent.slice(0, 160) : '';
+      })(),
       // 工程上下文（AGENTS.md 受管区块 + cjh workspace）
       agentHasBlock: AGENT.hasBlock === true,
       agentPath: AGENT.path || "",
@@ -4968,6 +5475,7 @@ withBridge(function(tauri){
     // WS 通道自检：连上就发一条真实提问，靠 frames/delta/replyPreview 断言"通道真的通了"
     setTimeout(function(){
       if (!CJ.up) return;
+      if (mode === 'auto') { return; }   // auto 模式自己安排提问时机（见下方 ⑤ 序列）
       if (mode === 'approval') {
         // 触发 cjh 的危险操作审批（approval_request → 卡片 → 我们不作答，等它超时按拒绝收场）
         $('aiInput').value = '请用 bash 工具执行这条命令：rm -rf /tmp/lingqu-probe-approval';
@@ -4998,6 +5506,37 @@ withBridge(function(tauri){
         var btn = chatBox().querySelector('.cli-sug .cli-run');
         if (btn) { btn.click(); }
       }, 5200);
+    }
+    // ⑤ 自动诊断 / 自动执行 / 决策回写自检（0.36.0）：验的是**链路**通不通——
+    //   简报 → 真提问 → 回复里的决策块 → 确认卡 → 落档；以及只读建议的自动执行。
+    //   「落档判定」本身由单测与后端 observeTaskStep 管，探针用 force 跳过（否则要等一次真失败）。
+    if (mode === 'auto') {
+      // 用一个不存在的探针工程名：决策落档写到 .lingqu/port/lingqu-probe-project/，
+      // 绝不污染真实样本的人工决策计数（A3 口径要按真样本数）
+      window.__probePath = 'E:/tmp/lingqu-probe-project';
+      setTimeout(function(){ autoDiag('hap', true); }, 2100);
+      setTimeout(function(){
+        if (!CJ.up) return;
+        $('aiInput').value = '请只回两行：第一行一句「reqwest 需改用 rustls 后端」，'
+          + '第二行给一个 lingqu-decision 代码块，块里一行 JSON：'
+          + '{"rule":"reqwest 用 rustls","decision":"accepted","why":"ohos 无 openssl"}。不要别的解释。';
+        sendChat();
+      }, 16000);
+      setTimeout(function(){
+        var b = chatBox().querySelector('.decide .dbtns button[data-dec="accepted"]');
+        if (b) { b.click(); window.__decideAutoClicked = true; }
+      }, 27000);
+      // G3：合成一条只读建议，让自动执行把它跑掉（不靠模型输出，确定性地验白名单链路）
+      setTimeout(function(){
+        AUTORUN.on = true;
+        AUTORUN.rounds = 0;
+        var sugg = 'lingqu-cli env';
+        addMsg('ai', renderMd('建议：\n\n- `' + sugg + '`\n'));
+        CJ.lastReply = sugg;
+        attachCliSuggestions();
+        autoRunSuggestions();
+      }, 29000);
+      setTimeout(function(){ reportUi('probe-auto-done'); }, 34000);
     }
     // 审批自检：出现审批卡就**自动点「拒绝」**（模拟人工决策），
     // 既验证卡片渲染，也验证 approval_response 回执链路真的把回合推下去了。

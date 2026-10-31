@@ -458,6 +458,8 @@ public class DecisionsCommand <: CommandHandler {
             var item = JsonObject()
             item.put("rule", JsonString(rule))
             item.put("decision", JsonString(decision))
+            // source：谁提的案（"" = 人在界面里手点；"ai" = AI 提案经人确认）——报告要能分开数
+            item.put("source", JsonString(argStr(args, "source", "")))
             item.put("note", JsonString(argStr(args, "note", "")))
             newItems.add(item)
             var root = JsonObject()
@@ -499,6 +501,149 @@ public class DecisionsCommand <: CommandHandler {
         res.put("accepted", JsonInt(accepted))
         res.put("ignored", JsonInt(ignored))
         eprintln("[lingqu][decisions] ${name}: action=${action} accepted=${accepted} ignored=${ignored}")
+        return res
+    }
+}
+
+/**
+ * 组装一步的**失败现场**（AiBriefCommand 与一键迁移共用同一份实现）。
+ *
+ * 共用是有意的：两处各写一套必然漂移——一键迁移里说的"为什么失败"和界面按钮问 AI 的
+ * "为什么失败"必须是同一句话（AGENTS §4-33）。
+ */
+func stepBriefOf(projName: String, path: String, step: String, logLines: Int64): StepBrief {
+    let obs = observeTaskStep(projName, step)
+    let b = StepBrief()
+    b.project = projName
+    b.projectDir = path
+    b.step = step
+    b.stepTitle = taskStepTitle(step)
+    b.note = obs.note
+    b.artifact = obs.artifact
+    b.artifactExists = obs.exists
+    // 落档正文：读不出来就留空——提问里会写"没有落档正文"，而不是塞一段假 JSON
+    if (obs.exists && obs.artifact != "") {
+        b.artifactClip = clipCharsOf(readTextOrEmpty(obs.artifact).trimAscii(), ASK_CLIP_CHARS)
+    }
+    // 日志尾部：`port`/`scan`/`deps` 没有整篇日志，`taskStepLogPath` 回空串
+    let logP = taskStepLogPath(projName, step)
+    b.logPath = logP
+    b.tailLines = if (logLines > 0) { logLines } else { ASK_LOG_TAIL_LINES }
+    if (logP != "") {
+        b.logTail = clipCharsOf(tailLinesOf(readTextOrEmpty(logP), b.tailLines), ASK_CLIP_CHARS)
+    }
+    return b
+}
+
+/**
+ * t2h:ai_brief —— G1+G2：把某一步的**失败现场**拼成一段可以直接发给 AI 的提问。
+ *
+ *   {path, step, logLines?} → {ok, step, stepTitle, project, prompt, artifact, artifactExists, logPath, logLines}
+ *
+ * 为什么把这层放在后端而不是页面里拼：落档字段名（`hapBytes`、`entries.rawfileCount`、
+ * `gates.failures`）只有这一侧知道（AGENTS §4-57 的教训），页面拼必然写出「HAP 0 字节」这类假数字。
+ * 这里复用 `observeTaskStep`（断点板同一套观测），所以提问里的结论与断点板**永远不会各说一套**。
+ *
+ * 只读：读 `.lingqu/<step>/<工程>.json` 与同名 `.log`，不改任何文件、不跑子进程。
+ * 该步骤不值得自动诊断（`autoAskStepAllowed` 为假）时返回 `{ok:false, skipped:true}`，
+ * 让页面如实显示"这步不自动问"，而不是假装发了一次。
+ */
+public class AiBriefCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        let step = argStr(args, "step", "")
+        var res = JsonObject()
+        res.put("step", JsonString(step))
+        if (taskStepIndex(step) < 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("t2h:ai_brief 需要 step（${taskStepIdsJoined()} 之一）"))
+            eprintln("[lingqu][ai] brief: 步骤不认识「${step}」")
+            return res
+        }
+        res.put("stepTitle", JsonString(taskStepTitle(step)))
+        if (!autoAskStepAllowed(step)) {
+            res.put("ok", JsonBool(false))
+            res.put("skipped", JsonBool(true))
+            res.put("error", JsonString("「${taskStepTitle(step)}」不自动诊断：失败多半是路径/参数填错，" +
+                "界面上直接提示比发给模型更快"))
+            eprintln("[lingqu][ai] brief: skip step=${step}（autoAskStepAllowed=false）")
+            return res
+        }
+        var name = projectNameOf(path)
+        if (name.size == 0) {
+            name = "project"
+        }
+        let safe = sanitizeFileName(name)
+        let obs = observeTaskStep(safe, step)
+        let asked = argInt(args, "logLines", ASK_LOG_TAIL_LINES)
+        let b = stepBriefOf(safe, path, step, asked)
+        // 提问里用的工程名是原始名（路径末段），落档目录用的是净化名——两者都要给的场合分开写
+        b.project = name
+        let prompt = buildAutoAskPrompt(b)
+        res.put("ok", JsonBool(true))
+        res.put("skipped", JsonBool(false))
+        res.put("project", JsonString(name))
+        res.put("artifact", JsonString(obs.artifact))
+        res.put("artifactExists", JsonBool(obs.exists))
+        res.put("logPath", JsonString(b.logPath))
+        res.put("logLines", JsonInt(if (b.logTail.size > 0) { b.tailLines } else { 0 }))
+        res.put("note", JsonString(obs.note))
+        res.put("prompt", JsonString(prompt))
+        res.put("promptChars", JsonInt(Int64(prompt.size)))
+        // 判定权在落档，不在页面：**没跑过（落档不存在）不算失败**，不许因此去打扰模型
+        // （与断点板 §4-63 同一口径：未跑 ≠ 0 分 ≠ 通过）
+        var verdictOk = true
+        if (obs.exists) {
+            verdictOk = obs.ok
+        }
+        // force：给界面自检探针用（验"链路通不通"而不是"这一步到底过没过"）——
+        // 只有 probe 会传，正常路径永远按落档判
+        if (argBool(args, "force", false)) {
+            verdictOk = false
+        }
+        res.put("verdictOk", JsonBool(verdictOk))
+        eprintln("[lingqu][ai] brief step=${step} project=${name} 落档=${obs.exists} 判定=${verdictOk} " +
+            "日志尾部=${b.logPath} 提问=${prompt.size} 字")
+        return res
+    }
+}
+
+/**
+ * t2h:ai_decide —— G4：从 AI 回复里抽 `lingqu-decision` 块，渲染成确认卡的数据源。
+ *
+ *   {text} → {ok, proposals:[{rule, decision, why, line}]}
+ *
+ * 解析放在后端而不是页面：`parseDecisionBlocks` 有单测、与 `t2h:decisions` 的字段口径同源，
+ * 页面自己再写一份正则必然会和落档 schema 漂移（AGENTS §4-33：只改一处 = 静默破坏另一条链路）。
+ * 只读：不改任何文件；真正落档要人点确认卡，走 `t2h:decisions`。
+ */
+public class AiDecideCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        let text = argStr(args, "text", "")
+        let proposals = parseDecisionBlocks(text)
+        var arr = JsonArray()
+        for (p in proposals) {
+            var o = JsonObject()
+            o.put("rule", JsonString(p.rule))
+            o.put("decision", JsonString(p.decision))
+            o.put("why", JsonString(p.why))
+            o.put("line", JsonString(decisionProposalLine(p)))
+            arr.add(o)
+        }
+        var res = JsonObject()
+        res.put("ok", JsonBool(true))
+        res.put("count", JsonInt(Int64(proposals.size)))
+        res.put("proposals", arr)
+        if (proposals.size > 0) {
+            eprintln("[lingqu][ai] decide: 抽出 ${proposals.size} 条决策提案")
+        }
         return res
     }
 }
@@ -694,6 +839,13 @@ public class PortCommand <: CommandHandler {
             try {
                 ensurePortDirs()
                 backupPath = ".lingqu/port/${safeName}"
+                // 每个工程的备份目录要**自己建**：ensurePortDirs 只建到 `.lingqu/port`。
+                // 0.36.0 一键迁移实跑暴露了这个洞——只有先记过人工决策（DecisionsCommand 会建
+                // `<safeName>/`）才恰好能备份；新工程第一次 apply 会直接抛
+                // `The input path 'parent' '.lingqu/port/<工程>' does not exist`。
+                if (!exists(Path(backupPath))) {
+                    Directory.create(Path(backupPath))
+                }
                 var wroteAny = false
                 if (result.appliedCount() > 0) {
                     File.writeTo("${backupPath}/${BAK_CARGO}", before.toArray())
@@ -1087,6 +1239,28 @@ public class UiReportCommand <: CommandHandler {
         o.put("cliRan", JsonInt(argInt(args, "cliRan", 0)))
         o.put("cliBlocked", JsonInt(argInt(args, "cliBlocked", 0)))
         o.put("cliResultCards", JsonInt(argInt(args, "cliResultCards", 0)))
+        // G1+G2 失败自动诊断（0.36.0）：失败后是否**真的**把现场发给了模型
+        // autoDiagChars=0 而 autoDiag=true 是自相矛盾的，断言时两条一起看
+        o.put("autoDiag", JsonBool(argBool(args, "autoDiag", false)))
+        o.put("autoDiagStep", JsonString(argStr(args, "autoDiagStep", "")))
+        o.put("autoDiagAsked", JsonInt(argInt(args, "autoDiagAsked", 0)))
+        o.put("autoDiagChars", JsonInt(argInt(args, "autoDiagChars", 0)))
+        o.put("autoDiagNote", JsonString(argStr(args, "autoDiagNote", "")))
+        // G3 自动执行只读命令：开关状态 / 自动跑了几条 / 被安全边界拦下几条
+        o.put("autoRun", JsonBool(argBool(args, "autoRun", false)))
+        o.put("autoRan", JsonInt(argInt(args, "autoRan", 0)))
+        o.put("autoBlocked", JsonInt(argInt(args, "autoBlocked", 0)))
+        // G4 决策回写：渲染出的确认卡数 / 已落档条数 / 最后一条摘要
+        o.put("decideCards", JsonInt(argInt(args, "decideCards", 0)))
+        o.put("decideRecorded", JsonInt(argInt(args, "decideRecorded", 0)))
+        o.put("decideLast", JsonString(argStr(args, "decideLast", "")))
+        // ⓪ 一键迁移（0.36.0）：进度 / 结论 / 时间轴行数 / 结果正文长度
+        o.put("migrateRunning", JsonBool(argBool(args, "migrateRunning", false)))
+        o.put("migratePercent", JsonInt(argInt(args, "migratePercent", 0)))
+        o.put("migrateVerdict", JsonString(argStr(args, "migrateVerdict", "")))
+        o.put("migrateRows", JsonInt(argInt(args, "migrateRows", 0)))
+        o.put("migrateResultChars", JsonInt(argInt(args, "migrateResultChars", 0)))
+        o.put("migrateReport", JsonString(argStr(args, "migrateReport", "")))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
@@ -3061,6 +3235,395 @@ public class AgentContextCommand <: CommandHandler {
     }
 }
 
+// ============================================================
+// ⑥ 一键迁移（t2h:migrate）：8 步串起来跑，过程可观测，最后给一份结果
+// ============================================================
+
+/*
+ * 为什么要有它（用户原话）："一键完成检测与鸿蒙化移植，让 agent 自动干完所有的活，
+ * 有真机就直接真机跑，用户可看到过程和最后给用户呈现结果"。
+ *
+ * 实现要点（三条，改之前先读）：
+ *   ① **后台线程跑，状态放内存**：一次迁移以分钟计（cargo build + hvigor assembleHap），
+ *      在 IPC handler 里同步跑会把整个命令面堵死（页面连进度都读不到）。所以
+ *      `t2h:migrate` 只负责起线程 + 立即返回，进度靠 `t2h:migrate_status` 轮询。
+ *   ② **判定只认落档**：每步跑完 `observeTaskStep` 读盘，不信命令返回值的乐观字段
+ *      （存在 ≠ 成功，§4-63）。断点板与一键迁移因此永远一致。
+ *   ③ **跳过 ≠ 失败**：没插设备 / 签名是 release 态时跳过 deploy+verify 并写明原因。
+ */
+
+/** 一键迁移的共享状态（`let` 绑定可变对象；读写都在 `gMigrateLock` 里） */
+let gMigrateLock = Mutex()
+let gMigrate = MigrateState()
+
+/** 当前有没有真机（hdc list targets -v 里解析出来的设备数 > 0） */
+func migrateHasDevice(): Bool {
+    let hdc = hdcPathOr()
+    if (hdc == "") {
+        return false
+    }
+    try {
+        let (code, out, errOut) = executeWithOutput(hdc, ["list", "targets", "-v"])
+        let _ = code
+        let listText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+        return parseHdcTargets(listText).size > 0
+    } catch (e: Exception) {
+        eprintln("[lingqu][migrate] 查设备失败：${e}")
+        return false
+    }
+}
+
+/** 签名态（读 `.lingqu/sign/<工程>.json` 的 mode.mode；没有落档/没这一段回空串） */
+func signModeOf(projName: String): String {
+    match (readJsonOrNone(".lingqu/sign/${projName}.json")) {
+        case Some(root) => return jsonStrField(objFieldOf(root, "mode"), "mode")
+        case None => return ""
+    }
+}
+
+/** 命令返回值里的 ok（各命令都带；缺了按 false——宁可当失败，也别把"没结果"当成功） */
+func cmdOkOf(v: JsonValue): Bool {
+    match (v.kind()) {
+        case JsonKind.JsObject => return boolFieldOf(v, "ok")
+        case _ => return false
+    }
+}
+
+/** 跑一步（handler 直接调用：与界面按钮、lingqu-cli 是同一份实现）；返回命令层 ok */
+func migrateRunStep(step: String, path: String, applyPort: Bool): Bool {
+    let ctx = IpcContext("migrate", IpcHub())
+    var args = JsonObject()
+    args.put("path", JsonString(path))
+    let name = "t2h:${step}"
+    if (step == "scan") {
+        return cmdOkOf(ScanCommand().handle(name, args, ctx))
+    }
+    if (step == "deps") {
+        return cmdOkOf(DepsCommand().handle(name, args, ctx))
+    }
+    if (step == "port") {
+        args.put("apply", JsonBool(applyPort))
+        return cmdOkOf(PortCommand().handle(name, args, ctx))
+    }
+    if (step == "build") {
+        return cmdOkOf(BuildCommand().handle(name, args, ctx))
+    }
+    if (step == "hap") {
+        return cmdOkOf(HapCommand().handle(name, args, ctx))
+    }
+    if (step == "sign") {
+        // 先做只读体检；体检未过但**有候选材料**时才写回 signingConfigs（原文件留 .bak）
+        args.put("apply", JsonBool(false))
+        let first = SignCommand().handle(name, args, ctx)
+        let okNow = cmdOkOf(first)
+        var cands: Int64 = 0
+        match (first.kind()) {
+            case JsonKind.JsObject => cands = intFieldOf(first, "candidateCount", 0)
+            case _ => ()
+        }
+        if (!okNow && cands > 0) {
+            eprintln("[lingqu][migrate] 签名体检未过，但有 ${cands} 份候选材料 → 写回 signingConfigs")
+            args.put("apply", JsonBool(true))
+            return cmdOkOf(SignCommand().handle(name, args, ctx))
+        }
+        return okNow
+    }
+    if (step == "deploy") {
+        args.put("start", JsonBool(true))
+        return cmdOkOf(DeployCommand().handle(name, args, ctx))
+    }
+    if (step == "verify") {
+        args.put("screenshot", JsonBool(true))
+        return cmdOkOf(VerifyCommand().handle(name, args, ctx))
+    }
+    return false
+}
+
+/**
+ * 迁移主循环（**在后台线程里跑**）。
+ *
+ * 每一步：报进度 → 跑 handler → 读落档判定 → 记一行；失败就拼提问正文并停。
+ * 结束后无条件出一份三段式报告 + 一份结果卡（失败也出，人要看到"做完到哪、下一步做什么"）。
+ */
+func runMigrateChain(path: String, applyPort: Bool): Unit {
+    let proj = sanitizeFileName(projectNameOf(path))
+    let hasDevice = migrateHasDevice()
+    synchronized(gMigrateLock) {
+        gMigrate.running = true
+        gMigrate.done = false
+        gMigrate.cancelled = false
+        gMigrate.project = proj
+        gMigrate.path = path
+        gMigrate.hasDevice = hasDevice
+        gMigrate.total = Int64(MIGRATE_STEPS.size)
+        gMigrate.index = 0
+        gMigrate.current = ""
+        gMigrate.message = "准备中…"
+        gMigrate.rows = ArrayList<MigrateRow>()
+        gMigrate.askPrompt = ""
+        gMigrate.reportMd = ""
+        gMigrate.reportHtml = ""
+        gMigrate.resultMd = ""
+        gMigrate.finishedAt = ""
+        gMigrate.error = ""
+    }
+    eprintln("[lingqu][migrate] 开始：${proj} device=${hasDevice} applyPort=${applyPort} " +
+        "steps=${MIGRATE_STEPS.size}")
+
+    var stop = false
+    var releaseMode = ""
+    var i: Int64 = 0
+    while (i < MIGRATE_STEPS.size && !stop) {
+        let step = MIGRATE_STEPS[i]
+        var cancelledNow = false
+        synchronized(gMigrateLock) {
+            gMigrate.index = i
+            gMigrate.current = step
+            gMigrate.message = "正在${taskStepTitle(step)}…"
+            cancelledNow = gMigrate.cancelled
+        }
+        if (cancelledNow) {
+            eprintln("[lingqu][migrate] 用户停止：在 ${step} 之前")
+            stop = true
+            break
+        }
+        // 需要真机的两步：没设备 / release 态就跳过（跳过 ≠ 失败）
+        var skipWhy = ""
+        if (migrateNeedsDevice(step)) {
+            if (!hasDevice) {
+                skipWhy = "未连接真机：没插设备，或 hdc 没识别到（hdc list targets）"
+            } else if (releaseMode == "release") {
+                skipWhy = "签名是 release 态：装不上真机是设计使然（9568322），" +
+                    "要真机验证请先切 debug 态再重跑"
+            }
+        }
+        let row = MigrateRow()
+        row.step = step
+        row.title = taskStepTitle(step)
+        row.at = nowText()
+        if (skipWhy != "") {
+            row.skipped = skipWhy
+            synchronized(gMigrateLock) {
+                gMigrate.rows.add(row)
+            }
+            eprintln("[lingqu][migrate] 跳过 ${step}：${skipWhy}")
+            i += 1
+            continue
+        }
+        let cmdOk = migrateRunStep(step, path, applyPort)
+        if (step == "sign") {
+            releaseMode = signModeOf(proj)
+        }
+        let obs = observeTaskStep(proj, step)
+        row.ran = obs.exists
+        row.ok = obs.exists && obs.ok
+        row.note = obs.note
+        // 规则改造的落档是**可选**的：工程本来就迁好了 → 没有可改的地方，既不写 decisions.json
+        // 也不留 .bak。这种"跑过且没东西可改"必须算通过，否则一键迁移在已迁移的工程上
+        // 永远显示「规则改造｜未跑」，看起来像漏了一步。
+        if (!obs.exists && step == "port" && cmdOk) {
+            row.ran = true
+            row.ok = true
+            row.note = "已跑：没有需要改的地方（幂等）"
+        }
+        synchronized(gMigrateLock) {
+            gMigrate.rows.add(row)
+        }
+        eprintln("[lingqu][migrate] ${step} ran=${row.ran} ok=${row.ok} ${row.note}")
+        if (row.ran && !row.ok) {
+            // 失败现场 → 提问正文（复用 G1/G2：一键迁移里对 AI 说的话与界面按钮说的必须一致）
+            let brief = stepBriefOf(proj, path, step, ASK_LOG_TAIL_LINES)
+            synchronized(gMigrateLock) {
+                gMigrate.askPrompt = migrateAskPrompt(gMigrate, brief)
+            }
+            eprintln("[lingqu][migrate] 停在 ${step}，已拼好失败提问")
+            stop = true
+        }
+        i += 1
+    }
+
+    // ---- 收尾：三段式报告 + 结果卡（失败也出）----
+    var outMd = ""
+    var outHtml = ""
+    var reportErr = ""
+    try {
+        let ctx = IpcContext("migrate", IpcHub())
+        var rargs = JsonObject()
+        rargs.put("path", JsonString(path))
+        let rv = ReportCommand().handle("t2h:report", rargs, ctx)
+        match (rv.kind()) {
+            case JsonKind.JsObject =>
+                outMd = jsonStrField(rv, "md")
+                outHtml = jsonStrField(rv, "html")
+                reportErr = jsonStrField(rv, "error")
+            case _ => ()
+        }
+    } catch (e: Exception) {
+        reportErr = "出报告失败：${e}"
+    }
+
+    var snap = MigrateState()
+    synchronized(gMigrateLock) {
+        gMigrate.reportMd = outMd
+        gMigrate.reportHtml = outHtml
+        if (reportErr.size > 0 && gMigrate.error.size == 0) {
+            gMigrate.error = reportErr
+        }
+        gMigrate.finishedAt = nowText()
+        gMigrate.running = false
+        gMigrate.done = true
+        gMigrate.current = ""
+        gMigrate.message = "完成"
+        snap = gMigrate.snapshot()
+    }
+    // 结果卡落 `.lingqu/migrate/<工程>.md`：重开机/换会话后也能翻出"上次一键跑到了哪"
+    let resultPath = ".lingqu/migrate/${proj}.md"
+    var resultErr = ""
+    try {
+        // 注意：这里要给的是**目录**，不是文件路径——ensureDirOf 会把每一段都当目录建
+        ensureDirOf(".lingqu/migrate")
+        File.writeTo(resultPath, migrateResultMarkdown(snap, if (outMd.size > 0) { outMd } else { "报告未生成" }).toArray())
+    } catch (e: Exception) {
+        resultErr = "写结果卡失败：${e}"
+        eprintln("[lingqu][migrate] ${resultErr}")
+    }
+    synchronized(gMigrateLock) {
+        gMigrate.resultMd = resultPath
+        if (resultErr.size > 0 && gMigrate.error.size == 0) {
+            gMigrate.error = resultErr
+        }
+    }
+    eprintln("[lingqu][migrate] 结束：${migrateLogLine(snap)} 报告=${outMd}")
+}
+
+/**
+ * t2h:migrate —— 一键迁移（起后台线程，立即返回）。
+ *
+ *   {path, applyPort?} → {ok, started, device}
+ *
+ * 同时只允许一个迁移在跑：两个线程同时改同一个工程（尤其 port apply）是灾难。
+ */
+public class MigrateCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("一键迁移需要工程路径（或置 LINGQU_SCAN_PATH）"))
+            return res
+        }
+        // 默认**自动应用**代码改造：一键迁移的意义就是把能自动做的都做掉；
+        // 但改造逐文件留 .bak，随时可 t2h:revert 回滚（界面结果卡里会提示）。
+        let applyPort = argBool(args, "applyPort", true)
+        var busy = false
+        synchronized(gMigrateLock) {
+            busy = gMigrate.running
+            if (!busy) {
+                gMigrate.running = true
+            }
+        }
+        if (busy) {
+            res.put("ok", JsonBool(false))
+            res.put("busy", JsonBool(true))
+            res.put("error", JsonString("已经有一键迁移在跑，等它跑完或先停止"))
+            eprintln("[lingqu][migrate] 拒绝重复启动（还在跑）")
+            return res
+        }
+        let snapshotPath = path
+        spawn {
+            try {
+                runMigrateChain(snapshotPath, applyPort)
+            } catch (e: Exception) {
+                eprintln("[lingqu][migrate] 线程异常：${e}")
+                synchronized(gMigrateLock) {
+                    gMigrate.running = false
+                    gMigrate.done = true
+                    gMigrate.error = "${e}"
+                    gMigrate.message = "异常结束"
+                    gMigrate.finishedAt = nowText()
+                }
+            }
+        }
+        res.put("ok", JsonBool(true))
+        res.put("started", JsonBool(true))
+        res.put("path", JsonString(path))
+        res.put("applyPort", JsonBool(applyPort))
+        res.put("pollWith", JsonString("t2h:migrate_status"))
+        eprintln("[lingqu][migrate] 已启动：${path} applyPort=${applyPort}")
+        // wait：给命令行用（`lingqu-cli migrate --wait` 要的是"跑完再打印结果"）。
+        // 界面永远不传——界面靠轮询，不能把 IPC 堵死几分钟。
+        if (argBool(args, "wait", false)) {
+            var spins: Int64 = 0
+            while (true) {
+                var doneNow = false
+                synchronized(gMigrateLock) {
+                    doneNow = gMigrate.done
+                }
+                if (doneNow) {
+                    break
+                }
+                sleep(Duration.millisecond * 500)
+                spins += 1
+                if (spins % 240 == 0) {
+                    eprintln("[lingqu][migrate] 仍在跑（已等 ${spins / 2} 秒）")
+                }
+            }
+            var snap = MigrateState()
+            synchronized(gMigrateLock) {
+                snap = gMigrate.snapshot()
+            }
+            return migrateStateJson(snap)
+        }
+        return res
+    }
+}
+
+/**
+ * t2h:migrate_status —— 读一键迁移的进度（纯读内存，页面 500~1000ms 轮询一次）。
+ *
+ * 返回 `migrateStateJson`：running/done/percent/verdict/rows/askPrompt/reportMd…
+ * 页面据此画时间轴；`askPrompt` 非空时页面把失败现场自动发给 AI（G1/G2 的复用点）。
+ */
+public class MigrateStatusCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, _: JsonObject, _: IpcContext): JsonValue {
+        var snap = MigrateState()
+        synchronized(gMigrateLock) {
+            snap = gMigrate.snapshot()
+        }
+        var o = migrateStateJson(snap)
+        o.put("ok", JsonBool(true))
+        return o
+    }
+}
+
+/** t2h:migrate_cancel —— 停止一键迁移（只在步骤之间生效：不打断正在跑的 cargo/hvigor） */
+public class MigrateCancelCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, _: JsonObject, _: IpcContext): JsonValue {
+        var was = false
+        synchronized(gMigrateLock) {
+            was = gMigrate.running
+            if (was) {
+                gMigrate.cancelled = true
+            }
+        }
+        var res = JsonObject()
+        res.put("ok", JsonBool(true))
+        res.put("wasRunning", JsonBool(was))
+        res.put("note", JsonString(if (was) { "已请求停止：当前步骤跑完就停（落档保留，可继续）" } else { "当前没有在跑的迁移" }))
+        eprintln("[lingqu][migrate] cancel wasRunning=${was}")
+        return res
+    }
+}
+
 /**
  * t2h:cli_run —— 把 AI 建议的命令**一键执行**（AI 接入第 4 步）。
  *
@@ -3068,8 +3631,10 @@ public class AgentContextCommand <: CommandHandler {
  * 会动真机（deploy）、会改用户工程（port/revert）、耗时且有产物（hap）、
  * 会改签名配置（sign --apply）的一律拒绝，并告诉人"该去哪个界面点"。
  *
- * 参数：{cmd, flags?}（flags 是 JsonObject，原样转成 `--键 值`）
- * 返回：{ok, cmd, allowed, reason, exitCode, result:{…}}
+ * 参数：{cmd, flags?, preflight?}（flags 是 JsonObject，原样转成 `--键 值`）
+ * 返回：{ok, cmd, allowed, auto, reason, exitCode, result:{…}}
+ *   · `auto=true` 表示这条命令在**自动执行**白名单里（只说能跑，不代表已经跑了）
+ *   · `preflight=true` 只回答 `allowed/auto`，不执行——页面的自动执行靠它先筛
  */
 public class CliRunCommand <: CommandHandler {
     public init() {}
@@ -3091,11 +3656,20 @@ public class CliRunCommand <: CommandHandler {
         res.put("cmd", JsonString(cmd))
         res.put("allowed", JsonBool(allowed))
         res.put("reason", JsonString(reason))
-        if (!allowed) {
+        // auto：这条命令能不能**不经人点**就自动跑（G3，`cliAutoRunAllowed` 白名单）
+        res.put("auto", JsonBool(cliAutoRunAllowed(cmd, flags)))
+        // preflight：只问"能不能自动跑"，不执行——页面的自动执行靠它先筛一遍，
+        // 免得自动点下去才被拒（那样界面上会冒一排"请在界面里点"，噪音且误导）
+        if (argBool(args, "preflight", false) || !allowed) {
             res.put("ok", JsonBool(false))
+            res.put("preflight", JsonBool(true))
             res.put("exitCode", JsonInt(-2))
             res.put("result", JsonObject())
-            eprintln("[lingqu][cli_run] 拒绝 ${cmd}：${reason}")
+            if (!allowed) {
+                eprintln("[lingqu][cli_run] 拒绝 ${cmd}：${reason}")
+            } else {
+                eprintln("[lingqu][cli_run] preflight ${cmd}: auto=${cliAutoRunAllowed(cmd, flags)}")
+            }
             return res
         }
         if (!cliCommandSupported(cmd)) {
@@ -3622,6 +4196,14 @@ public func build(): AppSpec {
         app.register("t2h:skill", SkillCommand())
         app.register("t2h:agent_context", AgentContextCommand())
         app.register("t2h:cli_run", CliRunCommand())
+        // G1+G2 失败自动诊断：把某一步的落档 + 日志尾拼成提问正文（只读）
+        app.register("t2h:ai_brief", AiBriefCommand())
+        // G4 决策回写：从 AI 回复里抽 lingqu-decision 块（只读解析，落档仍走 t2h:decisions）
+        app.register("t2h:ai_decide", AiDecideCommand())
+        // ⑥ 一键迁移：后台线程跑 8 步，进度靠 status 轮询
+        app.register("t2h:migrate", MigrateCommand())
+        app.register("t2h:migrate_status", MigrateStatusCommand())
+        app.register("t2h:migrate_cancel", MigrateCancelCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）
