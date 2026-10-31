@@ -638,6 +638,7 @@ body.ai-hidden .ai-show{display:block}
           <input id="deployPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_DEPLOY_PATH / LINGQU_HAP_PATH）" style="flex:1 1 200px;min-width:160px">
           <button class="btn primary" id="btnDeploy" title="hdc list targets → hdc install -r → aa start → 抓 hilog">安装并启动</button>
           <button class="btn" id="btnDeployNoStart" title="只安装，不启动（用于只看签名/包是否被接受）">仅安装</button>
+          <button class="btn primary" id="btnVerify" title="读落档 + 采真机证据（截图/hilog/faultlog）→ 生成清单与可用率 → 导出 MD/HTML 报告">采集证据并算可用率</button>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="deployCard">
           <div class="legend" style="margin:0 0 6px">
@@ -650,14 +651,16 @@ body.ai-hidden .ai-show{display:block}
           <div class="sethint" id="depNote">点「安装并启动」跑 `hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog 尾部。三段分开报：装得上不等于界面出来（装了但启动失败多半是 ability/bundle 名不对）。</div>
         </div>
         <div class="grid4">
-          <div class="stat"><div class="k">核心功能可用率</div><div class="v" style="color:var(--ok)">87<small>%</small></div></div>
-          <div class="stat"><div class="k">通过</div><div class="v">13<small>/ 15</small></div></div>
-          <div class="stat"><div class="k">平台限制</div><div class="v" style="color:var(--warn)">2</div></div>
-          <div class="stat"><div class="k">panic / 红条</div><div class="v" style="color:var(--ok)">0</div></div>
+          <div class="stat"><div class="k">核心功能可用率</div><div class="v" id="verRate">—<small>%</small></div></div>
+          <div class="stat"><div class="k">通过</div><div class="v" id="verPass">—</div></div>
+          <div class="stat"><div class="k">平台限制（剔除分母）</div><div class="v" id="verLimit" style="font-size:18px">—</div></div>
+          <div class="stat"><div class="k">未验证 / 失败</div><div class="v" id="verUnknown" style="font-size:18px">—</div></div>
         </div>
         <div class="grid2" style="margin-top:13px">
           <div class="card" style="margin-top:0">
-            <div class="card-h"><h3>功能清单</h3><span class="right">验收 A4：≥80%</span><span class="right muted">占位示意</span></div>
+            <div class="card-h"><h3>功能清单</h3><span class="right">验收 A4：≥80%</span></div>
+            <div class="sethint" id="verNote" style="margin:-4px 0 8px">点上方「采集证据并算可用率」生成清单</div>
+            <div id="verList"></div>
             <div class="evi"><span class="chk on">✓</span><span class="t">应用启动无 panic，主界面渲染</span><span class="chips"><span class="pill ok">截图</span><span class="pill ok">hilog</span></span></div>
             <div class="evi"><span class="chk on">✓</span><span class="t">配置列表加载 / 搜索 / 排序</span><span class="chips"><span class="pill ok">截图</span></span></div>
             <div class="evi"><span class="chk on">✓</span><span class="t">新增后重启仍在（存储持久化）</span><span class="chips"><span class="pill ok">探针</span></span></div>
@@ -668,13 +671,10 @@ body.ai-hidden .ai-show{display:block}
             <div class="evi"><span class="chk on">✓</span><span class="t">键鼠：hover / 右键菜单 / 快捷键</span><span class="chips"><span class="pill ok">截图</span></span></div>
           </div>
           <div class="card" style="margin-top:0">
-            <div class="card-h"><h3>证据</h3><span class="right">存 .lingqu/evidence/</span></div>
-            <div style="display:flex;gap:9px"><div class="thumb">真机截图<br>主界面</div><div class="thumb">真机截图<br>对话框</div><div class="thumb">真机截图<br>深色模式</div></div>
-            <div class="log" style="margin-top:12px;max-height:190px"><span class="ts">15:58:02</span> <span class="cmd">$ hdc shell hilog -x | grep -E "grove|panic"</span>
-<span class="ts">15:58:03</span> I Grove: app_data_dir = /data/storage/el2/base/files
-<span class="ts">15:58:03</span> I Grove: db opened, 42 rows
-<span class="ts">15:58:04</span> <span class="ok">I [WEB] console: app boot ok（无 TypeError）</span>
-<span class="ts">15:58:06</span> <span class="ok">[probe]</span> 无 panic.log · 无红色诊断条 ✔</div>
+            <div class="card-h"><h3>证据与报告</h3><span class="right" id="verShots">存 .lingqu/evidence/</span></div>
+            <div class="mono small" id="verPaths" style="line-height:2;word-break:break-all">报告尚未生成。点上方「采集证据并算可用率」会同时落档：<br>
+<span class="muted">.lingqu/verify/&lt;工程&gt;.json / .md / .html</span></div>
+            <div class="sethint" id="verNote2" style="margin-top:8px">采集口径：截图取 hdc snapshot_display + file recv（**以文件真的落盘为准**，不看 hdc 退出码）；崩溃看 /data/log/faultlog/faultlogger/。采不到只会记「未验证」，不会记「通过」。</div>
           </div>
         </div>
       </section>
@@ -932,6 +932,11 @@ withBridge(function(tauri){
       if (d && d.deployPath) {
         $("deployPath").value = String(d.deployPath);
         runDeploy(String(d.deployPath), true);
+      }
+      // 验证探针（P6）：LINGQU_VERIFY_PATH 显式设置时跑（采证 + 可用率 + 报告）
+      if (d && d.verifyPath) {
+        $("deployPath").value = String(d.verifyPath);
+        runVerify(String(d.verifyPath));
       }
       // 指定初始屏（LINGQU_UI_SCREEN=build 之类）：给「截某屏的版面证据」一个可复现入口，
       // 不必靠人手动点左栏（无视觉环境也能落到 ui-report 的 activeScreen 上）
@@ -2358,6 +2363,79 @@ withBridge(function(tauri){
     runDeploy(($('deployPath').value || '').trim(), false);
   });
 
+
+  /* ===== ⑥ 屏 验证与报告（P6）：清单 + 可用率 + 导出 ===== */
+  var VERIFY = { ok: false, rate: -1, pass: 0, total: 0, limit: 0, unknown: 0, shots: 0, md: "", error: "" };
+  var VERDICT_CHIP = { pass: 'pill ok', fail: 'pill err', limit: 'pill warn', unknown: 'pill' };
+  var VERDICT_TEXT = { pass: '通过', fail: '失败', limit: '平台限制', unknown: '未验证' };
+  function renderVerify(r){
+    r = r || {};
+    VERIFY = {
+      ok: r.ok === true,
+      rate: (typeof r.ratePercent === 'number') ? r.ratePercent : -1,
+      pass: (typeof r.pass === 'number') ? r.pass : 0,
+      total: (typeof r.total === 'number') ? r.total : 0,
+      limit: (typeof r.limit === 'number') ? r.limit : 0,
+      unknown: (typeof r.unknown === 'number') ? r.unknown : 0,
+      shots: (typeof r.screenshots === 'number') ? r.screenshots : 0,
+      md: String(r.md || ''),
+      error: String(r.error || '')
+    };
+    var denom = VERIFY.total - VERIFY.limit;
+    $('verRate').innerHTML = (VERIFY.rate < 0 ? '—' : String(VERIFY.rate)) + '<small>%</small>';
+    $('verRate').style.color = VERIFY.rate >= 80 ? 'var(--ok)' : (VERIFY.rate >= 0 ? 'var(--err)' : '');
+    $('verPass').innerHTML = VERIFY.pass + '<small>/ ' + Math.max(denom, 0) + '</small>';
+    $('verLimit').textContent = String(VERIFY.limit);
+    $('verUnknown').textContent = VERIFY.unknown + ' / ' + VERIFY.total;
+    $('verShots').textContent = '截图 ' + VERIFY.shots + ' 张 · .lingqu/evidence/';
+    $('verNote').textContent = VERIFY.ok ? ('可用率 ' + VERIFY.rate + '%（分母 ' + denom + '，平台限制已剔除）') : (VERIFY.error || '尚未验证');
+    // 清单逐条渲染：判定 → 颜色标签；证据 → 一行文本；note 作 title
+    var list = $('verList');
+    list.innerHTML = '';
+    var items = (r.items && r.items.length) ? r.items : [];
+    if (!items.length) {
+      list.innerHTML = '<span class="muted">还没有清单（先跑「采集证据并算可用率」）</span>';
+    }
+    items.forEach(function(it, i){
+      var v = String(it.verdict || 'unknown');
+      var evTxt = (it.evidence && it.evidence.length) ? it.evidence.join('；') : '无证据';
+      // 三列布局：勾选 / 标题+证据（.t 是 flex:1，长文本在这里换行，不会把行挤成竖排）/ 判定 pill
+      // 单行三列：勾选 | 标题（可截断） | 判定；证据与说明进 tooltip，别把行撑成竖排
+      list.insertAdjacentHTML('beforeend',
+        '<div class="evi">'
+        + '<span class="chk ' + (v === 'pass' ? 'on' : (v === 'limit' ? 'na' : '')) + '">'
+        + (v === 'pass' ? '✓' : (v === 'limit' ? '–' : (v === 'fail' ? '×' : '?'))) + '</span>'
+        + '<span class="t" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'
+        + esc(evTxt + (it.note ? '\n' + String(it.note) : '')) + '">'
+        + (i + 1) + '. ' + esc(String(it.title || '')) + '</span>'
+        + '<span class="chips"><span class="' + (VERDICT_CHIP[v] || 'pill') + '">' + (VERDICT_TEXT[v] || '未验证') + '</span></span>'
+        + '</div>');
+    });
+    var paths = $('verPaths');
+    if (VERIFY.md) {
+      paths.innerHTML = '报告已生成：<br><span class="mono">' + esc(r.md) + '</span><br><span class="mono">'
+        + esc(r.html || '') + '</span><br><span class="muted">JSON：' + esc(r.outJson || '') + '</span>';
+    }
+    if (VERIFY.error) {
+      $('verNote2').style.color = 'var(--err)';
+      $('verNote2').textContent = VERIFY.error;
+    }
+  }
+  function runVerify(path){
+    var note = $('verNote');
+    note.textContent = '采证中（hdc 截图 / faultlog + 读 scan/build/hap/deploy 落档）…';
+    $('btnVerify').disabled = true;
+    invoke('t2h:verify', { path: path || '', screenshot: true }).then(function(r){
+      renderVerify(r || {});
+      reportUi('verify-done');
+    }).catch(function(e){
+      renderVerify({ ok: false, error: e && e.message ? e.message : 'invoke error' });
+      reportUi('verify-error');
+    }).then(function(){ $('btnVerify').disabled = false; });
+  }
+  $('btnVerify').addEventListener('click', function(){
+    runVerify(($('deployPath').value || '').trim());
+  });
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -2444,6 +2522,28 @@ withBridge(function(tauri){
       cjhBin: CJ_STATUS.binPath || "",
       cjhVendorDir: CJ_STATUS.vendorDir || "",
       cjhHome: CJ_STATUS.lingquHome || "",
+      // P6 验证与报告（⑥ 屏真数据）
+      verifyOk: VERIFY.ok === true,
+      verifyRate: (typeof VERIFY.rate === "number") ? VERIFY.rate : -1,
+      verifyPass: (typeof VERIFY.pass === "number") ? VERIFY.pass : 0,
+      verifyTotal: (typeof VERIFY.total === "number") ? VERIFY.total : 0,
+      verifyLimit: (typeof VERIFY.limit === "number") ? VERIFY.limit : 0,
+      verifyUnknown: (typeof VERIFY.unknown === "number") ? VERIFY.unknown : 0,
+      verifyShots: (typeof VERIFY.shots === "number") ? VERIFY.shots : 0,
+      verifyMd: VERIFY.md || "",
+      // 版面可断言：清单行有没有横向溢出、首行高度多少（没有视觉也能证明"没竖排/没挤爆"）
+      verifyRows: (function(){ var n = document.querySelectorAll("#verList .evi").length; return n; })(),
+      verifyOverflow: (function(){
+        var bad = 0;
+        document.querySelectorAll("#verList .evi").forEach(function(r){
+          if (r.scrollWidth > r.clientWidth + 1) { bad++; }
+        });
+        return bad;
+      })(),
+      verifyRowH: (function(){
+        var r = document.querySelector("#verList .evi");
+        return r ? Math.round(r.getBoundingClientRect().height) : 0;
+      })(),
       // ⑥ 真机部署（T5-5）
       deployOk: DEPLOY.ok === true,
       deploySerial: DEPLOY.serial || "",

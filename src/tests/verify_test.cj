@@ -152,3 +152,24 @@ public func testVerdictLabels(): Unit {
     @Assert(verdictLabel("unknown"), "未验证")
     @Assert(verdictLabel("whatever"), "未验证")
 }
+
+/* ---------- faultlog 解析（真机实测踩过的坑） ---------- */
+
+@Test
+public func testCountCrashRecordsOnlyCountsRealCrashes(): Unit {
+    // 权限不足：不能算崩溃（这是 2026-10-31 真机实测的原始输出）
+    let denied = "ls: /data/log/faultlog/faultlogger/: Permission denied\n"
+    @Assert(countCrashRecords(denied), 0)
+    @Assert(faultlogUnreadable(denied), true)
+    // 目录不存在
+    let missing = "ls: /data/log/faultlog/faultlogger/: No such file or directory\n"
+    @Assert(countCrashRecords(missing), 0)
+    // 空目录（仅有 total 行）
+    @Assert(countCrashRecords("total 0\n"), 0)
+    // 有两条崩溃记录
+    let two = "faultlogger-grove-20261031.log\njscrash-com.jiujiang.habit_tree-20261031.log\n"
+    @Assert(countCrashRecords(two), 2)
+    // 读得到且为空：既不是崩溃也不是读不到
+    @Assert(countCrashRecords(""), 0)
+    @Assert(faultlogUnreadable(""), false)
+}

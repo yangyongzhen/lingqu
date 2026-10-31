@@ -7,6 +7,7 @@ import lingqu.scanner.*
 import lingqu.deps.*
 import lingqu.port.*
 import lingqu.compiler.*
+import lingqu.verify.*
 import std.collection.*
 import std.env.*
 import std.fs.*
@@ -169,6 +170,8 @@ public class EnvCommand <: CommandHandler {
         res.put("uiScreen", JsonString(envOr("LINGQU_UI_SCREEN", "")))
         // 置 LINGQU_DEPLOY_PATH 就在启动时跑一次 t2h:deploy（装 → 启 → 抓 hilog，秒级）
         res.put("deployPath", JsonString(envOr("LINGQU_DEPLOY_PATH", "")))
+        // 置 LINGQU_VERIFY_PATH 就在启动时跑一次 t2h:verify（采证 + 可用率 + 报告）
+        res.put("verifyPath", JsonString(envOr("LINGQU_VERIFY_PATH", "")))
         return res
     }
 }
@@ -1102,6 +1105,19 @@ public class UiReportCommand <: CommandHandler {
         o.put("deployStarted", JsonBool(argBool(args, "deployStarted", false)))
         o.put("deployHilogOk", JsonBool(argBool(args, "deployHilogOk", false)))
         o.put("deployError", JsonString(argStr(args, "deployError", "")))
+        // P6 验证与报告（t2h:verify 回投）
+        o.put("verifyOk", JsonBool(argBool(args, "verifyOk", false)))
+        o.put("verifyRate", JsonInt(argInt(args, "verifyRate", -1)))
+        o.put("verifyPass", JsonInt(argInt(args, "verifyPass", 0)))
+        o.put("verifyTotal", JsonInt(argInt(args, "verifyTotal", 0)))
+        o.put("verifyLimit", JsonInt(argInt(args, "verifyLimit", 0)))
+        o.put("verifyUnknown", JsonInt(argInt(args, "verifyUnknown", 0)))
+        o.put("verifyShots", JsonInt(argInt(args, "verifyShots", 0)))
+        o.put("verifyMd", JsonString(argStr(args, "verifyMd", "")))
+        // 清单行的版面指标（没有视觉也能断言"没竖排、没溢出"）
+        o.put("verifyRows", JsonInt(argInt(args, "verifyRows", 0)))
+        o.put("verifyOverflow", JsonInt(argInt(args, "verifyOverflow", 0)))
+        o.put("verifyRowH", JsonInt(argInt(args, "verifyRowH", 0)))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -2096,6 +2112,126 @@ func profileAllows(p7bPath: String, udid: String): Bool {
 }
 
 /**
+ * t2h:verify —— 证据采集 + 可用率 + 报告导出（P6，0.24.0）。
+ *
+ * 一条命令把前面几轮的东西串起来：
+ *   ① 读落档：`.lingqu/scan`（清单规模）、`.lingqu/build`（编译闸 + 前端指纹）、
+ *      `.lingqu/hap`（装配闸）、`.lingqu/deploy`（装 / 启 / 日志）
+ *   ② 采真机证据：截图（snapshot_display + file recv 到 `.lingqu/evidence/`）、
+ *      faultlog 崩溃计数
+ *   ③ 生成清单 + 算可用率 + 渲染三段式报告（纯函数在 `lingqu.verify`）
+ *   ④ 落档 `.lingqu/verify/<工程>.json` / `.md` / `.html`
+ *
+ * 口径（详见 `src/verify/verify.cj` 文件头）：平台限制不计入分母；未采集 ≠ 通过；证据逐项挂。
+ * **采不到证据只会让该项变成"未验证"，绝不会变成"通过"**——这是这个命令存在的意义。
+ */
+public class VerifyCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_VERIFY_PATH", "")
+        }
+        if (path.size == 0) {
+            path = envOr("LINGQU_DEPLOY_PATH", "")
+        }
+        var projName = "unknown"
+        if (path.size > 0) {
+            projName = sanitizeFileName(projectNameOf(path))
+        }
+        let wantShots = argBool(args, "screenshot", true)
+        var serial = argStr(args, "serial", "")
+        if (serial == "") {
+            serial = deploySerialOf(projName)
+        }
+        let hdc = hdcPathOr()
+
+        // ① + ② 取数与采证
+        let inp = collectVerifyInput(projName)
+        let ev = collectEvidence(projName, hdc, serial, wantShots)
+        if (ev.saved > 0) {
+            inp.screenshotCount = ev.saved
+        }
+        inp.crashCount = ev.crashes
+
+        // ③ 清单 / 可用率 / 报告
+        let items = buildChecklist(inp)
+        let stats = computeStats(items)
+        let ctx = ReportContext(projName)
+        ctx.bundleName = deployBundleOf(projName)
+        ctx.deviceSerial = serial
+        ctx.generatedAt = nowText()
+        let md = renderMarkdown(ctx, items, stats)
+        let html = renderHtml(ctx, items, stats)
+
+        // ④ 落档
+        var outError = ""
+        var outJson = ""
+        var outMd = ""
+        var outHtml = ""
+        var outEvidence = ""
+        try {
+            if (!exists(Path(".lingqu/verify"))) {
+                if (!exists(Path(".lingqu"))) {
+                    Directory.create(Path(".lingqu"))
+                }
+                Directory.create(Path(".lingqu/verify"))
+            }
+            outJson = ".lingqu/verify/${projName}.json"
+            outMd = ".lingqu/verify/${projName}.md"
+            outHtml = ".lingqu/verify/${projName}.html"
+            File.writeTo(outMd, md.toArray())
+            File.writeTo(outHtml, html.toArray())
+            var root = JsonObject()
+            root.put("schema", JsonString("lingqu/verify/v1"))
+            root.put("project", JsonString(projName))
+            root.put("bundleName", JsonString(ctx.bundleName))
+            root.put("serial", JsonString(serial))
+            root.put("stats", stats.toJson())
+            var arr = JsonArray()
+            for (it in items) {
+                arr.add(it.toJson())
+            }
+            root.put("items", arr)
+            File.writeTo(outJson, root.toJsonString().toArray())
+            // 采证日志单独落一份，便于核对"截图为什么没采到"
+            if (ev.log != "") {
+                outEvidence = ".lingqu/verify/${projName}.evidence.log"
+                File.writeTo(outEvidence, ev.log.toArray())
+            }
+        } catch (e: Exception) {
+            outError = "落档失败：${e}"
+        }
+
+        var res = JsonObject()
+        res.put("ok", JsonBool(outError == ""))
+        res.put("project", JsonString(projName))
+        res.put("screenshots", JsonInt(ev.saved))
+        res.put("crashes", JsonInt(ev.crashes))
+        res.put("total", JsonInt(stats.total))
+        res.put("pass", JsonInt(stats.pass))
+        res.put("fail", JsonInt(stats.fail))
+        res.put("limit", JsonInt(stats.limit))
+        res.put("unknown", JsonInt(stats.unknown))
+        res.put("ratePercent", JsonInt(stats.ratePercent))
+        var arr2 = JsonArray()
+        for (it in items) {
+            arr2.add(it.toJson())
+        }
+        res.put("items", arr2)
+        res.put("md", JsonString(outMd))
+        res.put("html", JsonString(outHtml))
+        res.put("outJson", JsonString(outJson))
+        res.put("evidenceLog", JsonString(outEvidence))
+        res.put("error", JsonString(outError))
+        eprintln("[lingqu][verify] ${projName} pass=${stats.pass}/${stats.total - stats.limit} " +
+            "limit=${stats.limit} unknown=${stats.unknown} rate=${stats.ratePercent}%")
+        return res
+    }
+}
+
+/**
  * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。
  *
  * 把 0.17.0 手工跑通的那条链做成命令：`hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog。
@@ -2564,6 +2700,7 @@ public func build(): AppSpec {
         app.register("t2h:hap", HapCommand())
         app.register("t2h:sign", SignCommand())
         app.register("t2h:deploy", DeployCommand())
+        app.register("t2h:verify", VerifyCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

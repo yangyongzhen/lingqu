@@ -15,6 +15,7 @@
     "t2h:hap",
     "t2h:sign",
     "t2h:deploy",
+    "t2h:verify",
     "t2h:cjh_status",
     "t2h:cjh_deploy",
     "t2h:cjh_start",

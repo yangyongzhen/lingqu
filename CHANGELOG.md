@@ -5,6 +5,60 @@
 
 ---
 
+## [0.24.0] - 2026-10-31
+
+**主题**：**P6 第二刀 —— `t2h:verify` 上线**：采证据 → 出清单 → 算可用率 → 导出三段式报告，
+⑥ 屏「功能清单 / 可用率」接真数据（不再是占位示意）。
+
+### Added
+
+- **命令 `t2h:verify`**（三处联动齐全）：
+  - 读落档：`.lingqu/scan`（清单规模：命令/事件/插件/前端/平台 API 条数 + 阻塞项）、
+    `.lingqu/build`（退出码 + 前端指纹比对）、`.lingqu/hap`（装配闸）、`.lingqu/deploy`（装 / 启 / 日志）
+  - 采真机证据：`snapshot_display` + `file recv` 落 `.lingqu/evidence/`（**以文件真的落盘为准**，
+    不看 hdc 退出码）；`ls /data/log/faultlog/faultlogger/` 数崩溃记录
+  - 落档 `.lingqu/verify/<工程>.{json,md,html}`（+ `.evidence.log` 记录采证过程）
+- **⑥ 屏接真数据**：四张统计卡改为可用率 / 通过 / 平台限制（剔除分母）/ 未验证·失败；
+  功能清单逐条渲染（判定 pill + 勾选 + 标题，证据与说明进 tooltip）；「采集证据并算可用率」按钮
+- `ui_report` 新增 `verifyOk/verifyRate/verifyPass/verifyTotal/verifyLimit/verifyUnknown/verifyShots/verifyMd`
+  **以及版面指标 `verifyRows/verifyOverflow/verifyRowH`**（没有视觉也能断言"没竖排、没溢出"）
+- `LINGQU_VERIFY_PATH` 探针；`src/verify_feed.cj`（落档解析 + 采证）；2 例新单测（总 **154**）
+
+### Fixed（真机实测暴露的两个）
+
+- **`faultlog` 读不到被当成「崩溃」**：`ls` 返回 `Permission denied` 时，旧逻辑"非空行就算一条"
+  把无权限误判成崩溃 → 启动项假失败（可用率 40% → 修后 60%）。现在只认像崩溃记录的行
+  （`.log` / `crash` / `fault` 开头），读不到时在报告里写明"无证据"，不再编造。
+  纯函数 `countCrashRecords` / `faultlogUnreadable` + 单测
+- **清单行被长文本挤成竖排**：证据文本原先塞进 `.chips`（`flex:0 0 auto`），把整行压变形。
+  改成单行三列（勾选 / 标题可截断 / 判定），证据与说明进 tooltip——
+  版面指标实测：`verifyRowH` **134px → 45px**、`verifyOverflow` 0、`errorCount` 0
+
+### 证据（本机 + 真机，2026-10-31）
+
+```
+t2h:verify（LINGQU_VERIFY_PATH=E:\test\rust\habit-tree，设备 3QC0124B20000048）
+落档：.lingqu/verify/habit-tree.{json,md,html} + .evidence.log
+stats：rate=60% pass=3/5 limit=1 unknown=2 fail=0
+  清单：[pass] 应用启动无 panic，首屏渲染
+        [unknown] 交叉编译通过，前端指纹一致（本轮没跑 t2h:build，如实记未验证）
+        [pass] HAP 装配通过（应用 .so 已进包、无死资源）
+        [pass] IPC 命令通道可用（共 7 条命令）
+        [unknown] 前端资源打进 .so 并正确加载（9 个源文件）
+        [limit] 平台相关 API（4 处）按平台限制登记
+截图：.lingqu/evidence/habit-tree-verify.jpeg（3120×2080，173 KB）
+ui_report：verifyRate=60 verifyPass=3 verifyLimit=1 verifyUnknown=2 verifyShots=1
+           verifyRows=6 verifyOverflow=0 verifyRowH=45 errorCount=0
+```
+
+### 未做（如实）
+
+T6-5 断点续迁（`.lingqu/tasks.json` + `t2h:resume`）未开工；⑦ 屏报告导出按钮仍是占位
+（报告文件已生成，路径在 ⑥ 屏"证据与报告"卡里，可直接打开看）；两份 unknown 需要跑一次
+「交叉编译（OHOS）」才能补齐。
+
+---
+
 ## [0.23.0] - 2026-10-31
 
 **主题**：**P6 第一刀 —— 验证与报告的纯函数层**（T6-1 清单推导 / T6-3 可用率 / T6-4 报告渲染）。

@@ -431,3 +431,32 @@ func evidenceText(it: CheckItem): String {
 func esc(s: String): String {
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 }
+
+/**
+ * 数 faultlog 里的崩溃记录条数（纯函数，真机实测踩过坑所以单独测）。
+ *
+ * 为什么不能"非空行就 +1"：`ls /data/log/faultlog/faultlogger/` 在权限不足时输出
+ * `ls: ...: Permission denied`（2026-10-31 真机实测），把它当崩溃会**把"读不到"误判成"崩了"**，
+ * 直接违反"未采集 ≠ 通过/失败"的口径。所以只认像崩溃记录的行。
+ */
+public func countCrashRecords(lsOut: String): Int64 {
+    var n: Int64 = 0
+    for (raw in lsOut.split("\n", -1)) {
+        let line = raw.trimAscii()
+        if (line == "") {
+            continue
+        }
+        if (line.contains("Permission denied") || line.contains("No such file") || line.contains("total ")) {
+            continue
+        }
+        if (line.endsWith(".log") || line.contains("crash") || line.startsWith("fault")) {
+            n += 1
+        }
+    }
+    return n
+}
+
+/** faultlog 目录是否**读不到**（权限/不存在）——读不到时报告里要写明，不能假装"零崩溃" */
+public func faultlogUnreadable(lsOut: String): Bool {
+    return lsOut.contains("Permission denied") || lsOut.contains("No such file")
+}
