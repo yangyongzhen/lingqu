@@ -1,5 +1,0 @@
-[36m[run] /e/test/rust/test1/lingqu/targets/desktop/target/release/bin/main.exe[0m
-      cwd: /e/test/rust/test1/lingqu
-[cj-tauri] launch：（os=Windows display=desktop）
-[cj-tauri] 已从 assets/capabilities 加载 1 个 capability 清单
-[36m      退出码：127[0m
