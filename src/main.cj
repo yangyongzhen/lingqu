@@ -1041,6 +1041,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("approvals", JsonInt(argInt(args, "approvals", 0)))
         o.put("lastFrameType", JsonString(argStr(args, "lastFrameType", "")))
         o.put("replyPreview", JsonString(argStr(args, "replyPreview", "")))
+        // AI 回复的 Markdown 渲染自检（2026-11-01）：mdOk=页内自检全过；mdBlocks=版面里
+        // 真正渲染出的块级元素数（表格/列表/代码块…）——没有视觉也能断言"不是一坨纯文本"
+        o.put("mdOk", JsonBool(argBool(args, "mdOk", false)))
+        o.put("mdFail", JsonString(argStr(args, "mdFail", "")))
+        o.put("mdBlocks", JsonInt(argInt(args, "mdBlocks", 0)))
+        o.put("mdCodeCopy", JsonInt(argInt(args, "mdCodeCopy", 0)))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))

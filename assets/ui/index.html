@@ -289,6 +289,44 @@ body.ai-hidden .dock{display:none}
 .msg .who{font-size:10.5px;color:var(--dim2);margin-bottom:4px}
 .bubble{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:12.8px;line-height:1.7}
 .msg.me .bubble{background:var(--accsoft);border-color:rgba(108,140,255,.3)}
+/* AI 回复的 Markdown 排版（2026-11-01）：气泡里现在放的是 renderMd 的输出，
+   这些规则让标题/列表/表格/代码块真的"像个界面"。全部限定在 .bubble 内，别外溢。 */
+.bubble p{margin:0 0 7px;white-space:pre-wrap}
+.bubble p:last-child{margin-bottom:0}
+.bubble h1,.bubble h2,.bubble h3,.bubble h4,.bubble h5,.bubble h6{
+  margin:10px 0 6px;font-size:13px;font-weight:650;line-height:1.45}
+.bubble h1{font-size:15px}
+.bubble h2{font-size:14px}
+.bubble ul,.bubble ol{margin:4px 0 8px;padding-left:19px}
+.bubble li{margin:2px 0}
+.bubble li>p{margin:0}
+.bubble blockquote{margin:6px 0;padding:5px 10px;border-left:2px solid var(--acc);
+  background:rgba(108,140,255,.07);color:var(--fg);border-radius:0 7px 7px 0}
+.bubble blockquote p{margin:0;white-space:pre-wrap}
+.bubble hr{border:0;border-top:1px solid var(--line);margin:10px 0}
+.bubble a{color:var(--acc);text-decoration:underline}
+.bubble code{font-family:var(--mono);font-size:11.6px;background:rgba(108,140,255,.13);
+  border-radius:4px;padding:1px 5px}
+.bubble pre{position:relative;margin:8px 0;background:var(--bg);border:1px solid var(--line);
+  border-radius:9px;padding:9px 11px;overflow:auto;max-height:340px}
+.bubble pre code{background:none;padding:0;font-size:11.4px;line-height:1.7;white-space:pre;
+  display:block;color:var(--fg)}
+.bubble pre .code-copy{position:absolute;top:6px;right:6px;font-size:10.5px;padding:2px 8px;
+  border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--dim);
+  cursor:pointer;opacity:.75}
+.bubble pre:hover .code-copy{opacity:1}
+.bubble pre .code-copy:hover{color:var(--fg);border-color:var(--acc)}
+/* 表格：外层横向可滚，别把气泡撑破（长路径/长参数很常见） */
+.bubble .tbl{overflow-x:auto;margin:8px 0}
+.bubble table{border-collapse:collapse;font-size:11.6px;min-width:0}
+.bubble th,.bubble td{border:1px solid var(--line);padding:4px 8px;text-align:left;
+  white-space:nowrap;vertical-align:top}
+.bubble th{background:rgba(108,140,255,.10);font-weight:600}
+.bubble del{color:var(--dim2)}
+/* 流式光标：只在 flushStream 期间出现在末尾 */
+.bubble .md-cur{display:inline-block;width:6px;height:13px;margin-left:2px;
+  background:var(--acc);opacity:.75;animation:mdblink 1s steps(2) infinite;vertical-align:-2px}
+@keyframes mdblink{50%{opacity:0}}
 .tool{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
 .tool .th{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:11.5px;border-bottom:1px solid var(--line)}
 .tool .th .nm{font-family:var(--mono);font-weight:600;color:var(--acc)}
@@ -1238,8 +1276,7 @@ withBridge(function(tauri){
   }
   function insertNode(node) { chatBox().insertBefore(node, $('aiHint')); atBottom(); return node; }
 
-  function addMsg(role, html) {
-    return insertNode(mkEl('<div class="msg' + (role === 'me' ? ' me' : '') + '">' +
+  function addMsg(role, html) {    return insertNode(mkEl('<div class="msg' + (role === 'me' ? ' me' : '') + '">' +
       '<div class="av' + (role === 'me' ? '' : ' ai') + '">' + (role === 'me' ? '你' : 'AI') + '</div>' +
       '<div class="b"><div class="who">' + (role === 'me' ? '我' : '灵渠 · cjh') + ' · ' + now() + '</div>' +
       '<div class="bubble">' + html + '</div></div></div>')).querySelector('.bubble');
@@ -1253,9 +1290,10 @@ withBridge(function(tauri){
   }
 
   // 流式节流：delta 可能每秒几十条，累积后 ~90ms 合并重绘一次
+  // 重绘走 renderMd（Markdown），末尾补一个光标块——纯文本直接 textContent 会把表格/列表压平
   function flushStream() {
     CJ.flushTimer = null;
-    if (CJ.curBubble) { CJ.curBubble.textContent = CJ.acc; atBottom(); }
+    if (CJ.curBubble) { CJ.curBubble.innerHTML = renderMd(CJ.acc) + '<span class="md-cur"></span>'; atBottom(); }
   }
   function scheduleFlush() {
     if (CJ.flushTimer) return;
@@ -1264,13 +1302,39 @@ withBridge(function(tauri){
 
   function finishTurn(note) {
     if (CJ.flushTimer) { clearTimeout(CJ.flushTimer); CJ.flushTimer = null; }
-    if (CJ.curBubble) { CJ.curBubble.textContent = CJ.acc; }
+    if (CJ.curBubble) { CJ.curBubble.innerHTML = renderMd(CJ.acc); }
     if (CJ.acc) { CJ.lastReply = CJ.acc; }
     if (note) { insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
       '<div class="small muted">' + esc(note) + '</div></div></div>')); }
     CJ.curBubble = null;
     CJ.acc = '';
   }
+
+  /* 代码块「复制」：事件委托绑在聊天容器上——气泡是动态重绘的，逐块绑会在下次 flush 后失效。
+   * 复制的内容取自 MD_CODES（原文），不是 DOM 里的转义文本。 */
+  function copyText(txt) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt);
+        return;
+      }
+    } catch (e) { /* 落到下面的兜底 */ }
+    var ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e2) { /* 无剪贴板权限时静默失败 */ }
+    document.body.removeChild(ta);
+  }
+  chatBox().addEventListener('click', function (e) {
+    var b = e.target && e.target.closest ? e.target.closest('.code-copy') : null;
+    if (!b) { return; }
+    copyText(MD_CODES[b.getAttribute('data-cid')] || '');
+    b.textContent = '已复制';
+    setTimeout(function () { b.textContent = '复制'; }, 1200);
+  });
 
   function addToolCard(name, args) {
     var argsText = '';
@@ -1568,6 +1632,155 @@ withBridge(function(tauri){
       return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' })[c];
     });
   }
+
+  /* ===== AI 回复的 Markdown 渲染（2026-11-01，对齐 cj-tauri/examples/ai-chat 的 renderMd）=====
+   * 之前的毛病：气泡用 `textContent = acc` 直接塞纯文本，于是模型输出的表格被压成一串带竖线的
+   * 句子、列表压成一行、代码块没有等宽和换行——看起来"不像个界面"。user 反馈的就是这个。
+   *
+   * 顺序固定，别改：**先摘代码块 → 再整体 escHtml → 只认受控标记**。
+   * 模型输出属于外部内容，先把 `<` `>` `&` `"` 转义掉，之后加的都是我们自己生成的标签，
+   * 页面里进不来原始 HTML（`renderMd('<img src=x onerror=...>')` 必须原样显示成文字）。
+   *
+   * 与 ai-chat 的差异：那边 vendor 内联了 highlight.js（122 KB）做语法高亮；本项目页面要编进
+   * 单文件 exe，本轮只做 Markdown（代码块保留等宽 + 复制按钮），语法高亮留作可选后续。 */
+  var MD_CODE_SEQ = 0;
+  var MD_CODES = {};
+
+  function renderMd(src) {
+    // 只吃字符串：会话历史/事件对象误传进来时不能把整页脚本抛停
+    if (typeof src !== 'string') { src = ''; }
+    var blocks = [];
+    // ① 摘代码块（转义后占位，避免里面的 ** ` 之类的标记被二次加工）
+    var text = src.replace(/```([\w+#-]*)\n?([\s\S]*?)```/g, function (m, lang, code) {
+      var body = code.replace(/\n$/, '');
+      var cid = 'c' + (MD_CODE_SEQ += 1);
+      MD_CODES[cid] = body;
+      var idx = blocks.length;
+      var langCls = lang ? ' class="lang"' : '';
+      blocks.push('<pre' + langCls + '><code>' + escHtml(body) + '</code>' +
+        '<button class="code-copy" data-cid="' + cid + '" title="复制代码">复制</button></pre>');
+      return '\u0000B' + idx + '\u0000';
+    });
+    // ② 整体转义（此后只认我们自己生成的标记）
+    text = escHtml(text);
+
+    function inline(s) {
+      s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+      s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+      s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+      s = s.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+      // 链接只放行 http/https：javascript:/data: 之类原样留文字（同 ai-chat 的白名单口径）
+      return s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m2, label, href) {
+        if (/^https?:\/\//.test(href)) {
+          return '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+        }
+        return label;
+      });
+    }
+    // 表格单元格（首尾竖线是边框装饰，去掉）
+    function cells(row) {
+      var t = row.trim();
+      if (t.charAt(0) === '|') { t = t.slice(1); }
+      if (t.charAt(t.length - 1) === '|') { t = t.slice(0, -1); }
+      return t.split('|').map(function (x) { return x.trim(); });
+    }
+    var LITEM = /^\s*([-*+]|\d+\.)\s+(.*)$/;
+    var HEAD = /^(#{1,6})\s+(.*)$/;
+
+    var lines = text.split('\n');
+    var out = [];
+    var para = [];
+    function flush() {
+      // 段内单换行保留（.bubble p 有 white-space:pre-wrap 兜着）
+      if (para.length) { out.push('<p>' + inline(para.join('\n')) + '</p>'); para = []; }
+    }
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i], t = ln.trim();
+      if (t === '') { flush(); continue; }
+      if (/^\u0000B\d+\u0000$/.test(t)) { flush(); out.push(t); continue; }   // 代码块独占一块
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { flush(); out.push('<hr>'); continue; }
+      var hm = HEAD.exec(t);
+      if (hm) {
+        flush();
+        var lv = hm[1].length;
+        out.push('<h' + lv + '>' + inline(hm[2]) + '</h' + lv + '>');
+        continue;
+      }
+      if (/^(&gt;|>)\s?/.test(t)) {                     // 引用：连续行归一块
+        flush();
+        var q = [];
+        while (i < lines.length && /^(&gt;|>)\s?/.test(lines[i].trim())) {
+          q.push(lines[i].trim().replace(/^(&gt;|>)\s?/, ''));
+          i++;
+        }
+        i--;
+        out.push('<blockquote>' + inline(q.join('\n')) + '</blockquote>');
+        continue;
+      }
+      var hd = i + 1 < lines.length ? lines[i + 1].trim() : '';
+      if (t.indexOf('|') >= 0 && hd.indexOf('|') >= 0 && /^[\s:|-]+$/.test(hd) && hd.indexOf('-') >= 0) {
+        flush();
+        var head = cells(ln);
+        i += 2;                                          // 跳过表头与分隔行
+        var rows = [];
+        while (i < lines.length && lines[i].trim().indexOf('|') >= 0) { rows.push(cells(lines[i])); i++; }
+        i--;
+        var tb = '<div class="tbl"><table><thead><tr>';
+        head.forEach(function (c) { tb += '<th>' + inline(c) + '</th>'; });
+        tb += '</tr></thead><tbody>';
+        rows.forEach(function (r) {
+          tb += '<tr>';
+          // 按表头列数补齐：数据行少一格就留空（避免表格错位）
+          for (var c2 = 0; c2 < head.length; c2++) { tb += '<td>' + inline(r[c2] || '') + '</td>'; }
+          tb += '</tr>';
+        });
+        out.push(tb + '</tbody></table></div>');
+        continue;
+      }
+      var lm = LITEM.exec(ln);
+      if (lm) {                                          // 列表：同类型连续行归一组
+        flush();
+        var ordered = /\d/.test(lm[1]);
+        var items = [];
+        for (; i < lines.length; i++) {
+          var m3 = LITEM.exec(lines[i]);
+          if (!m3 || /\d/.test(m3[1]) !== ordered) { break; }
+          items.push('<li>' + inline(m3[2]) + '</li>');
+        }
+        i--;
+        out.push('<' + (ordered ? 'ol' : 'ul') + '>' + items.join('') +
+                 '</' + (ordered ? 'ol' : 'ul') + '>');
+        continue;
+      }
+      para.push(ln);
+    }
+    flush();
+    return out.join('').replace(/\u0000B(\d+)\u0000/g, function (m, idx) { return blocks[+idx]; });
+  }
+
+  /* Markdown 自检（没有视觉时用它证明渲染真的生效；结果进 ui_report 的 mdOk/mdFail）。
+   * 这些断言与 ai-chat 的页内自检同款：转义、粗体、行内码、代码块、表格、列表、链接白名单。 */
+  function mdSelfCheck() {
+    var cases = [
+      ['escape', renderMd('<img src=x onerror=alert(1)>').indexOf('<img') === -1],
+      ['escape-code', renderMd('```\n<b>hi</b>\n```').indexOf('&lt;b&gt;hi&lt;/b&gt;') !== -1],
+      ['bold', renderMd('**hi**').indexOf('<strong>hi</strong>') !== -1],
+      ['inline-code', renderMd('用 `t2h:scan` 跑').indexOf('<code>t2h:scan</code>') !== -1],
+      ['heading', renderMd('## 标题').indexOf('<h2>标题</h2>') !== -1],
+      ['list', renderMd('- 甲\n- 乙').indexOf('<li>甲</li>') !== -1],
+      ['olist', renderMd('1. 甲\n2. 乙').indexOf('<ol><li>甲</li><li>乙</li></ol>') !== -1],
+      ['table', renderMd('| a | b |\n| --- | --- |\n| 1 | 2 |').indexOf('<table>') !== -1],
+      ['quote', renderMd('> 引用').indexOf('<blockquote>引用</blockquote>') !== -1],
+      ['link-ok', renderMd('[文档](https://atomgit.com/qq8864/lingqu)').indexOf('href="https://') !== -1],
+      ['link-safe', renderMd('[x](javascript:alert(1))').indexOf('javascript') === -1],
+      ['non-string', renderMd(undefined) === '' && renderMd(null) === '']
+    ];
+    var fail = [];
+    cases.forEach(function (c) { if (!c[1]) { fail.push(c[0]); } });
+    window.__mdFail = fail.join(',');
+    return fail.length === 0;
+  }
+  var MD_SELFCHECK = mdSelfCheck();
 
   // 五维条：未扫描（-1）显示「—」且条为空。deps 维到手后单独重画，抽成函数复用
   function renderScoreDims(s){
@@ -2928,6 +3141,17 @@ withBridge(function(tauri){
       approvals: CJ.approvals,
       lastFrameType: CJ.lastType,
       replyPreview: (CJ.lastReply || '').slice(0, 120),
+      // AI 回复的 Markdown 渲染（2026-11-01）：自检结果 + 版面里真的渲染出了多少块
+      // （没有视觉时，这两项就是"回复不是一坨纯文本"的自动证据）
+      mdOk: MD_SELFCHECK === true,
+      mdFail: String(window.__mdFail || ''),
+      mdBlocks: (function(){
+        return document.querySelectorAll(
+          '#aiChat .bubble h1, #aiChat .bubble h2, #aiChat .bubble h3, #aiChat .bubble h4, ' +
+          '#aiChat .bubble ul, #aiChat .bubble ol, #aiChat .bubble table, #aiChat .bubble pre, ' +
+          '#aiChat .bubble blockquote, #aiChat .bubble hr').length;
+      })(),
+      mdCodeCopy: (function(){ return document.querySelectorAll('#aiChat .bubble .code-copy').length; })(),
       scanR: (window.__scan && window.__scan.R) || 0,
       scanD: (window.__scan && window.__scan.D) || 0,
       scanH: (window.__scan && window.__scan.H) || 0,
@@ -3109,6 +3333,11 @@ withBridge(function(tauri){
       if (mode === 'approval') {
         // 触发 cjh 的危险操作审批（approval_request → 卡片 → 我们不作答，等它超时按拒绝收场）
         $('aiInput').value = '请用 bash 工具执行这条命令：rm -rf /tmp/lingqu-probe-approval';
+      } else if (mode === 'md') {
+        // Markdown 渲染自检：要求模型用 markdown 回一段（标题 + 列表 + 表格 + 代码块），
+        // 这样 ui_report 的 mdBlocks/mdCodeCopy 才有真实版面证据（不是"看起来像渲染了"）
+        $('aiInput').value = '请只用 markdown 回复，不要额外解释：给一个二级标题「构建步骤」、'
+          + '一个三项的有序列表、一个两列两行的表格（命令/作用）、最后给一个 bash 代码块 `echo ok`。';
       } else {
         $('aiInput').value = '只回复两个字：收到';
       }
