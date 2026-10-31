@@ -5,6 +5,30 @@
 
 ---
 
+## [0.37.3] - 2026-11-01
+
+**主题**：把 0.37.2 那个坑**从上游堵掉**——cjh 的 WS 读侧不再静默丢弃超限帧。
+
+### cjh 侧（两个独立 PR 分支，均已推）
+
+| 分支 | 内容 | 验证 |
+|---|---|---|
+| `fix/declarative-tool-shell` | `registry.cj` 的 `/bin/bash` → `ShellProvider`（Windows 声明式技能工具可用） | build 0 warning / 540 例全绿 |
+| `feat/ws-frame-limit` | 新增 `WS_MAX_INBOUND_BYTES`（256 KiB）：超限帧回 `{"type":"error","code":"frame_too_large","retryable":false}` 并 continue（不杀连接）；读异常同样先回 `ws_read_failed`；`/api/capabilities` 的 `features.ws.max_frame_bytes` 公告上限 | 同上 |
+
+提 PR：
+- https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=fix/declarative-tool-shell
+- https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=feat/ws-frame-limit
+
+### 说明
+
+- 灵渠侧 0.37.2 的「任务书落文件 + 短 kickoff」**不依赖**这两个 PR（已自证可用：
+  `tool_start:40 / tool_result:40 / done:1`）；PR 的价值是**让下一个调用方不用再踩**——
+  失败会得到明确 error，而不是"没有回帧"。
+- 「落档跟着工程走」（`<工程>/.lingqu/...`）本轮**未做**：它要改所有命令的落档前缀，
+  属于跨 10+ 文件的迁移，必须配"读两处（工程优先、CWD 兜底）+ 逐命令切换"的迁移策略与单测，
+  不适合在上下文将尽时动。设计已写进 `docs/进度记录.md` 的下一步。
+
 ## [0.37.2] - 2026-11-01
 
 **主题**：**AI 终于真的开工了** —— 定位并修掉「任务书发过去 cjh 不干活」，第一次拿到

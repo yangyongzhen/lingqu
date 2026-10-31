@@ -4,10 +4,20 @@
 > 撞到下面几处能力缺口。每条都带**现象 / 根因（文件:行）/ 建议**，可直接粘成 issue。
 > 版本基准：`cjh` 1.6.1（Windows x64 实测）。
 >
-> **状态（2026-11-01）**：第 1 条已修并推分支
-> `fix/declarative-tool-shell` → https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=fix/declarative-tool-shell
+> **状态（2026-11-01）**：两条已修并各推一个分支（每个都是独立 PR，可分别 review）：
+>
+> | 分支 | 内容 | 验证 |
+> |---|---|---|
+> | `fix/declarative-tool-shell` | 第 1 条：`registry.cj` 的 `/bin/bash` → `ShellProvider` | build 0 warning / 540 例全绿 |
+> | `feat/ws-frame-limit` | **新增第 6 条**：入站帧超限显式回 `error`（`frame_too_large`）+ `/api/capabilities` 公告 `features.ws.max_frame_bytes` | 同上 |
+>
+> 提 PR：
+> - https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=fix/declarative-tool-shell
+> - https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=feat/ws-frame-limit
+>
 > **第 2 条（REST 对话入口）经用户指出后撤回**：产品是桌面 GUI，页面永远在场，WS 通道够用；
-> 当初想加它其实是在给一个 WS bug 打补丁（见文末"排障进度"）。这条从"需求"降级为"可选的 headless 便利"。
+> 当初想加它其实是在给一个 WS bug 打补丁——而那个 bug 的**真因就是第 6 条**（超限帧静默丢弃）。
+这条从"需求"降级为"可选的 headless 便利"。
 
 ---
 
