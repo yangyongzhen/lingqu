@@ -229,6 +229,16 @@ tbody tr:hover td{background:var(--panel2)}
   background:repeating-linear-gradient(135deg,var(--panel2) 0 8px,transparent 8px 16px);
   display:grid;place-items:center;font-size:10.5px;color:var(--dim);text-align:center;line-height:1.35}
 
+/* 断点续迁（T6-5）：一行一步——勾选 / 步骤名 + 证据（可截断） / 判定 + 动作。
+   和 .evi 同一套排版纪律：长文本留在中间那列并截断，别把行挤成竖排（AGENTS §1.6）。 */
+.rstep{display:flex;align-items:center;gap:9px;padding:6px 0;border-bottom:1px solid rgba(38,44,59,.55);
+  font-size:12.5px}
+.rstep:last-child{border-bottom:0}
+.rstep .rt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rstep .rt small{color:var(--dim);margin-left:6px}
+.rstep .ract{flex:0 0 auto;display:flex;gap:6px;align-items:center}
+.rstep .btn{padding:2px 8px;font-size:11px}
+
 .note{font-size:11.5px;color:var(--dim);background:var(--panel2);border:1px dashed var(--line);
   border-radius:10px;padding:10px 13px;margin-top:13px}
 .note b{color:var(--fg)}
@@ -520,17 +530,23 @@ body.ai-hidden .ai-show{display:block}
           <div class="stat"><div class="k">耗时</div><div class="v" id="portStatElapsed">—<small>未计时</small></div></div>
         </div>
         <div class="grid2" style="margin-top:13px">
-          <div class="card placeholder" style="margin-top:0">
-            <div class="card-h"><h3>步骤<span class="placeholder-badge">占位示意 · P5 接真数据</span></h3><span class="right">可从任意步继续</span></div>
-            <div class="time">
-              <div class="tstep done"><div class="i">✓</div><div><div class="t">环境体检 <span class="pill ok">通过</span></div><div class="d">rustc / target / NDK / llvm-mingw / ohrs / hvigor 全部就绪</div></div></div>
-              <div class="tstep done"><div class="i">✓</div><div><div class="t">依赖切 fork + 钉版本 <span class="pill ok">R2-001</span></div><div class="d">tauri 2.11.5 / wry 0.56.0 · cargo metadata 已验证</div></div></div>
-              <div class="tstep done"><div class="i">✓</div><div><div class="t">工具链与链接器 <span class="pill ok">R1-002</span></div><div class="d">rust-toolchain.toml + .cargo/config.toml + ohos-clang.cmd</div></div></div>
-              <div class="tstep done"><div class="i">✓</div><div><div class="t">平台路径与 cfg 分支 <span class="pill ok">R3-001</span></div><div class="d">app_data_dir → 沙箱路径；panic hook 落盘</div></div></div>
-              <div class="tstep run"><div class="i">4</div><div><div class="t">前端兼容层注入 <span class="pill info">进行中</span></div><div class="d">localStorage 透明桥 ✔ · confirm/prompt ✔ · color 降级 进行中</div></div></div>
-              <div class="tstep wait"><div class="i">5</div><div><div class="t">能力清单与配置 <span class="muted">等待</span></div><div class="d">capabilities/default.json · withGlobalTauri · assetProtocol</div></div></div>
-              <div class="tstep wait"><div class="i">6</div><div><div class="t">交叉编译 .so <span class="muted">等待</span></div></div></div>
-              <div class="tstep wait"><div class="i">7</div><div><div class="t">HAP 装配与签名 <span class="muted">等待</span></div></div></div>
+          <div class="card" style="margin-top:0" id="resumeCard">
+            <div class="card-h">
+              <h3>断点续迁 · 8 步状态机</h3>
+              <span class="right">
+                <button class="btn" id="btnResume" title="读 .lingqu 下各步骤的落档，重新观测 8 步状态并写 .lingqu/tasks.json（纯读盘，秒级）">刷新断点</button>
+              </span>
+            </div>
+            <div class="legend" style="margin:0 0 6px">
+              <span>完成：<b id="resumeDone">—</b><small>/8</small></span>
+              <span>失败：<b id="resumeFailed">—</b></span>
+              <span>跳过：<b id="resumeSkipped">—</b></span>
+              <span>进度：<b id="resumePct">—</b></span>
+              <span>下一步：<b id="resumeNext">—</b></span>
+            </div>
+            <div class="sethint" id="resumeHint" style="margin:0 0 6px">还没采集过断点——点「刷新断点」按落档观测 8 步；跑过扫描/编译/装配/部署后也会自动观测。</div>
+            <div id="resumeList">
+              <div class="muted small">尚无记录。刷新断点后这里会显示：勾选 / 步骤 / 落档证据 + 判定，行尾可「从这步重来」。</div>
             </div>
           </div>
           <div class="card placeholder" style="margin-top:0">
@@ -937,6 +953,11 @@ withBridge(function(tauri){
       if (d && d.verifyPath) {
         $("deployPath").value = String(d.verifyPath);
         runVerify(String(d.verifyPath));
+      }
+      // 断点续迁探针（T6-5）：LINGQU_RESUME_PATH 显式设置时按落档观测一次（纯读盘，秒级）。
+      // 不设也照样能跑——界面启动时会按 tasks.json 里记的工程名观测一次。
+      if (d && d.resumePath) {
+        loadResumeBoard(String(d.resumePath));
       }
       // 指定初始屏（LINGQU_UI_SCREEN=build 之类）：给「截某屏的版面证据」一个可复现入口，
       // 不必靠人手动点左栏（无视觉环境也能落到 ui-report 的 activeScreen 上）
@@ -1365,6 +1386,8 @@ withBridge(function(tauri){
     if (m.session_id && m.session_id !== CJ.session) {
       CJ.session = m.session_id;
       renderWsState();
+      // 断点续迁（T6-5）：会话 id 也要落盘——否则关掉应用回来，agent 会话就断了
+      rememberSession(m.session_id);
     }
   }
 
@@ -2436,6 +2459,142 @@ withBridge(function(tauri){
   $('btnVerify').addEventListener('click', function(){
     runVerify(($('deployPath').value || '').trim());
   });
+
+  /* ===== T6-5 断点续迁（8 步状态机）=====
+   * 三件事都在这里：① 按落档刷新断点板；② 记录/续接 cjh 会话 id；
+   * ③ 行尾「从这步重来」把该步及之后重置为 pending。
+   * 口径（与 t2h:verify 一致）：落档不存在 = 没跑过；落档在但判定没过 = 失败（存在 ≠ 成功）。 */
+  var RESUME = { ok: false, next: '', done: 0, failed: 0, skipped: 0, total: 0, percent: -1,
+                 hint: '', sessionId: '', project: '', path: '', rows: [] };
+  var RESUME_STATUS_TEXT = { done: '通过', failed: '失败', skipped: '跳过', running: '进行中', pending: '未开始' };
+  var RESUME_STATUS_CHIP = { done: 'pill ok', failed: 'pill err', skipped: 'pill warn',
+                             running: 'pill info', pending: 'pill' };
+  var RESUME_STATUS_ICON = { done: '✓', failed: '×', skipped: '–', running: '…', pending: '' };
+
+  function resumePathValue(){
+    // 优先级：本页输入框 → 环境探针（后端透传）→ 空（后端沿用 tasks.json 里记的工程）
+    var p = ($('portPath') && $('portPath').value ? $('portPath').value : '').trim();
+    if (p) { return p; }
+    p = ($('scanPath') && $('scanPath').value ? $('scanPath').value : '').trim();
+    if (p) { return p; }
+    p = ($('deployPath') && $('deployPath').value ? $('deployPath').value : '').trim();
+    return p;
+  }
+
+  function renderResume(r){
+    r = r || {};
+    RESUME = {
+      ok: r.ok === true,
+      next: String(r.next || ''),
+      done: (typeof r.done === 'number') ? r.done : 0,
+      failed: (typeof r.failed === 'number') ? r.failed : 0,
+      skipped: (typeof r.skipped === 'number') ? r.skipped : 0,
+      total: (typeof r.total === 'number') ? r.total : 0,
+      percent: (typeof r.percent === 'number') ? r.percent : -1,
+      hint: String(r.hint || ''),
+      sessionId: String(r.sessionId || ''),
+      project: String(r.project || ''),
+      path: String(r.path || ''),
+      rows: (r.steps && r.steps.length) ? r.steps : []
+    };
+    $('resumeDone').textContent = RESUME.done;
+    $('resumeFailed').textContent = RESUME.failed;
+    $('resumeSkipped').textContent = RESUME.skipped;
+    $('resumePct').textContent = (RESUME.percent < 0 ? '—' : (RESUME.percent + '%'));
+    $('resumeNext').textContent = RESUME.next ? (RESUME.next) : '全部完成';
+    var hint = $('resumeHint');
+    if (r.error) {
+      hint.style.color = 'var(--err)';
+      hint.textContent = '断点刷新失败：' + String(r.error) + (r.outError ? ('；' + r.outError) : '');
+    } else if (r.outError) {
+      hint.style.color = 'var(--err)';
+      hint.textContent = '落档失败：' + r.outError;
+    } else {
+      hint.style.color = '';
+      hint.textContent = RESUME.hint || '尚无断点记录';
+    }
+    var list = $('resumeList');
+    list.innerHTML = '';
+    if (!RESUME.rows.length) {
+      list.innerHTML = '<div class="muted small">还没有记录——点「刷新断点」按落档观测 8 步。</div>';
+      return;
+    }
+    RESUME.rows.forEach(function(s){
+      var id = String(s.id || '');
+      var st = String(s.status || 'pending');
+      var title = String(s.title || id);
+      // 落档在但没结论时把路径也露出来——"为什么判失败"第一眼看的就是它读的是哪份落档
+      var eviTxt = String(s.note || s.artifact || '');
+      var row = document.createElement('div');
+      row.className = 'rstep';
+      row.setAttribute('data-step', id);
+      row.setAttribute('data-status', st);
+      row.innerHTML = '<span class="chk ' + (st === 'done' ? 'on' : (st === 'skipped' ? 'na' : '')) + '">'
+        + (RESUME_STATUS_ICON[st] || '') + '</span>'
+        + '<span class="rt" title="' + esc(String(s.artifact || '') + (s.note ? ('\n' + s.note) : '')) + '">'
+        + esc(title) + '<small>' + esc(eviTxt) + '</small></span>'
+        + '<span class="ract"><span class="' + (RESUME_STATUS_CHIP[st] || 'pill') + '">'
+        + (RESUME_STATUS_TEXT[st] || st) + '</span>'
+        + '<button class="btn" data-redo="' + esc(id) + '" title="把这一步以及它之后的步骤重置为未开始（落档不动）">从这步重来</button></span>';
+      list.appendChild(row);
+    });
+  }
+
+  function loadResumeBoard(path){
+    var arg = { action: 'status' };
+    if (path) { arg.path = String(path); }
+    return invoke('t2h:resume', arg).then(function(r){
+      renderResume(r || {});
+      // 断点板里记着 cjh 会话 id 且当前是新会话 → 接着上次那个会话（"含 agent 会话"的一半）
+      if (RESUME.sessionId && !CJ.session && CJ.up) {
+        CJ.session = RESUME.sessionId;
+        wsSend({ type: 'resume_session', session_id: RESUME.sessionId });
+      }
+      reportUi('resume-status');
+      return r;
+    }).catch(function(e){
+      renderResume({ ok: false, error: e && e.message ? e.message : 'invoke error' });
+      reportUi('resume-error');
+    });
+  }
+
+  function rememberSession(sid){
+    if (!sid || sid === window.__resumeSavedSession) { return; }
+    window.__resumeSavedSession = sid;
+    // 同步进断点板的内存态：ui_report 的 resumeSession 才有值可断言（否则要等下一次刷新才看到）
+    RESUME.sessionId = String(sid);
+    invoke('t2h:resume', { action: 'session', sessionId: String(sid), path: resumePathValue() })
+      .then(function(){ reportUi('resume-session'); })
+      .catch(function(){});
+  }
+
+  $('btnResume').addEventListener('click', function(){
+    var btn = $('btnResume');
+    btn.disabled = true;
+    $('resumeHint').textContent = '按 .lingqu 落档观测 8 步…';
+    loadResumeBoard(resumePathValue()).then(function(){ btn.disabled = false; });
+  });
+  // 「从这步重来」用事件委托：行是动态渲染的，逐行绑事件会在刷新后失效
+  $('resumeList').addEventListener('click', function(e){
+    var b = e.target && e.target.closest ? e.target.closest('button[data-redo]') : null;
+    if (!b) { return; }
+    var step = b.getAttribute('data-redo');
+    b.disabled = true;
+    invoke('t2h:resume', { action: 'redo', step: step, path: resumePathValue() }).then(function(r){
+      if (r && r.error) {
+        $('resumeHint').style.color = 'var(--err)';
+        $('resumeHint').textContent = '重来失败：' + r.error;
+        b.disabled = false;
+        return;
+      }
+      return loadResumeBoard(resumePathValue());
+    }).catch(function(e){
+      $('resumeHint').style.color = 'var(--err)';
+      $('resumeHint').textContent = '重来失败：' + (e && e.message ? e.message : e);
+      b.disabled = false;
+    });
+  });
+
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -2544,6 +2703,21 @@ withBridge(function(tauri){
         var r = document.querySelector("#verList .evi");
         return r ? Math.round(r.getBoundingClientRect().height) : 0;
       })(),
+      // T6-5 断点续迁：断点在哪 / 完成度 / 会话 id（+ 版面指标：行数与行高）
+      resumeOk: RESUME.ok === true,
+      resumeNext: RESUME.next || '',
+      resumeDone: (typeof RESUME.done === "number") ? RESUME.done : 0,
+      resumeFailed: (typeof RESUME.failed === "number") ? RESUME.failed : 0,
+      resumeSkipped: (typeof RESUME.skipped === "number") ? RESUME.skipped : 0,
+      resumeTotal: (typeof RESUME.total === "number") ? RESUME.total : 0,
+      resumePercent: (typeof RESUME.percent === "number") ? RESUME.percent : -1,
+      resumeHint: RESUME.hint || '',
+      resumeSession: RESUME.sessionId || '',
+      resumeRows: (function(){ return document.querySelectorAll("#resumeList .rstep").length; })(),
+      resumeRowH: (function(){
+        var r = document.querySelector("#resumeList .rstep");
+        return r ? Math.round(r.getBoundingClientRect().height) : 0;
+      })(),
       // ⑥ 真机部署（T5-5）
       deployOk: DEPLOY.ok === true,
       deploySerial: DEPLOY.serial || "",
@@ -2582,6 +2756,8 @@ withBridge(function(tauri){
    * 每步都上报一行，落到 .lingqu/ui-report.log，供人/CI 断言。 */
   function runUiProbe(){
     var mode = (window.__uiProbeMode || '1');
+    // 断点续迁先观测一次：让 ui_report 的 resume* 字段有值可断言（纯读盘，不会拖慢序列）
+    setTimeout(function(){ loadResumeBoard(resumePathValue()); }, 200);
     setTimeout(function(){ reportUi('probe-initial'); }, 400);
     setTimeout(function(){ openSettings(); }, 1200);
     // WS 通道自检：连上就发一条真实提问，靠 frames/delta/replyPreview 断言"通道真的通了"

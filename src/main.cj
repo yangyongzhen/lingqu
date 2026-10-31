@@ -172,6 +172,8 @@ public class EnvCommand <: CommandHandler {
         res.put("deployPath", JsonString(envOr("LINGQU_DEPLOY_PATH", "")))
         // 置 LINGQU_VERIFY_PATH 就在启动时跑一次 t2h:verify（采证 + 可用率 + 报告）
         res.put("verifyPath", JsonString(envOr("LINGQU_VERIFY_PATH", "")))
+        // 置 LINGQU_RESUME_PATH 就在启动时跑一次 t2h:resume（T6-5 断点续迁，纯读盘、秒级）
+        res.put("resumePath", JsonString(envOr("LINGQU_RESUME_PATH", "")))
         return res
     }
 }
@@ -1118,6 +1120,19 @@ public class UiReportCommand <: CommandHandler {
         o.put("verifyRows", JsonInt(argInt(args, "verifyRows", 0)))
         o.put("verifyOverflow", JsonInt(argInt(args, "verifyOverflow", 0)))
         o.put("verifyRowH", JsonInt(argInt(args, "verifyRowH", 0)))
+        // T6-5 断点续迁（t2h:resume 回投）：next 是"从哪一步继续"，percent 是完成度
+        o.put("resumeOk", JsonBool(argBool(args, "resumeOk", false)))
+        o.put("resumeNext", JsonString(argStr(args, "resumeNext", "")))
+        o.put("resumeDone", JsonInt(argInt(args, "resumeDone", 0)))
+        o.put("resumeFailed", JsonInt(argInt(args, "resumeFailed", 0)))
+        o.put("resumeSkipped", JsonInt(argInt(args, "resumeSkipped", 0)))
+        o.put("resumeTotal", JsonInt(argInt(args, "resumeTotal", 0)))
+        o.put("resumePercent", JsonInt(argInt(args, "resumePercent", -1)))
+        o.put("resumeHint", JsonString(argStr(args, "resumeHint", "")))
+        o.put("resumeSession", JsonString(argStr(args, "resumeSession", "")))
+        // 版面孔径：步骤行数 / 行高（和 verify 一个套路——没有视觉也能证明"没竖排"）
+        o.put("resumeRows", JsonInt(argInt(args, "resumeRows", 0)))
+        o.put("resumeRowH", JsonInt(argInt(args, "resumeRowH", 0)))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -2232,6 +2247,137 @@ public class VerifyCommand <: CommandHandler {
 }
 
 /**
+ * t2h:resume —— 断点续迁（T6-5，0.26.0）。
+ *
+ * 迁移是 8 步的一条链（扫描 → 依赖 → 改造 → 编译 → 装配 → 签名 → 部署 → 验证），
+ * 中间任何一步都可能因为"缺签名材料 / 真机没插 / 人工吃饭去了"停下来。
+ * 这条命令把"上次停在哪、下一步做什么"变成**盘上可查的证据**（`.lingqu/tasks.json`），
+ * 而不是内存里的进度条——关掉应用、换台机器、隔两天回来都能接上。
+ *
+ * action（默认 status）：
+ *   status —— 逐步骤**观测落档**（`.lingqu/<步骤>/<工程>.json`）→ 归约状态 → 写 `.lingqu/tasks.json`
+ *   mark   —— 人工覆盖一步：{step, status: done|failed|skipped|running, note?}
+ *             （agent 应用完补丁记 done；判定做不了记 skipped，断点会越过它）
+ *   redo   —— 从某步重来：{step} → 该步及其之后回到 pending（清备注，提示"落档是上一轮的"）
+ *   reset  —— 整块回到 pending（只清状态，**不删落档**——证据不该被断点操作毁掉）
+ *   session—— 记 cjh 会话 id：{sessionId}（页面在 CJ.session 变化时存，重启后据此 resume_session）
+ *
+ * 口径与 `t2h:verify` 一致：落档不存在 = 没跑过（pending，不是失败）；
+ * 落档存在但判定没过 = failed（**存在 ≠ 成功**）。
+ */
+public class ResumeCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_RESUME_PATH", "")
+        }
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        let action = argStr(args, "action", "status")
+        let now = nowText()
+
+        // 有工程路径 → 观测该工程；没有 → 沿用板子里记的工程名（界面上只点「刷新断点」也能用）
+        var board = newTaskBoard()
+        var projName = ""
+        if (path.size > 0) {
+            projName = sanitizeFileName(projectNameOf(path))
+        }
+        if (projName != "") {
+            board = collectTaskBoard(projName, path, now)
+        } else {
+            match (readJsonOrNone(taskBoardPath())) {
+                case Some(root) =>
+                    board = parseTaskBoardValue(root)
+                    // 板子里有工程名就按它重新观测（"接着上次继续"不需要再填一次路径）
+                    if (board.project != "") {
+                        board = collectTaskBoard(board.project, board.path, now)
+                    }
+                case None => board = newTaskBoard()
+            }
+        }
+
+        var err = ""
+        if (action == "mark") {
+            let step = argStr(args, "step", "")
+            let status = argStr(args, "status", "")
+            if (!markTaskStep(board, step, status, now, argStr(args, "note", ""))) {
+                err = "没有这一步：${step}（可选：${taskStepIdsJoined()}）"
+            }
+        } else if (action == "redo") {
+            let step = argStr(args, "step", "")
+            if (!redoFromStep(board, step)) {
+                err = "没有这一步：${step}（可选：${taskStepIdsJoined()}）"
+            } else {
+                // 明确写清"落档是上一轮的"：否则刷新后看到 done 会误以为重跑过了
+                match (board.findStep(step)) {
+                    case Some(s) => s.note = "待重跑（落档还是上一轮的）"
+                    case None => ()
+                }
+            }
+        } else if (action == "reset") {
+            for (s in board.steps) {
+                s.status = TASK_STATUS_PENDING
+                s.at = ""
+                s.note = ""
+            }
+        } else if (action == "session") {
+            board.sessionId = argStr(args, "sessionId", "")
+        } else if (action != "status") {
+            err = "不认识的 action：${action}（status|mark|redo|reset|session）"
+        }
+
+        var outError = ""
+        if (err == "") {
+            outError = saveTaskBoard(board)
+        }
+
+        let p = taskProgress(board)
+        let next = firstUnfinished(board)
+        var arr = JsonArray()
+        for (s in board.steps) {
+            arr.add(s.toJson())
+        }
+        var res = JsonObject()
+        res.put("ok", JsonBool(err == "" && outError == ""))
+        res.put("action", JsonString(action))
+        res.put("project", JsonString(board.project))
+        res.put("path", JsonString(board.path))
+        res.put("out", JsonString(taskBoardPath()))
+        res.put("next", JsonString(next))
+        res.put("nextTitle", JsonString(if (next == "") { "" } else { taskStepTitle(next) }))
+        res.put("done", JsonInt(p.done))
+        res.put("failed", JsonInt(p.failed))
+        res.put("skipped", JsonInt(p.skipped))
+        res.put("total", JsonInt(p.total))
+        res.put("percent", JsonInt(p.percent))
+        res.put("hint", JsonString(resumeHint(board)))
+        res.put("sessionId", JsonString(board.sessionId))
+        res.put("summary", JsonString(taskBoardSummary(board)))
+        res.put("steps", arr)
+        res.put("error", JsonString(err))
+        res.put("outError", JsonString(outError))
+        eprintln("[lingqu][resume] ${board.project} action=${action} " +
+            "done=${p.done}/${p.total} next=${next} ${resumeHint(board)}")
+        return res
+    }
+}
+
+/** 步骤 id 列表（错误提示里要能列全，别让人猜） */
+func taskStepIdsJoined(): String {
+    var text = ""
+    for (id in taskStepIds()) {
+        if (text != "") {
+            text += "|"
+        }
+        text += id
+    }
+    return text
+}
+
+/**
  * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。
  *
  * 把 0.17.0 手工跑通的那条链做成命令：`hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog。
@@ -2701,6 +2847,7 @@ public func build(): AppSpec {
         app.register("t2h:sign", SignCommand())
         app.register("t2h:deploy", DeployCommand())
         app.register("t2h:verify", VerifyCommand())
+        app.register("t2h:resume", ResumeCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

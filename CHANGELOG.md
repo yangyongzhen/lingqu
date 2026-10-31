@@ -5,6 +5,79 @@
 
 ---
 
+## [0.26.0] - 2026-11-01
+
+**主题**：**T6-5 断点续迁**——8 步迁移链的进度变成盘上可查的证据（`.lingqu/tasks.json`），
+关掉应用、隔天回来能接着做；④ 屏的占位步骤条换成真数据。
+
+### Added
+
+- **命令 `t2h:resume`**（三处联动齐全）：
+  - `status`（默认）：读 `.lingqu/{scan,deps,port,build,hap,sign,deploy,verify}/<工程>.json`
+    → 归约成 8 步状态 → 落 `.lingqu/tasks.json`（`lingqu/tasks/v1`）
+  - `mark`：人工覆盖一步（agent 应用补丁后记 `done`；判定做不了记 `skipped`，断点会越过它）
+  - `redo`：从某步重来（该步及之后回 `pending`，落档不动）
+  - `reset`：整块回 `pending`（**不删落档**，证据不该被断点操作毁掉）
+  - `session`：记 cjh 会话 id → 重开应用后页面据此 `resume_session`，**agent 会话一起续**
+- `src/task.cj`（纯函数层）：`TASK_STEPS` 步骤表、`normalizeTaskStatus`、
+  `reconcileStepStatus`、`firstUnfinished`、`taskProgress`、`resumeHint`、
+  `markTaskStep` / `redoFromStep`、`parseTaskBoard`（容错）/ `TaskBoard.toJson`
+- `src/task_feed.cj`（观测层）：`observeTaskStep` 读各步落档 → `exists / ok / 一句话摘要`，
+  `collectTaskBoard` / `saveTaskBoard`（写前留 `.bak`）
+- ④ 屏「断点续迁 · 8 步状态机」卡（**替换原占位步骤条**）：完成/失败/跳过/进度/下一步五个指标、
+  逐步行（勾选 / 步骤名 + 落档证据 / 判定 + 「从这步重来」）、「刷新断点」按钮
+- `ui_report` 新增 `resumeOk/resumeNext/resumeDone/resumeFailed/resumeSkipped/resumeTotal/`
+  `resumePercent/resumeHint/resumeSession` + 版面指标 `resumeRows/resumeRowH`；
+  探针 `LINGQU_RESUME_PATH`
+
+### Changed
+
+- 版本 0.25.0 → **0.26.0**；单测 **156 → 165**（`src/tests/task_test.cj`，9 例）
+
+### 口径（与 `t2h:verify` 一致，别改薄）
+
+| 情形 | 判定 | 为什么 |
+|---|---|---|
+| 落档不存在 | `pending`（没跑过） | "上次好像跑过"不可信，盘上没有就是没跑 |
+| 落档存在但判定没过 | `failed` | **存在 ≠ 成功**（0.24.0 的 verify 也是这条口径） |
+| 人工 `skipped` | 保留，断点越过它 | 跳过是人的结论，但它不是"通过"，进度里单列 |
+
+### 证据（本机 Windows x64，2026-11-01，habit-tree）
+
+```
+启动参数：LINGQU_RESUME_PATH=E:\test\rust\habit-tree  LINGQU_UI_SCREEN=port  LINGQU_UI_PROBE=1
+.lingqu/tasks.json（lingqu/tasks/v1）：
+  project=habit-tree  next=port  done=5  failed=1  skipped=0  total=8  percent=62
+  hint="下一步是「规则改造」——从这一步接着做（前 5 步已有落档证据）"
+  sessionId=s1793421167.504.1（页面在帧里收到会话 id 后由 t2h:resume action=session 落盘）
+  scan    done    单元 R=24 / D=24 / U=0 / 评分 63 / 阻塞 1 项
+  deps    done    依赖 430 包 / 需 patch 9 / 不可用 10
+  port    pending .lingqu/port/habit-tree/decisions.json（没有落档 → 没跑过，不猜）
+  build   failed  exit=0 / 错误 0 / 前端指纹 一致 2、过期 1、缺 0｜闸未过：.so 内嵌的
+                  1 个前端产物在 dist/ 里已不存在——改了前端没重编 .so
+  hap     done    HAP 7249837 字节 / arm64 库条目 3 个 / rawfile 0 个死资源
+  sign    pending 该工程没有签名落档（只有 lingqu-apply-demo 那份）
+  deploy  done    装 成功 / 启 成功 / hilog 40 行（健康）
+  verify  done    可用率 60%（通过 3/6，平台限制 1）
+ui_report（④ 屏断点板）：resumeOk=true resumeNext=port resumeDone=5 resumeFailed=1
+  resumeTotal=8 resumePercent=62 resumeRows=8 resumeRowH=37 resumeSession=s1793421167.504.1
+  errorCount=0 tag=probe-done
+  → 8 行**单行**渲染（37px/行，与 verify 清单同一套排版纪律），会话 id 与 tasks.json 一致
+```
+
+> 注意 `build=failed` 是**真实状态**：`exit=0` 且错误 0，但前端指纹闸没过（`.so` 里还留着
+> `index-BbUz51cz.css`，dist 已经换成新的）——这正是 0.20.0 白屏问题的指纹形态。
+> 断点因此停在更前面的 `port`（改造还没跑），而不是自欺地报"编译通过"。
+
+### 未做（如实）
+
+- `t2h:report` 命令面（报告文件 0.24.0 已由 `t2h:verify` 产出 `.lingqu/verify/<工程>.{md,html}`，
+  缺的是"单独出报告"的命令与 ⑦ 屏导出按钮）；T5-4 release 签名两态；P7 5 样本矩阵
+- `redo` 之后立刻 `status` 会用落档把状态刷回真实情况（落档还是上一轮的，摘要里写了"待重跑"）——
+  设计如此，但需要在文档里说清，避免被误读成"重来没生效"
+
+---
+
 ## [0.25.0] - 2026-11-01
 
 **主题**：**真·单文件包**——整份应用只剩一个 `main.exe`（无 DLL、无 `assets/`、无 `vendor/`），

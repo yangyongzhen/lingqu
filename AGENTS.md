@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.25.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.26.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -169,6 +169,9 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 53 | `.bat` 里做「剥掉末尾反斜杠」（`if "%HERE:~-1%"=="\"`）→ cmd 报 `'tory' is not recognized ...`，整段脚本被拆坏 | cmd 对**引号紧邻反斜杠**的写法会误解码。别在 `.bat` 里玩这个花活：`%~dp0` 本来就带尾杠，直接用 `"%HERE%main.exe"` 拼；确实需要无尾杠版本就单独 `set "NB=%HERE:~0,-1%"` |
 | 54 | 静态链 C 桥报 `ld.lld: error: undefined symbol: IID_IFileOpenDialog`（还有 `IID_IUnknown` / `IID_IDropTarget`），出错位置是 `libcjtbridge.a(bridge_win.o):(.refptr.*)` | mingw 下 COM 的 **IID 守卫符号**在 `libuuid.a`（`.refptr` 段是 clang 给 `&IID_xxx` 造的引用），桥的文件对话框/拖放实现引用了它们。链接行照框架 `native/build_win.bat` 补齐 `-lole32 -loleaut32 -luuid -lcomdlg32 -lgdi32 -loleacc -lshlwapi -lshcore`（0.25.0 实测通过）。**"静态化"不是把 `-lxxx` 换成 `.a` 就算完**：桥依赖的 Win32 导入库一件都不能少 |
 | 55 | 想把 cjh 从「随包目录」改成「PE 资源」时，`extractEmbeddedAssets` 明明释放了文件，引擎仍不启用 | 释放 ≠ 可用：`shouldUseExtracted(释放数, SHA256 校验)` 两个条件都要过（校验不过绝不执行，与 §2.3 的 vendor 纪律一致）。另外 `cjhStatusJson` 的 `running` 分支原先**不回投 `binPath`**，界面只看到 `running`、分不清「内嵌释放的那份」与「用户自己起的」——已补纯函数 `knownBinPath` + 单测，`ui_report` 的 `cjhBin` 现在有值可查 |
+| 56 | 写 `var out: Array<String> = []; out.add(x)` → `'add' is not a member of struct 'Array<Struct-String>'` | 仓颉的 **`Array` 是定长**，没有 `add`；要按需追加就用 `ArrayList<T>()` 再 `toArray()`（`HashMap` 也不是 `put`，见第 21 条）。写"拼数组"这类代码前先在仓里搜一眼现有写法 |
+| 57 | 断点/报告里出现「HAP 0 字节」「前端指纹 0 项一致」这类**假数字**，实际落档里字段明明有值 | 读别人写的落档**必须对着 schema 抄字段名**：本项目实测 `hap.json` 是 `hapBytes` 不是 `bytes`、`rawfileCount` 嵌在 `entries` 里、`assetDiff.matched` 是**数组**（用 `arraySizeFieldOf` 取条数，别当整数）。判定与摘要写在同一处时，**失败必须把闸的第一条 `failures` 贴出来**——否则界面只有"失败"两个字，没人知道为什么 |
+| 58 | 断点板里某步"跑过了却永远显示未开始" | 落档位置有历史形态：`t2h:port` 的 `decisions.json` 只在记过人工决策时才写，但改造本身留下 `.lingqu/port/<工程>/` 备份目录。观测规则要**同时认两种证据**（落档文件 or 备份目录），否则断点会一直卡在那一步。同理任何"落档路径"改动都要回看消费方（第 33 条） |
 
 ---
 
