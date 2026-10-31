@@ -5,6 +5,31 @@
 
 ---
 
+## [0.23.0] - 2026-10-31
+
+**主题**：**P6 第一刀 —— 验证与报告的纯函数层**（T6-1 清单推导 / T6-3 可用率 / T6-4 报告渲染）。
+
+### Added
+
+- **`src/verify/verify.cj`**（`lingqu.verify`）：三条口径先钉死，再谈数字
+  - `buildChecklist(ChecklistInput)` —— 功能清单**推导**而非手写：命令 / 事件 / 插件 / 前端 / 平台 API
+    的条数决定出哪些条目（换样本自动跟着变），部署与日志决定判定
+  - `computeStats(items)` —— 可用率 = 通过 ÷ (总数 − **平台限制**)，分母为 0 按 0 处理
+  - `renderMarkdown` / `renderHtml` —— 三段式报告（做了什么 / 没做什么 / 需要你做什么），
+    逐项挂证据；HTML 侧对正文做转义（报告要给外人看，`<script>` 不能当标签）
+  - `verdictLabel` / `CheckItem.toJson` / `VerifyStats.toJson`
+- **7 例新单测**（总 **153**），钉的是口径不是文案：
+  平台限制不计入分母、**未采集 ≠ 通过**（`unknown` 计入分母）、分母为 0 不除零、
+  清单随扫描伸缩（没扫过就只剩 launch/build/hap 三条）、报告三段齐全、HTML 转义
+
+### 未做（本刀的边界，下一步接着做）
+
+- `t2h:verify` **命令**还没接线（要跑 hdc 采截图 / hilog / faultlog，并读 scan·build·hap·deploy 的落档）；
+- ⑥ 屏「功能清单 / 可用率」还是占位示意；⑦ 报告的导出按钮也还没接；
+- T6-5 断点续迁（`.lingqu/tasks.json` + `t2h:resume`）未开工。
+
+---
+
 ## [0.22.0] - 2026-10-31
 
 **主题**：**单文件包** —— 页面与能力清单**编进 exe**，包里不再有 `assets/` 目录
