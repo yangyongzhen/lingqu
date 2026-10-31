@@ -24,6 +24,12 @@
 > `D:\Program Files\Git`，三个候选全不存在 → `shellPath` 指向死路径，spawn 必失败。
 > **没装 Git 也一样**：现在降级 PowerShell（`isBash=false`），并把当前 shell 模式写进
 > `bash` 工具描述 + `features.shell`，让模型与客户端都知道边界。
+>
+> **补记（同一分支第二个 commit）**：改完后 `cjpm build` 报「warning: 2 条」——
+> 真凶是改造后**没人调的私有辅助 `getHomeUser()`**（改用 `%LOCALAPPDATA%` 拼路径）。删掉即
+> **warning: 0 条**。顺手把 `scripts/test_win.ps1` 改成**打印 warning 明细**（只报条数的检查
+> 等于没检查），并把「改完代码必回头查旧调用方」「warning 必须可见明细」写进 cjh AGENTS.md 门禁。
+
 
 >
 > **第 2 条（REST 对话入口）经用户指出后撤回**：产品是桌面 GUI，页面永远在场，WS 通道够用；
