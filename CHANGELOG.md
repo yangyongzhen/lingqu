@@ -5,6 +5,50 @@
 
 ---
 
+## [0.31.0] - 2026-11-01
+
+**主题**：**代码块语法高亮 + AI 回复平铺展开**。0.30.0 把 Markdown 渲染补上了；
+这一轮补齐两块：① 代码块从"等宽纯文本"升级为 hljs 高亮；② 用户裁定"回复正文铺满整栏"，
+assistant 消息去掉头像栏与气泡框，正文从聊天区左边缘起排。
+
+### Added
+
+- **highlight.js v11.9.0 整份内联**（BSD-3-Clause，取自 `cj-tauri/examples/ai-chat` 的
+  `ui/vendor/highlight.min.js`）：页面要被打进单文件 exe（`pack-win-single` 只内联
+  `ui/index.html`），外部 `<script src>` 在单文件产物里会 404，所以必须内联。
+  更新方式写在插入处的注释里（拿 ai-chat 那份整段替换）
+- 代码块高亮：带语言标注按语言、否则 `highlightAuto`；**库缺失/未知语言/词法异常一律退化为
+  `escHtml`**——高亮失败不能把整条回复弄挂
+- 配色不引 vendor 主题：关键字紫 / 字符串橙 / 数字·内建青 / 函数名蓝 / 注释灰（`.hljs-*` 类名由库生成）
+- 页内自检从 12 条 → **16 条**（新增 `hl-keyword` / `hl-string` / `hl-comment` / `hl-unknown-lang`）
+- `ui_report` 新增 `mdHljs`（版面里被切成词法 span 的数量）与右栏版面量尺：
+  `aiDockW / aiBubbleW / aiBubbleGap / aiInnerLeft / aiFlatLeft / aiAvatars / aiAvatarsShown / aiLastHtml`
+
+### Changed（版面：平铺展开，用户裁定 A）
+
+- `.msg:not(.me)`：头像栏隐藏、气泡框（背景/边框/内边距/圆角）全部去掉，正文贴聊天区左边缘；
+  **用户自己发的消息仍保留气泡**（"我说的话"要和"AI 说的话"一眼区分）
+- Markdown 表格 `width:100%`：能放下时撑满整栏，放不下时外层 `.tbl` 横向滚动
+
+### 证据（本机 Windows x64，`LINGQU_UI_PROBE=md`，cjh 真实回复）
+
+```
+渲染：mdOk=true mdFail=""（16 条自检全过，含 4 条高亮）
+      mdBlocks=4（h2 + ol + table + pre）  mdCodeCopy=1（复制按钮）  mdHljs=6（代码块里 6 段词法）
+版面：aiDockW=372 aiBubbleW=299→333（多给内容 34px） aiBubbleGap=24
+      aiFlatLeft=14（= 聊天区 padding，回复贴左边缘；改前是 14+25+9=48）
+      aiAvatarsShown=0（头像栏已隐藏，DOM 里仍有 5 个节点但宽度为 0）
+      errorCount=0 tag=probe-done
+```
+
+### 未做（如实）
+
+- 用户自己的消息不渲染 Markdown（保持纯文本，避免"我打的星号被吃掉"）
+- 高亮只影响代码块；行内 `code` 按统一配色，不做语言识别
+- 内联 hljs 让 `ui/index.html` 从 ~187 KB 涨到 ~310 KB（单文件 exe 里可忽略；dev 加载同样走同一份）
+
+---
+
 ## [0.30.0] - 2026-11-01
 
 **主题**：**AI 回复的 Markdown 渲染**——气泡一直是 `textContent = acc` 塞纯文本，

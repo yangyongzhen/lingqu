@@ -1047,6 +1047,18 @@ public class UiReportCommand <: CommandHandler {
         o.put("mdFail", JsonString(argStr(args, "mdFail", "")))
         o.put("mdBlocks", JsonInt(argInt(args, "mdBlocks", 0)))
         o.put("mdCodeCopy", JsonInt(argInt(args, "mdCodeCopy", 0)))
+        // 语法高亮（hljs）：版面里被切成词法 span 的数量（0 = 库在但没生效）
+        o.put("mdHljs", JsonInt(argInt(args, "mdHljs", 0)))
+        // 右栏版面量尺：气泡是否铺满可用宽度（aiBubbleGap 正常≈聊天区 padding 14px）
+        o.put("aiDockW", JsonInt(argInt(args, "aiDockW", 0)))
+        o.put("aiBubbleW", JsonInt(argInt(args, "aiBubbleW", 0)))
+        o.put("aiBubbleGap", JsonInt(argInt(args, "aiBubbleGap", -1)))
+        o.put("aiInnerLeft", JsonInt(argInt(args, "aiInnerLeft", -1)))
+        o.put("aiLastHtml", JsonString(argStr(args, "aiLastHtml", "")))
+        // 「平铺展开」：aiFlatLeft≈0（回复贴聊天区左边缘）、aiAvatarsShown=0（头像栏已隐藏）
+        o.put("aiFlatLeft", JsonInt(argInt(args, "aiFlatLeft", -1)))
+        o.put("aiAvatars", JsonInt(argInt(args, "aiAvatars", 0)))
+        o.put("aiAvatarsShown", JsonInt(argInt(args, "aiAvatarsShown", 0)))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
