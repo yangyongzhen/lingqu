@@ -323,19 +323,15 @@ public class ScanCommand <: CommandHandler {
         let scan = scanProject(path, blOpt)
         let json = scan.toJson()
 
-        let outDir = ".lingqu/scan"
-        let outFile = "${outDir}/${name}.json"
+        // 落档跟着工程走（0.38.0）：写进 `<工程>/.lingqu/scan/`，agent（cwd=工程）与界面看到同一份
+        let outDir = lqDirOf(path) + cjhPathSep() + "scan"
+        let outFile = outDir + cjhPathSep() + name + ".json"
         var wrote = false
         // 写盘失败必须能被看见：eprintln 在 GUI 里会被框架日志接管（AGENTS §4 第 14 条），
         // 只打日志等于没证据 —— 所以把原因塞进返回值，页面和 ui_report 都能断言。
         var outErr = ""
         try {
-            if (!exists(Path(".lingqu"))) {
-                Directory.create(Path(".lingqu"))
-            }
-            if (!exists(Path(outDir))) {
-                Directory.create(Path(outDir))
-            }
+            ensureDirOf(outDir)
             File.writeTo(outFile, json.toJsonString().toArray())
             wrote = true
         } catch (e: Exception) {
@@ -512,7 +508,7 @@ public class DecisionsCommand <: CommandHandler {
  * "为什么失败"必须是同一句话（AGENTS §4-33）。
  */
 func stepBriefOf(projName: String, path: String, step: String, logLines: Int64): StepBrief {
-    let obs = observeTaskStep(projName, step)
+    let obs = observeTaskStepAt(projName, step, path)
     let b = StepBrief()
     b.project = projName
     b.projectDir = path
@@ -579,7 +575,7 @@ public class AiBriefCommand <: CommandHandler {
             name = "project"
         }
         let safe = sanitizeFileName(name)
-        let obs = observeTaskStep(safe, step)
+        let obs = observeTaskStepAt(safe, step, path)
         let asked = argInt(args, "logLines", ASK_LOG_TAIL_LINES)
         let b = stepBriefOf(safe, path, step, asked)
         // 提问里用的工程名是原始名（路径末段），落档目录用的是净化名——两者都要给的场合分开写
@@ -3425,7 +3421,7 @@ func runMigrateChain(path: String, applyPort: Bool): Unit {
         if (step == "sign") {
             releaseMode = signModeOf(proj)
         }
-        let obs = observeTaskStep(proj, step)
+        let obs = observeTaskStepAt(proj, step, path)
         row.ran = obs.exists
         row.ok = obs.exists && obs.ok
         row.note = obs.note
@@ -3748,7 +3744,7 @@ public class AutoPortStartCommand <: CommandHandler {
         // ---- ② 当前落档（让 AI 一上手就知道从哪继续）----
         let rows = ArrayList<MigrateRow>()
         for (step in MIGRATE_STEPS) {
-            let obs = observeTaskStep(safe, step)
+            let obs = observeTaskStepAt(safe, step, path)
             let row = MigrateRow()
             row.step = step
             row.title = taskStepTitle(step)
@@ -3865,7 +3861,7 @@ public class AutoPortStatusCommand <: CommandHandler {
         }
         let rows = ArrayList<MigrateRow>()
         for (step in MIGRATE_STEPS) {
-            let obs = observeTaskStep(name, step)
+            let obs = observeTaskStepAt(name, step, path)
             let row = MigrateRow()
             row.step = step
             row.title = taskStepTitle(step)

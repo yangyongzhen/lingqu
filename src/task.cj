@@ -102,20 +102,38 @@ public func taskStepIds(): Array<String> {
 }
 
 /**
+ * 步骤落档的**相对路径**（不含 `.lingqu/` 前缀）：`scan/<工程>.json`；`port` 特殊为
+ * `port/<工程>/decisions.json`。
+ *
+ * 为什么要单独一个函数（0.38.0）：落档位置正在从「CWD 的 `.lingqu/`」迁到「工程的 `.lingqu/`」，
+ * 产出方与消费方必须共用同一份相对路径，否则迁移期一定各写各的（AGENTS §4-33）。
+ */
+public func taskArtifactRelPath(projName: String, stepId: String): String {
+    if (taskStepIndex(stepId) < 0) {
+        return ""
+    }
+    if (stepId == "port") {
+        return "port/${projName}/decisions.json"
+    }
+    return "${stepId}/${projName}.json"
+}
+
+/**
  * 步骤的落档路径（纯字符串拼接）。
  *
  * 约定与本仓其它命令一致：`.lingqu/<步骤 id>/<工程名>.json`。
  * `port` 是历史例外：它的落档在**目录**里（`.lingqu/port/<工程>/decisions.json`），
  * 因为改造要按文件逐份备份（见 AGENTS §4-33 的教训：路径变了消费方必须跟着变）。
+ *
+ * 注意（0.38.0）：这个函数给的是**旧形态（相对 CWD）**。读落档请用
+ * `resolveLqPath(工程路径, taskArtifactRelPath(...))` —— 工程优先、CWD 兜底。
  */
 public func taskArtifactPath(projName: String, stepId: String): String {
-    if (taskStepIndex(stepId) < 0) {
+    let rel = taskArtifactRelPath(projName, stepId)
+    if (rel == "") {
         return ""
     }
-    if (stepId == "port") {
-        return ".lingqu/port/${projName}/decisions.json"
-    }
-    return ".lingqu/${stepId}/${projName}.json"
+    return ".lingqu/" + rel
 }
 
 /** 一步的状态记录 */

@@ -5,6 +5,48 @@
 
 ---
 
+## [0.38.0] - 2026-11-01
+
+**主题**：**落档跟着工程走（第 1~2 步：底座 + 第一个命令）** —— 让 agent 与界面看**同一份**落档。
+
+### 为什么
+
+0.37.2 实测暴露：界面/命令跑出的落档在**灵渠应用目录**（`<lingqu>/.lingqu/`），而 agent（cjh）
+的 cwd 是**目标工程**（`<project>/`）→ 它看不见落档；我们注入的 AGENTS.md 却写"落在本工程的
+`.lingqu/` 下"——**与事实不符**（agent 原话：'`.lingqu/` 里只有任务书本身，没有任何落档 JSON'）。
+这是"AI 能自己判断下一步"的前提，必须修。
+
+### Added
+
+- `src/workdir.cj`（纯函数 + 4 条单测，243 例）：
+  - `lqDirOf(工程路径)` → `<工程>/.lingqu`（空路径退回 `.lingqu`，末尾分隔符归一，不会拼出 `x//.lingqu`）
+  - `lqPathOf(工程路径, rel)` → `<工程>/.lingqu/<rel>`
+  - **`resolveLqPath(工程路径, rel)` → 工程优先、CWD 兜底**（迁移期新旧落档都能读到，不丢证据）
+  - `lqIsProjectScoped(path, 工程路径)` —— 报告里标注口径用
+- `taskArtifactRelPath(projName, stepId)`：落档的**相对路径**单点定义（`taskArtifactPath` 改为
+  调它 + `.lingqu/` 前缀，保持旧行为），产出方与消费方从此共用一份（AGENTS §4-33）
+- `observeTaskStepAt(projName, stepId, 工程路径)`：读侧双查；旧签名 `observeTaskStep` 保留并委托
+- 单测故意**不依赖分隔符**（Windows `\` / Linux `/` 都过）：钉的是"拼对了、优先级对了"
+
+### Changed（迁移进度：12 个产出者里已完成 1 个）
+
+| 步骤 | 命令 | 状态 |
+|---|---|---|
+| **1** | **底座 `workdir.cj` + 单测** | ✅ 完成 |
+| **2** | **`t2h:scan`（写侧改工程内）** | ✅ 完成，实测 `out = E:\test\rust\habit-tree\.lingqu\scan\habit-tree.json` |
+| 2 | `t2h:deps` / `port` / `build` / `hap` / `sign` / `deploy` / `verify` / `report` / `batch` / `resume(tasks.json)` / `migrate(结果卡)` | ⏳ 待迁（每个命令一次门禁） |
+| 3 | 读侧（`collectTaskBoard`、`migrate` / `autoport_status` / `stepBriefOf` 已切 `observeTaskStepAt`） | ✅ 主链路已切 |
+| 4 | AGENTS.md 文案去掉"本工程"、写准确路径 | ⏳ 待做（**现在这句还是错的**） |
+| 5 | `resolveLqPath` 的 CWD 兜底删除 | ⏳ 待全部迁完后 |
+
+### 证据
+
+```
+门禁：五道闸全绿 build-biz:PASS test:PASS(TOTAL=243) check:PASS build-app:PASS build-cli:PASS
+lingqu-cli scan --path E:\test\rust\habit-tree
+  → out = E:\test\rust\habit-tree\.lingqu\scan\habit-tree.json（文件存在）
+```
+
 ## [0.37.3] - 2026-11-01
 
 **主题**：把 0.37.2 那个坑**从上游堵掉**——cjh 的 WS 读侧不再静默丢弃超限帧。

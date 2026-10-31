@@ -80,18 +80,24 @@ public func deployNoteOf(installed: Bool, started: Bool, hilogLines: Int64, hilo
 /**
  * 读一步的落档并给出「在不在 / 过没过 / 一句摘要」。
  *
+ * `projectPath` 非空时按新口径（工程优先、CWD 兜底）找落档；空串退回旧形态。
  * 摘要（note）是给人看的一句话证据，界面与报告直接引用；取不到就给空串，不编造。
  */
-func observeTaskStep(projName: String, stepId: String): StepObservation {
+func observeTaskStepAt(projName: String, stepId: String, projectPath: String): StepObservation {
     let obs = StepObservation()
-    obs.artifact = taskArtifactPath(projName, stepId)
-    if (obs.artifact == "" || !exists(Path(obs.artifact))) {
+    let rel = taskArtifactRelPath(projName, stepId)
+    if (rel == "") {
+        return obs
+    }
+    obs.artifact = resolveLqPath(projectPath, rel)
+    if (!exists(Path(obs.artifact))) {
         // 规则改造的历史形态：decisions.json 只在"记过人工决策"时才写，但改造本身
         // 会留下 `.lingqu/port/<工程>/` 目录（逐文件备份）。目录在就说明改造跑过，
         // 否则"改造过了却永远显示未开始"，断点会一直停在这一步。
         if (stepId == "port") {
-            let dir = ".lingqu/port/${projName}"
-            if (exists(Path(dir))) {
+            let dir = lqDirOf(projectPath) + cjhPathSep() + "port" + cjhPathSep() + projName
+            let legacyDir = ".lingqu/port/${projName}"
+            if (exists(Path(dir)) || exists(Path(legacyDir))) {
                 obs.exists = true
                 obs.ok = true
                 obs.note = "已应用改造（有备份，未记人工决策）"
@@ -108,6 +114,11 @@ func observeTaskStep(projName: String, stepId: String): StepObservation {
             obs.note = "落档无法解析"
     }
     return obs
+}
+
+/** 旧签名（只认 CWD 落档）；新代码请用 `observeTaskStepAt` 并把工程路径带上 */
+func observeTaskStep(projName: String, stepId: String): StepObservation {
+    return observeTaskStepAt(projName, stepId, "")
 }
 
 /** 按步骤种类取判定与摘要（各命令的落档 schema：scan/deps/port/build/hap/sign/deploy/verify v1） */
@@ -219,7 +230,7 @@ public func collectTaskBoard(projName: String, projPath: String, now: String): T
     }
     board.updatedAt = now
     for (s in board.steps) {
-        let obs = observeTaskStep(projName, s.id)
+        let obs = observeTaskStepAt(projName, s.id, projPath)
         s.status = reconcileStepStatus(s.status, obs.exists, obs.ok)
         s.artifact = obs.artifact
         if (obs.note != "") {
