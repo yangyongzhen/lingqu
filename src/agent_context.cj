@@ -40,11 +40,22 @@ public func agentContextPathOf(projDir: String): String {
  * （"平台限制不算失败""未验证 ≠ 通过"这两条最容易让模型编假结论）。
  */
 public func agentContextBody(projName: String, projDir: String): String {
+    return agentContextBodyWith(projName, projDir, "")
+}
+
+/**
+ * 区块正文（带工具绝对路径的版本，0.38.2）。
+ *
+ * `cliPath` 非空时把 `lingqu-cli` 的**绝对路径**写进正文——agent 的 bash cwd 是**目标工程**，
+ * 相对路径（`cli\target\...`）在那里根本不存在（AGENTS §4-70 的教训）。
+ */
+public func agentContextBodyWith(projName: String, projDir: String, cliPath: String): String {
     var text = "## 这个工程正在用「灵渠迁移台」做 Tauri → 鸿蒙 PC 迁移\n\n"
-    text += "工程：`${projName}`　工程根：`${projDir}`（工作目录就是这里）。\n"
-    text += "所有工具结果都落在本工程的 `.lingqu/` 下，**先读落档再下结论**，别凭印象推断。\n\n"
+    text += "工程：`${projName}`　工程根：`${projDir}`（你的工作目录就是这里）。\n"
+    text += "落档在**本工程根**的 `.lingqu/` 下（不是灵渠应用目录）：`${projDir}/.lingqu/<步骤>/`。\n"
+    text += "**先读落档再下结论**，别凭印象推断；落档写着通过才算通过，命令退出码 0 不算。\n\n"
     text += "### 可用的落档（只读，先看这里）\n\n"
-    text += "| 落档 | 内容 |\n|---|---|\n"
+    text += "| 落档（相对工程根） | 内容 |\n|---|---|\n"
     text += "| `.lingqu/scan/${projName}.json` | 扫描画像：五类清单、评分、覆盖率、阻塞项 |\n"
     text += "| `.lingqu/deps/${projName}.json` | Cargo 依赖矩阵：兼容/需 patch/不可用 |\n"
     text += "| `.lingqu/build/${projName}.json` | 交叉编译：退出码、诊断、**前端指纹比对** |\n"
@@ -52,22 +63,41 @@ public func agentContextBody(projName: String, projDir: String): String {
     text += "| `.lingqu/sign/${projName}.json` | 签名体检：UDID、材料、**debug/release 两态** |\n"
     text += "| `.lingqu/deploy/${projName}.json` | 真机部署：装/启/hilog |\n"
     text += "| `.lingqu/verify/${projName}.json` | 功能清单 + 可用率 + 证据 |\n"
-    text += "| `.lingqu/tasks.json` | 8 步断点板（当前停在哪一步） |\n"
-    text += "| `.lingqu/report/${projName}.md` | 三段式迁移报告 |\n\n"
-    text += "### 工具（CLI 可直接跑；界面上的按钮是同一份实现）\n\n"
-    text += "在工程目录里跑，结果既打印 JSON、也落工程自己的 `.lingqu/`：\n\n"
-    text += "```bash\n"
-    text += "lingqu-cli resume --path .            # 先看停在 8 步的哪一步\n"
-    text += "lingqu-cli scan   --path .            # 扫描画像\n"
-    text += "lingqu-cli deps   --path .            # 依赖矩阵\n"
-    text += "lingqu-cli port   --path .            # 规则改造（预览；apply 才落盘）\n"
-    text += "lingqu-cli build  --path .            # 交叉编译（--verifyOnly 只比前端指纹）\n"
-    text += "lingqu-cli hap    --path .            # 装配 HAP\n"
-    text += "lingqu-cli sign   --path .            # 签名体检（--apply 写回 signingConfigs）\n"
-    text += "lingqu-cli deploy --path .            # 真机装启 + hilog\n"
-    text += "lingqu-cli verify --path .            # 采证 + 功能清单 + 可用率\n"
-    text += "lingqu-cli report --path .            # 三段式迁移报告\n"
-    text += "```\n\n"
+    text += "| `.lingqu/port/${projName}/decisions.json` | 人工决策留痕（采纳/忽略） |\n"
+    text += "| `.lingqu/report/${projName}.md` | 三段式迁移报告 |\n"
+    text += "| `.lingqu/migrate/${projName}.md` | 上一次一键迁移的结果卡 |\n"
+    text += "| `.lingqu/<步骤>/${projName}.log` | 该步骤的原始日志（build/hap/sign/deploy/verify 有） |\n\n"
+    text += "（8 步断点板 `.lingqu/tasks.json` 在**灵渠应用目录**，跨工程共用；用 `resume` 命令读它即可。）\n\n"
+    text += "### 工具（在工程根直接跑；界面上的按钮是同一份实现）\n\n"
+    if (cliPath.size > 0) {
+        text += "入口（绝对路径，路径有空格就整条加双引号）：`${cliPath}`\n\n"
+        text += "```bash\n"
+        text += "${cliPath} resume --path .            # 先看停在 8 步的哪一步\n"
+        text += "${cliPath} scan   --path .            # 扫描画像\n"
+        text += "${cliPath} deps   --path .            # 依赖矩阵\n"
+        text += "${cliPath} port   --path . --apply    # 规则改造（会改源码，逐文件留 .bak，可回滚）\n"
+        text += "${cliPath} build  --path .            # 交叉编译（--verifyOnly 只比前端指纹）\n"
+        text += "${cliPath} hap    --path .            # 装配 HAP\n"
+        text += "${cliPath} sign   --path .            # 签名体检（--apply 写回 signingConfigs）\n"
+        text += "${cliPath} deploy --path .            # 真机装启 + hilog\n"
+        text += "${cliPath} verify --path .            # 采证 + 功能清单 + 可用率\n"
+        text += "${cliPath} report --path .            # 三段式迁移报告\n"
+        text += "```\n\n"
+    } else {
+        text += "在工程目录里跑（`lingqu-cli` 不在 PATH 时找应用要绝对路径）：\n\n"
+        text += "```bash\n"
+        text += "lingqu-cli resume --path .            # 先看停在 8 步的哪一步\n"
+        text += "lingqu-cli scan   --path .            # 扫描画像\n"
+        text += "lingqu-cli deps   --path .            # 依赖矩阵\n"
+        text += "lingqu-cli port   --path .            # 规则改造（预览；apply 才落盘）\n"
+        text += "lingqu-cli build  --path .            # 交叉编译（--verifyOnly 只比前端指纹）\n"
+        text += "lingqu-cli hap    --path .            # 装配 HAP\n"
+        text += "lingqu-cli sign   --path .            # 签名体检（--apply 写回 signingConfigs）\n"
+        text += "lingqu-cli deploy --path .            # 真机装启 + hilog\n"
+        text += "lingqu-cli verify --path .            # 采证 + 功能清单 + 可用率\n"
+        text += "lingqu-cli report --path .            # 三段式迁移报告\n"
+        text += "```\n\n"
+    }
     text += "规则：**先 `resume` 看停在哪步，再跑那一步**；" +
         "判断「能不能用」只认 `verify` 的落档，不要拿 `build` 通过就宣称可用。\n\n"
     text += "### 口径（说结论时必须遵守，否则会误导人）\n\n"

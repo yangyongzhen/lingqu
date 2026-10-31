@@ -3161,7 +3161,8 @@ public class AgentContextCommand <: CommandHandler {
             if (projDir == "" || !exists(Path(projDir))) {
                 error = "要传工程路径（path），或置 LINGQU_AGENT_PATH——工程目录不存在就写不了上下文"
             } else {
-                let body = agentContextBody(projName, projDir)
+                // 带工具绝对路径：agent 的 cwd 是目标工程，相对路径在那里不存在（AGENTS §4-70）
+                let body = agentContextBodyWith(projName, projDir, resolveCliExe())
                 let merged = injectAgentBlock(existed, body)
                 try {
                     // 覆盖前留 .bak（用户原有内容万一被误改，能救回来）

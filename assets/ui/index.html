@@ -5747,6 +5747,18 @@ withBridge(function(tauri){
       setTimeout(function(){ reportUi('probe-ai-mid'); }, 60000);
       setTimeout(function(){ reportUi('probe-ai-done'); }, 150000);
     }
+    // ⓪-半自动实证：④ 屏「🤖 交给 AI 改造」= scope=port（只改改造这一步，做完停下）
+    if (mode === 'ai-port') {
+      window.__probePath = 'E:/test/rust/habit-tree';
+      setTimeout(function(){
+        if ($('migratePath')) { $('migratePath').value = 'E:/test/rust/habit-tree'; }
+        if ($('portPath')) { $('portPath').value = 'E:/test/rust/habit-tree'; }
+        startAiPortScope('port');
+      }, 2600);
+      setTimeout(function(){ reportUi('probe-ai-port-early'); }, 20000);
+      setTimeout(function(){ reportUi('probe-ai-port-mid'); }, 90000);
+      setTimeout(function(){ reportUi('probe-ai-port-done'); }, 200000);
+    }
     // ⓪-二分：**切完工作区后只发短句**。用来分离两个变量：
     //   短句有回 → 问题在"长任务书"（帧长度）；短句也没回 → 问题在"workspaces/switch 之后的会话状态"
     if (mode === 'ai-short') {
