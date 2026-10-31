@@ -28,7 +28,7 @@ public func testProjectNameOfHandlesWindowsSeparator(): Unit {
     // 没有分隔符：整串就是名字
     @Expect(projectNameOf("habit-tree"), "habit-tree")
     // 末尾带分隔符：末段为空，由调用方回退到默认名
-    @Expect(projectNameOf("E:\\test\\habit-tree\\"), "")
+    @Expect(projectNameOf("E:\\test\\habit-tree\\"), "habit-tree")
 }
 
 @Test

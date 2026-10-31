@@ -5,6 +5,32 @@
 
 ---
 
+## [0.39.3] - 2026-11-01
+
+**主题**：修 `--path .` 让落档名变成 `.`（0.39.2 实测暴露，`..json` 那种）。
+
+### 现象与根因
+
+agent 按我们的任务书在**工程根**用 `--path .` 跑 `lingqu-cli build`，落档写成
+`..json / ..jsonl / ..log`。根因：`projectNameOf(".")` 把 `"."` 原样当名字，
+`sanitizeFileName` 再清成空串。而「在工程根用 `--path .`」正是我们自己教它的写法。
+
+### 处置
+
+- `src/scanner/scan.cj` 新增**纯函数** `projectNameOfPath(path, cwd)`（cwd 注入，可单测）：
+  `"."` → cwd 末段；`".."` → cwd 父目录末段；`"./x"` → `x`；绝对路径照旧取末段；
+  末尾分隔符归一（顺带修了旧契约"末尾带分隔符返回空串"——现在返回名字）
+- `projectNameOf` 改为先按 cwd 解析、拿不到 cwd 才退回旧逻辑（不崩）
+- 单测 `src/tests/project_name_test.cj`（3 例）：`.`/`./`/空串/反斜杠 cwd/`..`/相对子路径/绝对路径，
+  外加一条"退化输入不许返回 `.` 或空串"的兜底断言（252 例全绿）
+
+### 证据
+
+```
+在工程根： lingqu-cli build --path . --verifyOnly
+  outJson = .lingqu\build\m3u8dl-tauri.json        ← 正确名字（修前是 ..json）
+  .lingqu/build/ 下：m3u8dl-tauri.{json,jsonl,log}
+```
 ## [0.39.2] - 2026-11-01
 
 **主题**：**第一次让 AI 全自动迁一个从没迁过的样本**（`m3u8dl-tauri`，此前只有 scan/deps）。跑通 4 步，卡在两个新缺陷上（都已定位）。

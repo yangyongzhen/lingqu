@@ -2,6 +2,7 @@ package lingqu.scanner
 
 import std.collection.*
 import std.fs.*
+import std.env.*
 import stdx.encoding.json.*
 
 /*
@@ -955,7 +956,106 @@ public func cargoDepVersion(cargoText: String, dep: String): String {
  * 所以两种分隔符都要认，取**最后出现的那个**。
  * 末尾带分隔符时返回空串，由调用方回退到默认名。
  */
+/** 去掉末尾分隔符（纯函数） */
+func nameStripTail(p: String): String {
+    var s = p.trimAscii()
+    while (s.size > 0 && (s.endsWith("/") || s.endsWith("\\"))) {
+        s = s[0..(s.size - 1)]
+    }
+    return s
+}
+
+/** 路径最后一段（纯函数；空串给空串） */
+func nameLastSegment(p: String): String {
+    let s = nameStripTail(p)
+    if (s.size == 0) {
+        return ""
+    }
+    var cut: Int64 = -1
+    match (s.lastIndexOf("/")) {
+        case Some(i) => cut = i
+        case None => ()
+    }
+    match (s.lastIndexOf("\\")) {
+        case Some(i) => if (i > cut) { cut = i } else { () }
+        case None => ()
+    }
+    if (cut < 0) {
+        return s
+    }
+    return s[(cut + 1)..s.size]
+}
+
+/** 相对路径判据（纯函数）：无盘符、不以分隔符开头 */
+public func nameIsRelPath(p: String): Bool {
+    let s = p.trimAscii()
+    if (s.size == 0) {
+        return true
+    }
+    if (s.startsWith("/") || s.startsWith("\\")) {
+        return false
+    }
+    if (s.size >= 2 && s[1] == 58) {
+        return false   // ':' → 盘符
+    }
+    return true
+}
+
+/**
+ * 工程名解析（**纯函数**，cwd 由调用方注入，便于单测）。
+ *
+ * 0.39.2 的坑：agent 按我们的任务书用 `--path .` 跑，旧实现把 `"."` 原样当名字
+ * （再被 sanitizeFileName 清成空串）→ 落档写成 `..json`。这里按 cwd 解析相对路径：
+ *   `"."` → cwd 末段；`".."` → cwd 的上一级末段；`"./x"` → `x`；绝对路径照旧取末段。
+ */
+public func projectNameOfPath(path: String, cwd: String): String {
+    let p = nameStripTail(hostPathOf(path))
+    let base = nameStripTail(hostPathOf(cwd))
+    if (p.size == 0 || p == ".") {
+        return nameLastSegment(base)
+    }
+    if (p == "..") {
+        // 取 base 的父目录末段（先砍掉 base 自己的末段）
+        let own = nameLastSegment(base)
+        if (own.size == 0 || base.size <= own.size) {
+            return nameLastSegment(base)
+        }
+        return nameLastSegment(base[0..(base.size - own.size - 1)])
+    }
+    if (!nameIsRelPath(p)) {
+        let seg = nameLastSegment(p)
+        if (seg.size == 0 || seg == "." || seg == "..") {
+            return nameLastSegment(base)
+        }
+        return seg
+    }
+    // 相对路径：按 cwd 拼再取末段（消化 `./` 与 `..` 这类段）
+    let seg2 = nameLastSegment(base + "/" + p)
+    if (seg2.size == 0 || seg2 == "." || seg2 == "..") {
+        return nameLastSegment(base)
+    }
+    return seg2
+}
+
+/** 宿主路径归一（纯函数，仅把 `\` 统一成 `/`；不碰盘符） */
+func hostPathOf(p: String): String {
+    return p.trimAscii().replace("\\", "/")
+}
 public func projectNameOf(path: String): String {
+    // 0.39.2 修：`--path .` 曾把名字取成 `"."`（再被 sanitize 清成空串 → 落档写成 `..json`）。
+    // 我们的 AGENTS.md 正是教 agent 在工程根用 `--path .`，所以这里必须把相对路径按 cwd 解析。
+    var cwd = ""
+    try {
+        cwd = getWorkingDirectory().toString()
+    } catch (e: Exception) {
+        let _ = e
+    }
+    if (cwd.size > 0) {
+        let n = projectNameOfPath(path, cwd)
+        if (n.size > 0) {
+            return n
+        }
+    }
     var cut: Int64 = -1
     match (path.lastIndexOf("/")) {
         case Some(i) => cut = i
