@@ -5,6 +5,62 @@
 
 ---
 
+## [0.29.0] - 2026-11-01
+
+**主题**：**P7 开工 —— T7-3 5 样本迁移矩阵**：把每个样本自己的落档并排成一张表
+（评分 / 依赖 / 编译 / 装配 / 签名态 / 部署 / 可用率 / 8 步 / 人工介入 / 判定），
+A1/A3/A4 三个验收指标在矩阵层有了直接读数。
+
+### Added
+
+- **命令 `t2h:batch`**（三处联动齐全）：`samples`（`路径1|路径2`，也认逗号）缺省时按
+  `.lingqu` 下出现过的工程名收集 → 落 `.lingqu/batch/matrix.{md,html,json}`（`lingqu/batch/v1`）
+- `src/batch/batch.cj`（纯函数层，`lingqu.batch`）：
+  - `batchVerdict`（达标 ≥80 / 未达标 / **未验证**）、`batchCompletion`、
+    `summarize`（样本数 / 已验证数 / 平均可用率 / 平均评分 / A3 人工介入 / A1·A4 判定）
+  - `batchRowCells` + `batchHeaders`（12 列，表头与单元格共用一份口径）、
+    `renderMatrixMarkdown` / `renderMatrixHtml`、`summaryLine`
+- `src/batch_feed.cj`：逐样本读自己的落档汇总成一行（**只读盘**，不影响任何样本）
+- ⑦ 屏新增「5 样本迁移矩阵」卡：样本路径输入 + 生成按钮 + 12 列横向滚动表 + 汇总与 A1/A4 判定
+- `ui_report` 新增 `batchOk/batchSamples/batchVerified/batchAvgRate/batchAvgScore/batchHuman/`
+  `batchA4/batchA1/batchHtml/batchRows/batchA4Rows`；探针 `LINGQU_BATCH_SAMPLES`
+- `docs/5样本矩阵-实测.md`：把本机实测矩阵原样留档
+
+### 口径（矩阵说错话比没有矩阵更糟）
+
+| 情形 | 矩阵里怎么写 | 为什么 |
+|---|---|---|
+| 没有落档 | 该列写「未跑」，**不参与任何平均** | 未验证 ≠ 0 分（把没跑算成 0 会让平均凭空变低），也 ≠ 通过 |
+| 跑了但没过 | 「未过」 | 与「未跑」必须分开——否则人分不清"还没做"和"做了不行" |
+| 0 个已验证样本 | 平均可用率 `-1`（界面显示 `—`）、A4 判未达标 | "没验"不能算"通过" |
+
+### 证据（本机 Windows x64，2026-11-01，5 个真实样本）
+
+```
+LINGQU_BATCH_SAMPLES=E:\test\rust\habit-tree|E:\test\rust\cc-switch-harmonyos|
+                    E:\test\rust\m3u8dl-tauri|E:\test\rust\atomMqtt|E:\test\rust\tauri-mqtt-client-ohos
+汇总：样本 5 个（已验证 1 个）｜平均评分 66｜平均可用率 60%｜人工介入 0 处（均 0.0 处/应用）
+
+| 样本 | 评分 | 单元/未知 | 依赖 | 编译 | 装配 | 签名态 | 部署 | 可用率 | 8步 | 人工 | 判定 |
+| habit-tree | 63 | 24 / 未知 0 | 430 包 / 不可用 10 | 未过 | 通过 | debug | 成功 | 60%（3/5） | 6/8（75%） | 0 | 未达标 |
+| cc-switch-harmonyos | 58 | 320 / 未知 0 | 724 包 / 不可用 11 | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 2/8（25%） | 0 | 未验证 |
+| m3u8dl-tauri | 77 | 11 / 未知 0 | 602 包 / 不可用 11 | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 2/8（25%） | 0 | 未验证 |
+| atomMqtt | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 0/8（0%） | 0 | 未验证 |
+| tauri-mqtt-client-ohos | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 未跑 | 0/8（0%） | 0 | 未验证 |
+
+ui_report：batchOk=true batchSamples=5 batchVerified=1 batchAvgRate=60 batchAvgScore=66
+           batchHuman=0 batchA4=false batchA1=false batchRows=5 errorCount=0
+```
+
+### 未做（如实）
+
+- **A1 未达成（1/5 验证）**：cc-switch-harmonyos 与 m3u8dl-tauri 只跑了扫描 + 依赖，
+  编译/装配/签名/部署/验证都没跑；atomMqtt 与 tauri-mqtt-client-ohos 一行落档都没有。
+  下一轮按样本逐个推（每个样本的构建链以分钟计）
+- 矩阵暂无"耗时"列（落档不记每步耗时，需改各命令 schema）；T7-4 基线实验与 T7-5 消融未开工
+
+---
+
 ## [0.28.0] - 2026-11-01
 
 **主题**：**T5-4 签名两态（debug / release）+ 上架前强提醒**——P5 的最后一块。

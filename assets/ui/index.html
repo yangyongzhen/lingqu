@@ -249,6 +249,18 @@ tbody tr:hover td{background:var(--panel2)}
 .signsteps b{color:var(--fg);font-weight:600}
 .signsteps .n{display:inline-block;min-width:16px;color:var(--acc)}
 
+/* 5 样本矩阵（T7-3）：12 列，横向滚动而不是压缩列宽——
+   压窄会让"未跑/未达标"这类判定看不清，宁可让人横向拖（同 verify 清单的排版纪律） */
+.batchtable{width:100%;border-collapse:collapse;font-size:11.5px;min-width:900px}
+.batchtable th,.batchtable td{border-bottom:1px solid rgba(38,44,59,.55);padding:5px 7px;
+  text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
+.batchtable th{color:var(--dim);font-weight:600;font-size:11px}
+.batchtable tr:last-child td{border-bottom:0}
+.batchtable .v-ok{color:var(--ok)}
+.batchtable .v-na{color:var(--dim)}
+.batchtable .v-warn{color:var(--warn)}
+.batchtable .v-err{color:var(--err)}
+
 .note{font-size:11.5px;color:var(--dim);background:var(--panel2);border:1px dashed var(--line);
   border-radius:10px;padding:10px 13px;margin-top:13px}
 .note b{color:var(--fg)}
@@ -750,6 +762,28 @@ body.ai-hidden .ai-show{display:block}
           <div class="sethint" id="rpPaths">还没导出——点「生成迁移报告」会同时写 MD / HTML / JSON 三份。</div>
           <div class="mono small" style="margin-top:8px;line-height:1.9" id="rpArtifacts"></div>
         </div>
+        <div class="card">
+          <div class="card-h">
+            <h3>5 样本迁移矩阵（T7-3）</h3>
+            <span class="right"><button class="btn primary" id="btnBatch" title="按每个样本自己的 .lingqu 落档并排出矩阵 → .lingqu/batch/matrix.{md,html,json}">生成矩阵</button></span>
+          </div>
+          <div class="acts-row" style="margin:0 0 8px">
+            <input id="batchSamples" class="mono" placeholder="5 个样本路径，用 | 分隔（留空 = 用 .lingqu 里出现过的工程）" style="flex:1 1 320px;min-width:220px">
+          </div>
+          <div class="sethint" id="batchSum">还没生成——每个样本先各自跑一遍流程才有数据；没跑的样本会显示「未跑」且不参与平均。</div>
+          <div style="overflow-x:auto;margin-top:8px">
+            <table class="batchtable">
+              <thead><tr>
+                <th>样本</th><th>评分</th><th>单元 / 未知</th><th>依赖</th><th>编译</th><th>装配</th>
+                <th>签名态</th><th>部署</th><th>可用率（通过/分母）</th><th>8 步</th><th>人工介入</th><th>判定</th>
+              </tr></thead>
+              <tbody id="batchRows">
+                <tr><td colspan="12" class="muted">还没有数据——点「生成矩阵」。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="mono small" style="margin-top:8px" id="batchPaths"></div>
+        </div>
       </section>
 
     </main>
@@ -986,6 +1020,11 @@ withBridge(function(tauri){
       if (d && d.reportPath) {
         $('reportPath').value = String(d.reportPath);
         runReport('');
+      }
+      // 5 样本矩阵探针（T7-3）：LINGQU_BATCH_SAMPLES（`路径1|路径2`）显式设置时才跑（纯读盘，秒级）
+      if (d && d.batchSamples) {
+        $('batchSamples').value = String(d.batchSamples);
+        runBatch();
       }
       // 指定初始屏（LINGQU_UI_SCREEN=build 之类）：给「截某屏的版面证据」一个可复现入口，
       // 不必靠人手动点左栏（无视觉环境也能落到 ui-report 的 activeScreen 上）
@@ -2767,6 +2806,106 @@ withBridge(function(tauri){
   $('btnReportJson').addEventListener('click', function(){ runReport('json'); });
   $('btnReportHtml').addEventListener('click', function(){ runReport('html'); });
 
+  /* ===== T7-3 5 样本矩阵 =====
+   * 并排看才谈得上"评测"：单个工程的报告说明这个迁得怎样，矩阵说明工具本身怎样。
+   * 口径：没跑过的样本显示「未跑」且**不参与平均**（未验证 ≠ 0 分，也 ≠ 通过）。 */
+  var BATCH = { ok: false, samples: 0, verified: 0, avgRate: -1, avgScore: -1,
+                totalHuman: 0, a4Pass: false, a1Pass: false, summary: '',
+                rows: [], paths: {}, error: '' };
+
+  function batchVerdictClass(v){
+    if (v === '达标') { return 'v-ok'; }
+    if (v === '未达标') { return 'v-err'; }
+    return 'v-na';
+  }
+
+  function renderBatch(r){
+    r = r || {};
+    BATCH = {
+      ok: r.ok === true,
+      samples: (typeof r.samples === 'number') ? r.samples : 0,
+      verified: (typeof r.verified === 'number') ? r.verified : 0,
+      avgRate: (typeof r.avgRate === 'number') ? r.avgRate : -1,
+      avgScore: (typeof r.avgScore === 'number') ? r.avgScore : -1,
+      totalHuman: (typeof r.totalHuman === 'number') ? r.totalHuman : 0,
+      a4Pass: r.a4Pass === true,
+      a1Pass: r.a1Pass === true,
+      summary: String(r.summary || ''),
+      rows: (r.rows && r.rows.length) ? r.rows : [],
+      paths: { md: String(r.md || ''), html: String(r.html || ''), json: String(r.json || '') },
+      error: String(r.error || '')
+    };
+    var sum = $('batchSum');
+    if (BATCH.error) {
+      sum.style.color = 'var(--err)';
+      sum.textContent = '生成矩阵失败：' + BATCH.error;
+    } else if (BATCH.summary) {
+      sum.style.color = '';
+      sum.textContent = BATCH.summary
+        + '　A4（平均可用率 ≥80%）：' + (BATCH.a4Pass ? '达标' : '未达标')
+        + '　A1（5 样本全部验证）：' + (BATCH.a1Pass ? '达标' : '未达成');
+    } else {
+      sum.textContent = '还没生成——每个样本先各自跑一遍流程才有数据；没跑的样本会显示「未跑」且不参与平均。';
+    }
+    var tb = $('batchRows');
+    tb.innerHTML = '';
+    if (!BATCH.rows.length) {
+      tb.innerHTML = '<tr><td colspan="12" class="muted">还没有数据——填样本路径后点「生成矩阵」。</td></tr>';
+    }
+    BATCH.rows.forEach(function(x){
+      // 分母由后端算好（清单项 − 平台限制），前端不再自己推——避免两处口径不一致
+      var rateTxt = x.hasVerify
+        ? (x.verifyRate + '%（' + x.verifyPass + '/' + x.verifyDenom + '）')
+        : '未跑';
+      var cells = [
+        String(x.project || ''),
+        x.hasScan ? String(x.scanScore) : '未跑',
+        x.hasScan ? (x.scanUnits + ' / 未知 ' + x.scanUnknown) : '未跑',
+        x.hasDeps ? (x.depsTotal + ' 包 / 不可用 ' + x.depsUnavailable) : '未跑',
+        x.hasBuild ? (x.buildOk ? '通过' : '未过') : '未跑',
+        x.hasHap ? (x.hapOk ? '通过' : '未过') : '未跑',
+        x.signMode ? String(x.signMode) : '未跑',
+        x.hasDeploy ? (x.deployOk ? '成功' : '未过') : '未跑',
+        rateTxt,
+        (x.stepDone + '/' + x.stepTotal + '（' + x.completion + '%）'),
+        String(x.humanAccepted),
+        String(x.verdict || '')
+      ];
+      var tr = document.createElement('tr');
+      cells.forEach(function(c, i){
+        var td = document.createElement('td');
+        td.textContent = c;
+        if (i === 11) { td.className = batchVerdictClass(String(x.verdict || '')); }
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+    var p = $('batchPaths');
+    p.textContent = BATCH.paths.html
+      ? ('已导出：' + BATCH.paths.md + ' ｜ ' + BATCH.paths.html + ' ｜ ' + BATCH.paths.json)
+      : '';
+    reportUi('batch-done');
+  }
+
+  function runBatch(){
+    var btn = $('btnBatch');
+    btn.disabled = true;
+    $('batchSum').style.color = '';
+    $('batchSum').textContent = '按样本落档生成矩阵…';
+    var arg = {};
+    var raw = ($('batchSamples') && $('batchSamples').value ? $('batchSamples').value : '').trim();
+    if (raw) { arg.samples = raw; }
+    invoke('t2h:batch', arg).then(function(r){
+      renderBatch(r || {});
+    }).catch(function(e){
+      $('batchSum').style.color = 'var(--err)';
+      $('batchSum').textContent = '生成矩阵失败：' + (e && e.message ? e.message : e);
+      reportUi('batch-error');
+    }).then(function(){ btn.disabled = false; });
+  }
+
+  $('btnBatch').addEventListener('click', runBatch);
+
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -2910,6 +3049,18 @@ withBridge(function(tauri){
       reportRows: (function(){
         return document.querySelectorAll("#rpDid div, #rpUndone div, #rpNeed div").length;
       })(),
+      // T7-3 5 样本矩阵：样本数 / 已验证数 / 平均可用率 / A1·A4 判定 / 表格行数
+      batchOk: BATCH.ok === true,
+      batchSamples: (typeof BATCH.samples === "number") ? BATCH.samples : 0,
+      batchVerified: (typeof BATCH.verified === "number") ? BATCH.verified : 0,
+      batchAvgRate: (typeof BATCH.avgRate === "number") ? BATCH.avgRate : -1,
+      batchAvgScore: (typeof BATCH.avgScore === "number") ? BATCH.avgScore : -1,
+      batchHuman: (typeof BATCH.totalHuman === "number") ? BATCH.totalHuman : 0,
+      batchA4: BATCH.a4Pass === true,
+      batchA1: BATCH.a1Pass === true,
+      batchHtml: (BATCH.paths && BATCH.paths.html) ? BATCH.paths.html : '',
+      batchRows: (function(){ return document.querySelectorAll("#batchRows tr").length; })(),
+      batchA4Rows: (function(){ return document.querySelectorAll("#batchRows td.v-ok").length; })(),
       // ⑥ 真机部署（T5-5）
       deployOk: DEPLOY.ok === true,
       deploySerial: DEPLOY.serial || "",

@@ -9,6 +9,7 @@ import lingqu.port.*
 import lingqu.compiler.*
 import lingqu.verify.*
 import lingqu.report.*
+import lingqu.batch.*
 import std.collection.*
 import std.env.*
 import std.fs.*
@@ -177,6 +178,8 @@ public class EnvCommand <: CommandHandler {
         res.put("resumePath", JsonString(envOr("LINGQU_RESUME_PATH", "")))
         // 置 LINGQU_REPORT_PATH 就在启动时出一次迁移报告（T6-4，纯读盘、秒级）
         res.put("reportPath", JsonString(envOr("LINGQU_REPORT_PATH", "")))
+        // 置 LINGQU_BATCH_SAMPLES（`路径1|路径2`）就在启动时出一次 5 样本矩阵（T7-3，纯读盘、秒级）
+        res.put("batchSamples", JsonString(envOr("LINGQU_BATCH_SAMPLES", "")))
         return res
     }
 }
@@ -1155,6 +1158,18 @@ public class UiReportCommand <: CommandHandler {
         o.put("reportMd", JsonString(argStr(args, "reportMd", "")))
         o.put("reportConclusion", JsonString(argStr(args, "reportConclusion", "")))
         o.put("reportRows", JsonInt(argInt(args, "reportRows", 0)))
+        // T7-3 批量矩阵（t2h:batch 回投）：样本数 / 已验证数 / 平均可用率 / A4 判定
+        o.put("batchOk", JsonBool(argBool(args, "batchOk", false)))
+        o.put("batchSamples", JsonInt(argInt(args, "batchSamples", 0)))
+        o.put("batchVerified", JsonInt(argInt(args, "batchVerified", 0)))
+        o.put("batchAvgRate", JsonInt(argInt(args, "batchAvgRate", -1)))
+        o.put("batchAvgScore", JsonInt(argInt(args, "batchAvgScore", -1)))
+        o.put("batchHuman", JsonInt(argInt(args, "batchHuman", 0)))
+        o.put("batchA4", JsonBool(argBool(args, "batchA4", false)))
+        o.put("batchA1", JsonBool(argBool(args, "batchA1", false)))
+        o.put("batchHtml", JsonString(argStr(args, "batchHtml", "")))
+        o.put("batchRows", JsonInt(argInt(args, "batchRows", 0)))
+        o.put("batchA4Rows", JsonInt(argInt(args, "batchA4Rows", 0)))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -2627,6 +2642,198 @@ func ensureDirOf(dir: String): Unit {
 }
 
 /**
+ * t2h:batch —— 5 样本迁移矩阵（T7-3）。
+ *
+ * 单个工程的报告说明"这个迁得怎样"；**并排才能说明"工具本身怎样"**：
+ * 评分分布、自动修复命中、人工介入次数（A3）、可用率是否稳定在 A4 线（≥80%）。
+ *
+ * 参数：{samples?: "路径1|路径2|..."（也认逗号）, outDir?}
+ *   `samples` 缺省时按 `.lingqu` 下出现过的工程名收集（"我跑过哪些就有哪些"）。
+ * 落档：`.lingqu/batch/matrix.{md,html,json}`（`lingqu/batch/v1`）。
+ * 纯读盘：不采证、不改任何样本工程。
+ */
+public class BatchCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var raw = argStr(args, "samples", "")
+        if (raw.size == 0) {
+            raw = envOr("LINGQU_BATCH_SAMPLES", "")
+        }
+        let now = nowText()
+        let samples = ArrayList<(String, String)>()
+        let names = ArrayList<String>()
+
+        // ① 显式给了样本路径：按给的顺序，工程名与各命令落档用的名字保持一致
+        if (raw.size > 0) {
+            for (p in splitSamplePaths(raw)) {
+                let name = sanitizeFileName(projectNameOf(p))
+                if (name == "") {
+                    continue
+                }
+                samples.add((name, p))
+                names.add(name)
+            }
+        }
+
+        // ② 没给就从落档目录里发现（同名去重，插入排序保证可复现）
+        if (samples.size == 0) {
+            for (name in discoverSampleNames()) {
+                samples.add((name, ""))
+                names.add(name)
+            }
+        }
+
+        let matrix = collectBatchMatrix(samples, now)
+        let summary = summarize(matrix)
+
+        var outDir = argStr(args, "outDir", "")
+        if (outDir.size == 0) {
+            outDir = ".lingqu/batch"
+        }
+        let outError = writeBatchMatrix(matrix, summary, outDir)
+        let base = "${outDir}"
+
+        var rowArr = JsonArray()
+        for (r in matrix.rows) {
+            var ro = JsonObject()
+            ro.put("project", JsonString(r.project))
+            ro.put("path", JsonString(r.path))
+            ro.put("hasScan", JsonBool(r.hasScan))
+            ro.put("scanScore", JsonInt(r.scanScore))
+            ro.put("scanUnits", JsonInt(r.scanUnits))
+            ro.put("scanUnknown", JsonInt(r.scanUnknown))
+            ro.put("hasDeps", JsonBool(r.hasDeps))
+            ro.put("depsTotal", JsonInt(r.depsTotal))
+            ro.put("depsUnavailable", JsonInt(r.depsUnavailable))
+            ro.put("buildOk", JsonBool(r.buildOk))
+            ro.put("hasBuild", JsonBool(r.hasBuild))
+            ro.put("hapOk", JsonBool(r.hapOk))
+            ro.put("hasHap", JsonBool(r.hasHap))
+            ro.put("signMode", JsonString(r.signMode))
+            ro.put("deployOk", JsonBool(r.deployOk))
+            ro.put("hasDeploy", JsonBool(r.hasDeploy))
+            ro.put("hasVerify", JsonBool(r.hasVerify))
+            ro.put("verifyRate", JsonInt(r.verifyRate))
+            ro.put("verifyPass", JsonInt(r.verifyPass))
+            ro.put("verifyTotal", JsonInt(r.verifyTotal))
+            ro.put("verifyLimit", JsonInt(r.verifyLimit))
+            ro.put("verifyDenom", JsonInt(r.verifyTotal - r.verifyLimit))
+            ro.put("stepDone", JsonInt(r.stepDone))
+            ro.put("stepTotal", JsonInt(r.stepTotal))
+            ro.put("humanAccepted", JsonInt(r.humanAccepted))
+            ro.put("verdict", JsonString(batchVerdict(r)))
+            ro.put("completion", JsonInt(batchCompletion(r)))
+            rowArr.add(ro)
+        }
+
+        var res = JsonObject()
+        res.put("ok", JsonBool(outError == ""))
+        res.put("generatedAt", JsonString(now))
+        res.put("samples", JsonInt(summary.samples))
+        res.put("verified", JsonInt(summary.verified))
+        res.put("avgRate", JsonInt(summary.avgRate))
+        res.put("avgScore", JsonInt(summary.avgScore))
+        res.put("totalHuman", JsonInt(summary.totalHuman))
+        res.put("a4Pass", JsonBool(summary.a4Pass))
+        res.put("a1Pass", JsonBool(summary.a1Pass))
+        res.put("summary", JsonString(summaryLine(matrix)))
+        res.put("rows", rowArr)
+        res.put("outDir", JsonString(base))
+        res.put("md", JsonString("${outDir}/matrix.md"))
+        res.put("html", JsonString("${outDir}/matrix.html"))
+        res.put("json", JsonString("${outDir}/matrix.json"))
+        res.put("error", JsonString(outError))
+        eprintln("[lingqu][batch] ${summaryLine(matrix)}")
+        return res
+    }
+}
+
+/**
+ * 把 `a|b|c` 或 `a,b,c` 拆成路径列表（两种分隔符都认：Windows 路径里逗号罕见，| 更安全）。
+ *
+ * 注意：**别用 `cur += "${b}"` 拼字节**——那会把 `b` 按十进制打印成数字，
+ * 路径会变成 "695892116…" 这种鬼东西（AGENTS §3 的 StringBuilder.append(Byte) 同款坑）。
+ * 这里攒字节再 `String.fromUtf8`，中文目录名才不会坏。
+ */
+func splitSamplePaths(raw: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    var buf = ArrayList<Byte>()
+    for (b in raw.toArray()) {
+        if (b == 124 || b == 44) {
+            let s = String.fromUtf8(buf.toArray()).trimAscii()
+            if (s != "") {
+                out.add(s)
+            }
+            buf = ArrayList<Byte>()
+        } else {
+            buf.add(b)
+        }
+    }
+    let last = String.fromUtf8(buf.toArray()).trimAscii()
+    if (last != "") {
+        out.add(last)
+    }
+    return out
+}
+
+/** 落盘矩阵三份文件（返回错误串，空串 = 成功） */
+func writeBatchMatrix(matrix: BatchMatrix, summary: BatchSummary, outDir: String): String {
+    try {
+        if (!exists(Path(".lingqu"))) {
+            Directory.create(Path(".lingqu"))
+        }
+        ensureDirOf(outDir)
+        File.writeTo("${outDir}/matrix.md", renderMatrixMarkdown(matrix).toArray())
+        File.writeTo("${outDir}/matrix.html", renderMatrixHtml(matrix).toArray())
+        var root = JsonObject()
+        root.put("schema", JsonString("lingqu/batch/v1"))
+        root.put("generatedAt", JsonString(matrix.generatedAt))
+        var sObj = JsonObject()
+        sObj.put("samples", JsonInt(summary.samples))
+        sObj.put("verified", JsonInt(summary.verified))
+        sObj.put("avgRate", JsonInt(summary.avgRate))
+        sObj.put("avgScore", JsonInt(summary.avgScore))
+        sObj.put("totalHuman", JsonInt(summary.totalHuman))
+        sObj.put("a4Pass", JsonBool(summary.a4Pass))
+        sObj.put("a1Pass", JsonBool(summary.a1Pass))
+        sObj.put("summary", JsonString(summaryLine(matrix)))
+        root.put("summary", sObj)
+        var rows = JsonArray()
+        for (r in matrix.rows) {
+            var ro = JsonObject()
+            ro.put("project", JsonString(r.project))
+            ro.put("path", JsonString(r.path))
+            ro.put("scanScore", JsonInt(r.scanScore))
+            ro.put("scanUnits", JsonInt(r.scanUnits))
+            ro.put("scanUnknown", JsonInt(r.scanUnknown))
+            ro.put("depsTotal", JsonInt(r.depsTotal))
+            ro.put("depsUnavailable", JsonInt(r.depsUnavailable))
+            ro.put("buildOk", JsonBool(r.buildOk))
+            ro.put("hasBuild", JsonBool(r.hasBuild))
+            ro.put("hapOk", JsonBool(r.hapOk))
+            ro.put("hasHap", JsonBool(r.hasHap))
+            ro.put("signMode", JsonString(r.signMode))
+            ro.put("deployOk", JsonBool(r.deployOk))
+            ro.put("hasDeploy", JsonBool(r.hasDeploy))
+            ro.put("verifyRate", JsonInt(r.verifyRate))
+            ro.put("verifyPass", JsonInt(r.verifyPass))
+            ro.put("verifyTotal", JsonInt(r.verifyTotal))
+            ro.put("stepDone", JsonInt(r.stepDone))
+            ro.put("stepTotal", JsonInt(r.stepTotal))
+            ro.put("humanAccepted", JsonInt(r.humanAccepted))
+            ro.put("verdict", JsonString(batchVerdict(r)))
+            rows.add(ro)
+        }
+        root.put("rows", rows)
+        File.writeTo("${outDir}/matrix.json", root.toJsonString().toArray())
+    } catch (e: Exception) {
+        return "落档失败：${e}"
+    }
+    return ""
+}
+
+/**
  * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。
  *
  * 把 0.17.0 手工跑通的那条链做成命令：`hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog。
@@ -3098,6 +3305,7 @@ public func build(): AppSpec {
         app.register("t2h:verify", VerifyCommand())
         app.register("t2h:resume", ResumeCommand())
         app.register("t2h:report", ReportCommand())
+        app.register("t2h:batch", BatchCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

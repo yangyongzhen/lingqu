@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.28.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.29.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -175,6 +175,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 59 | `Directory.readFrom(dir)` 的返回值当字符串用 → `'toString' is not a member of struct 'FileInfo'`；或 `bytes[i] == 92` 换成 `for (s in [92,47]) if (bytes[i] == s)` → `invalid binary operator '==' on type 'UInt8' and 'Int64'` | `Directory.readFrom` 返回 `Array<FileInfo>`，**名字是 `info.name` 属性**（另有 `isDirectory()`）。而 Byte 只能和**字面量**比：`bytes[i] == 92` 可以，数组元素是 `Int64`、与 `Byte` 比要显式转换。两个错误都在 0.27.0 编译期报出——好在都是编译期，不会进产物 |
 | 60 | 页面加了新的 `ui_report` 字段，JSON 里却**根本没有这个键**（界面上看着有值，报告里查不到） | `t2h:ui_report` 是**白名单**实现：`UiReportCommand` 里没写同名 `o.put(...)` 的键会被静默丢弃。0.28.0 的 `signSwitchRows` 就这么丢过一次。**新增 ui_report 字段必须两处一起加**（`assets/ui/index.html` 的 `reportUi` + `src/main.cj` 的 `o.put`），否则"版面可断言"是假的 |
 | 61 | 报告里出现「上架前：上架前：…」这种叠词 | 跨层拼句子时，**先看被引用的那句是否已经自带前缀**（`sign.cj` 的 `releaseNextStep` 本身以「上架前：」开头）。原文引用就不要再加壳；要加壳就让来源给"纯内容"版本 |
+| 62 | 拼路径时用 `cur += "${b}"`（`b` 是 `Byte`）→ 得到 `695892116101…` 这种数字串（0.29.0 的矩阵样本名就这么坏过） | **Byte 插值按十进制打印**，与 §3 的 `StringBuilder.append(Byte)` 同款坑。要按字节拼字符串就攒 `ArrayList<Byte>` 再 `String.fromUtf8(bytes.toArray())`，这样中文/非 ASCII 路径才不会坏 |
+| 63 | 矩阵/报表里"没跑过"显示成「未过」「0 分」 | 每一列都要有**"有没有跑过"的位**（`hasScan/hasBuild/hasHap/hasDeploy/hasVerify`），"没跑"与"跑了没过"必须分开写，且未跑的样本**不进平均**。否则读者分不清"还没做"和"做了不行"，数字也会凭空变低 |
 
 ---
 
