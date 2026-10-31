@@ -949,8 +949,10 @@ withBridge(function(tauri){
 
   /* ===== 引擎状态（三态，可轮询） ===== */
   var stateNames = { running: '已连接', ready: '可拉起', missing: '缺失' };
+  var CJ_STATUS = {};
   function renderStatus(s){
     s = s || {};
+    CJ_STATUS = s;
     var running = s.state === 'running';
     setDot('dotCjh', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
     $('txtCjh').textContent = '引擎 ' + (stateNames[s.state] || '未知') + (running ? (' :' + s.port) : '');
@@ -960,6 +962,13 @@ withBridge(function(tauri){
     $('txtAgent').textContent = running
       ? ('AI 引擎已就绪' + (s.owned ? '（本应用托管）' : '（复用已有实例）'))
       : (s.state === 'ready' ? 'AI 引擎待拉起' : 'AI 引擎缺失');
+    // 缺失时把"查过的目录"带上：只说"没找到"没法排查（便携包路径问题就靠这个定位）
+    if (!running && s.state === 'missing' && s.vendorDir) {
+      $('txtAgent').title = '查过的引擎目录：' + s.vendorDir
+        + (s.lingquHome ? '\nLINGQU_HOME=' + s.lingquHome : '\n（LINGQU_HOME 未设置，说明不是用 run.bat 启动的）')
+        + '\n可用 LINGQU_CJH 直接指向 cjh.exe';
+      $('txtAgent').textContent += '（悬停看查过的目录）';
+    }
 
     var st = $('aiState');
     st.className = 'state';
@@ -2430,6 +2439,11 @@ withBridge(function(tauri){
       signType: SIGN.type || '',
       signCandCount: (typeof SIGN.candCount === 'number') ? SIGN.candCount : 0,
       signApplied: SIGN.applied === true,
+      // 引擎发现证据（"没找到可用的 cjh"只能靠这个事后核对：Cangjie 的 eprintln 到不了日志文件）
+      cjhState: CJ_STATUS.state || "",
+      cjhBin: CJ_STATUS.binPath || "",
+      cjhVendorDir: CJ_STATUS.vendorDir || "",
+      cjhHome: CJ_STATUS.lingquHome || "",
       // ⑥ 真机部署（T5-5）
       deployOk: DEPLOY.ok === true,
       deploySerial: DEPLOY.serial || "",

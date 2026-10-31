@@ -5,6 +5,90 @@
 
 ---
 
+## [0.22.0] - 2026-10-31
+
+**主题**：**单文件包** —— 页面与能力清单**编进 exe**，包里不再有 `assets/` 目录
+（照 `cj-tauri/examples/ai-chat` 的成熟机制，不自己发明）。
+
+### Added
+
+- `src/packed_assets.cj`（空存根）：`PACKED_UI_B64` / `PACKED_CAPS_B64` 两个常量，
+  仓库里恒为空串；`packaging/pack-win-single.sh` 在构建期把它们覆盖成真实 base64。
+- `src/packed_resources.cj`：
+  - `decodeBase64` / `splitBytesBy`（与 ai-chat 同款实现，只服务这条链路）
+  - **`LingquAssetResolver`**：内嵌优先、缺则读盘。装配期由 `wire()` 换掉骨架默认的
+    `DirectoryAssetResolver`（`app.assets(...)` 是 setter，wire 又在 `loadCapabilities` 之后跑，
+    所以不需要改任何派生文件）
+  - `embeddedCapabilityJsons()`：单文件产物没有 `assets/capabilities` 目录，
+    能力清单在 `wire()` 里用 `addCapabilityJson` 补挂（否则所有命令都会 `command not allowed`）
+- `packaging/pack-win-single.sh`：生成 base64 → 静态构建 → 打包（`--no-assets`）→ 改名成
+  `lingqu-<ver>-win-x64-single`；`trap EXIT` **无条件还原**存根，仓里永远只有空串
+- `packaging/README-single.md`：单文件版的使用说明与"还差什么"
+- 4 例新单测（总 **146**）：base64 往返（含中文多字节、换行、非法字符）、按字节切分、
+  "空存根时能力清单为 0"、resolver 的读盘回退分支
+
+### Changed
+
+- `package-win.sh` 增加 `--no-assets`（单文件模式不拷 `assets/`、换用 `README-single.md`）；
+  `build-static-win.sh` 把额外参数透传给打包脚本
+
+### 验证（干净 PATH，从别的工作目录启动）
+
+```
+包内顶层：main.exe + 5 个 DLL + vendor/cjh + scripts + README.md + run.bat
+          assets/ 不存在（页面在 exe 里）
+启动：run.bat，WorkingDirectory 故意设成 C:\Windows\Temp
+结果：ui_report screens=7 / idCount=146 / activeScreen=env / errorCount=0（自检跑到 probe-frames）
+      cjhState=running、wsState=connected；cjh 进程路径 = 包内 vendor/cjh/win-x64/cjh.exe
+```
+
+### 未做（如实）
+
+**还不是"一个文件"**：`vendor/cjh`（13.4 MB 的外部引擎）与 5 个 DLL 仍在旁边。
+要彻底单文件，需要 ① 把 cjh 作为 PE 资源编进 exe、运行期用框架的 `extractEmbeddedAssets`
+释放到 `%LOCALAPPDATA%\lingqu\runtime`；② C 桥编成静态归档（`libcjtbridge.a`），
+否则 `libcjtbridge.dll` 省不掉；③ 仓颉运行时目前没有静态版，`libcangjie-runtime.dll` 也得留。
+这三条都已写进 `packaging/pack-win-single.sh` 末尾的 TODO。
+
+---
+
+## [0.21.2] - 2026-10-31
+
+**主题**：**修便携包「没找到可用的 cjh」** —— `cjh.exe` 本来就在包里（13.4 MB、SHA256 对得上），
+缺的是**发现路径**：`cjhVendorDir()` 用的是相对当前工作目录的 `vendor/cjh/<平台>`。
+
+### Fixed
+
+- **引擎目录解析不再依赖 CWD**。按序解析：`LINGQU_CJH`（显式指定二进制）→ 应用数据目录的部署副本 →
+  `LINGQU_HOME/vendor` → `LINGQU_CJH_HOME/vendor` → **从 CWD 逐级上溯 6 层** → 最后退回相对路径
+  （开发期在仓根跑的口径不变，旧行为不被破坏）
+- **`run.bat` 两处修正**：写 `LINGQU_HOME`（包根）供应用使用；`cd /d` 到包根（`assets/` 是相对读的）。
+  并删掉「剥末尾反斜杠」那一行——cmd 对引号紧邻反斜杠的写法会误解码，把整段脚本拆坏
+  （真实报错：`'tory' is not recognized as an internal or external command`）
+- **引擎发现结果可复核**：`ui_report` 新增 `cjhState / cjhBin / cjhVendorDir / cjhHome`。
+  之前只有界面文案，而**仓颉的 `eprintln` 不会进 `%LOCALAPPDATA%\cj-tauri\logs\lingqu.log`**
+  （只有 C 桥日志进得去，AGENTS §4-14），所以"找到没找到、用的哪一份"必须落文件
+- 2 例新单测（总 **142**）：vendor 候选顺序（LINGQU_HOME → 自定义 → 相对）、CWD 逐级上溯与尾分隔符容错
+
+### 验证（干净 PATH + 故意从别的工作目录启动）
+
+```
+包内引擎：…\dist\lingqu-0.21.2-win-x64-static\vendor\cjh\win-x64\cjh.exe（13.4 MB）
+启动：cmd /c run.bat，工作目录故意设成 C:\Windows\Temp，PATH 只留 System32
+结果：跑起来的 cjh 进程实测路径 = 包内那一份；8765 处于监听
+      ui_report：cjhState=running、wsState=connected、errorCount=0
+```
+
+### 上游 TODO（AGENTS §8 回馈项）
+
+框架若暴露 `cj_bridge_exe_dir`（C 桥里已经在用 `GetModuleFileNameW`），应用就能直接按 **exe 目录**
+定位 `vendor/`，彻底摆脱 CWD 与启动器变量。更彻底的做法参考 `cj-tauri/examples/ai-chat` 的**单文件打包**：
+页面与能力清单 base64 编进二进制、cjh 作 PE 资源随行，运行期由 `extractEmbeddedAssets`
+释放到 `%LOCALAPPDATA%\<应用名>\runtime`——那样连 `assets/` 与 `vendor/` 两个目录都不需要，
+本仓下一步照此收掉即可。
+
+---
+
 ## [0.21.1] - 2026-10-31
 
 **主题**：**静态链接的 Windows 便携包** —— 随包 DLL 从 **98 个降到 5 个**（zip 24.7 MB → 13.9 MB）。

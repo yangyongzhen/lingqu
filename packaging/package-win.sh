@@ -23,7 +23,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 MODE="dynamic"
-[ "${1:-}" = "--static" ] && MODE="static"
+NO_ASSETS=0
+for arg in "$@"; do
+    case "$arg" in
+        --static) MODE="static" ;;
+        --no-assets) NO_ASSETS=1 ;;   # 单文件模式：页面/能力清单已编进 exe，不随包 assets/
+        *) ;;
+    esac
+done
 
 if [ -z "${CANGJIE_HOME:-}" ] || [ -z "${CANGJIE_STDX:-}" ] || [ -z "${CJ_TAURI_ROOT:-}" ]; then
     cat >&2 <<'EOF'
@@ -52,9 +59,17 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 
 echo "[1/5] 主程序与资产（$MODE）"
 cp "$EXE" "$OUT/main.exe"
-cp -r assets "$OUT/assets"
+if [ "$NO_ASSETS" = "1" ]; then
+    echo "      [single] 页面与能力清单已编进 exe，不随包 assets/"
+else
+    cp -r assets "$OUT/assets"
+fi
 cp packaging/run.bat "$OUT/run.bat"
-cp packaging/README-run.md "$OUT/README.md"
+if [ "$NO_ASSETS" = "1" ]; then
+    cp packaging/README-single.md "$OUT/README.md"
+else
+    cp packaging/README-run.md "$OUT/README.md"
+fi
 
 # DLL 搜索目录：谁的依赖就从谁的 SDK/框架目录里找
 SEARCH=(

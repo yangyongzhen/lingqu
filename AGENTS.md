@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.21.1**（2026-10-31），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.22.0**（2026-10-31），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -165,6 +165,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 49 | 想打"静态包"，结果 exe 还是链接一堆 `libcangjie-std-*.dll` / `libstdx.*.dll` | 三件事缺一不可：① `compile-option = "--static-std"`（`--static-libs` 已 deprecated）；② `CANGJIE_STDX` 指向 **static 树**（`<stdx>\windows_x86_64_cjnative\static\stdx`），指向 dynamic 树就还是链 .dll；③ mingw 链接行补 `-lcrypt32 -lbcrypt -lws2_32 -liphlpapi -luserenv -lpsapi`——静态 stdx 的 x509 用 `CertCloseStore`，缺 `-lcrypt32` 直接 `undefined symbol`。做完静态版随包 DLL 98 → **5** 个（`libcangjie-runtime` 与 `libcjtbridge` 没静态版，省不掉） |
 | 50 | 为了改编译选项去手改 `targets/desktop/cjpm.toml` → `cj-tauri check` 判骨架漂移 | `targets/` 是派生品。要临时改就用"**备份 → `trap EXIT` 无条件还原**"的脚本（`packaging/build-static-win.sh` 就是这么做的）；根治办法是给 `cj-tauri.toml` 加 `[build] compile_option/link_option` 透传（上游 TODO，见 AGENTS §8） |
 | 51 | 打便携包时"整目录拷 DLL"，结果漏文件（别人的机器上启动即退 `0xC0000135`） | **按导入闭包自动收**：`llvm-objdump -p` 遍历 `main.exe` 与已收 DLL 的导入表做 BFS，从 `CANGJIE_HOME`/`CANGJIE_STDX`/框架 `native` 里解析；收完再跑一次闭包自检，缺任何 `lib*`/`stdx*` 就失败退出。本项目实测靠它抓到 `libwinpthread-1.dll` 与 `vendor/cjh/SHA256SUMS` 两个缺口 |
+| 52 | 便携包里明明有 `vendor/cjh/win-x64/cjh.exe`，界面却报「没找到可用的 cjh」 | `cjhVendorDir()` 原先是**相对当前工作目录**的 `vendor/cjh/<平台>`：换个 CWD（快捷方式、`start`、从别处调 `run.bat`）就找不到。修法三件套：① 启动器 `run.bat` 写 `LINGQU_HOME` 并 `cd /d` 到包根；② 解析顺序 `LINGQU_CJH` → 部署目录 → `LINGQU_HOME/vendor` → `LINGQU_CJH_HOME/vendor` → **CWD 上溯 6 层** → 相对路径；③ 结果回投 `ui_report`（`cjhState/cjhBin/cjhVendorDir/cjhHome`）当证据——**仓颉的 `eprintln` 不进 `%LOCALAPPDATA%\cj-tauri\logs\lingqu.log`**（只有 C 桥日志进得去），证据必须落文件。根治要框架暴露 `cj_bridge_exe_dir`（§8 上游回馈项） |
+| 53 | `.bat` 里做「剥掉末尾反斜杠」（`if "%HERE:~-1%"=="\"`）→ cmd 报 `'tory' is not recognized ...`，整段脚本被拆坏 | cmd 对**引号紧邻反斜杠**的写法会误解码。别在 `.bat` 里玩这个花活：`%~dp0` 本来就带尾杠，直接用 `"%HERE%main.exe"` 拼；确实需要无尾杠版本就单独 `set "NB=%HERE:~0,-1%"` |
 
 ---
 

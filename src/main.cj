@@ -1020,6 +1020,11 @@ public class UiReportCommand <: CommandHandler {
         o.put("modelItems", JsonInt(argInt(args, "modelItems", 0)))
         o.put("modelError", JsonString(argStr(args, "modelError", "")))
         o.put("wsState", JsonString(argStr(args, "wsState", "unknown")))
+        // 引擎发现证据：state（running/ready/missing）+ 实际用的二进制 + 查过的 vendor 目录
+        o.put("cjhState", JsonString(argStr(args, "cjhState", "")))
+        o.put("cjhBin", JsonString(argStr(args, "cjhBin", "")))
+        o.put("cjhVendorDir", JsonString(argStr(args, "cjhVendorDir", "")))
+        o.put("cjhHome", JsonString(argStr(args, "cjhHome", "")))
         o.put("frames", JsonInt(argInt(args, "frames", 0)))
         o.put("toolCards", JsonInt(argInt(args, "toolCards", 0)))
         o.put("approvals", JsonInt(argInt(args, "approvals", 0)))
@@ -2535,6 +2540,16 @@ public func build(): AppSpec {
         .wire({ app =>
             // 日志落盘：GUI 产物双击没控制台，报障时一个文件看全（C 桥 + 仓颉 + 页面 log:write）
             let _ = app.setLogToDefaultFile("lingqu")
+
+            // 资产解析：**内嵌优先、缺则读盘**（单文件打包用，见 src/packed_resources.cj）。
+            // 骨架默认注入 DirectoryAssetResolver("assets")，这里换成我们的版本——打包产物里页面
+            // 来自 PACKED_UI_B64，于是不再需要 assets/ 目录，也不会再因为"工作目录不是包根"加载不到页面。
+            let _ = app.assets(LingquAssetResolver("assets"))
+            // 能力清单同理：单文件产物没有 assets/capabilities 目录，清单编在二进制里。
+            // 装配顺序上 wire() 在 loadCapabilities() 之后跑，所以在这里补挂（0 份 = 仓库内构建，等于不做事）。
+            for (capsJson in embeddedCapabilityJsons()) {
+                let _ = app.addCapabilityJson(JsonValue.fromStr(capsJson))
+            }
 
             app.register("t2h:env", EnvCommand())
             app.register("t2h:quit", QuitCommand(app))

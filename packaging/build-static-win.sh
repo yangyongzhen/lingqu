@@ -82,4 +82,4 @@ if [ "$COUNT" -gt 4 ]; then
 fi
 
 echo "[4/4] 打包（--static）"
-CANGJIE_STDX="$(dirname "$STDX_STATIC")/../dynamic/stdx" ./packaging/package-win.sh --static
+CANGJIE_STDX="$(dirname "$STDX_STATIC")/../dynamic/stdx" ./packaging/package-win.sh --static "$@"

@@ -227,15 +227,116 @@ func cjhPathSep(): String {
     return "/"
 }
 
-/** 仓内随包的目录（已解包形态）：vendor/cjh/<平台> */
+/** 平台子目录名（`vendor/cjh/<平台>`） */
 @When[os == "Windows"]
-func cjhVendorDir(): String {
-    return "vendor" + cjhPathSep() + "cjh" + cjhPathSep() + "win-x64"
+func cjhVendorSubdir(): String {
+    return "win-x64"
 }
 
 @When[os != "Windows"]
-func cjhVendorDir(): String {
-    return "vendor" + cjhPathSep() + "cjh" + cjhPathSep() + "linux-x64"
+func cjhVendorSubdir(): String {
+    return "linux-x64"
+}
+
+/**
+ * vendor 目录的候选路径（按优先级；纯函数，便于单测）。
+ *
+ * 为什么不能只写相对路径：`vendor/cjh/win-x64` 是相对**当前工作目录**解析的，
+ * 而便携包里用户可能双击 `main.exe`、可能从快捷方式启动、也可能被 `start` 换了 CWD——
+ * 只要 CWD 不是包根，就会报「没找到可用的 cjh」，可文件明明就在包里
+ * （2026-10-31 便携包实测正是这个症状）。
+ *
+ * 顺序：① `LINGQU_HOME`（启动器 `run.bat` 写入的包根）；② `LINGQU_CJH_HOME`（自定义）；
+ *       ③ 老口径相对路径（开发期在仓根跑仍然成立）。
+ */
+public func cjhVendorDirCandidates(lingquHome: String, cjhHome: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let sep = cjhPathSep()
+    let sub = cjhVendorSubdir()
+    if (lingquHome.size > 0) {
+        out.add(lingquHome + sep + "vendor" + sep + "cjh" + sep + sub)
+    }
+    if (cjhHome.size > 0) {
+        out.add(cjhHome + sep + "cjh" + sep + sub)
+    }
+    out.add("vendor" + sep + "cjh" + sep + sub)
+    return out
+}
+
+/** 实际使用的 vendor 目录：第一个**存在**的候选；都不存在则退回老口径相对路径（让报错信息仍可读） */
+public func cjhVendorDir(): String {
+    let cands = cjhVendorDirCandidates(firstNonEmptyEnv(["LINGQU_HOME"]),
+        firstNonEmptyEnv(["LINGQU_CJH_HOME"]))
+    // 兜底：从**当前工作目录**逐级上溯找。相对路径在"换了个 CWD"时必然失效——
+    // 例如直接从 `targets/desktop/target/release/bin` 起，或从包内子目录起（AGENTS §4-52）。
+    for (c in vendorCandidatesFrom(getWorkingDirectoryOr(""), 6)) {
+        cands.add(c)
+    }
+    for (c in cands) {
+        if (exists(Path(c))) {
+            return c
+        }
+    }
+    return "vendor" + cjhPathSep() + "cjh" + cjhPathSep() + cjhVendorSubdir()
+}
+
+/** 取工作目录；拿不到返回 fallback（不让路径解析把启动流程炸掉） */
+public func getWorkingDirectoryOr(fallback: String): String {
+    try {
+        return getWorkingDirectory().toString()
+    } catch (e: Exception) {
+        let _ = e
+        return fallback
+    }
+}
+
+/**
+ * 从 [base] 起逐级上溯，生成 `…/vendor/cjh/<平台>` 候选（纯函数，最多 [levels] 层）。
+ *
+ * 例：`C:\repo\targets\desktop\target\release\bin` 上溯 6 层会产出
+ * `…\bin\vendor\cjh\win-x64`、`…\release\…`、…、`C:\repo\vendor\cjh\win-x64`。
+ */
+public func vendorCandidatesFrom(base: String, levels: Int64): ArrayList<String> {
+    let out = ArrayList<String>()
+    var cur = trimPathSep(base)
+    var up: Int64 = 0
+    let sep = cjhPathSep()
+    let sub = cjhVendorSubdir()
+    while (cur.size > 0 && up <= levels) {
+        out.add(cur + sep + "vendor" + sep + "cjh" + sep + sub)
+        let idx = lastSepIndex(cur)
+        if (idx <= 0) {
+            break
+        }
+        cur = cur[0..idx]
+        up += 1
+    }
+    return out
+}
+
+/** 去掉末尾的分隔符（`C:\repo\` → `C:\repo`） */
+func trimPathSep(p: String): String {
+    let bytes = p.toArray()
+    var end = bytes.size
+    while (end > 0 && (bytes[end - 1] == 92 || bytes[end - 1] == 47)) {
+        end--
+    }
+    if (end <= 0) {
+        return ""
+    }
+    return String.fromUtf8(bytes[0..end])
+}
+
+/** 最后一个路径分隔符的下标（没有返回 -1） */
+func lastSepIndex(p: String): Int64 {
+    let bytes = p.toArray()
+    var found: Int64 = -1
+    for (i in 0..bytes.size) {
+        if (bytes[i] == 92 || bytes[i] == 47) {
+            found = i
+        }
+    }
+    return found
 }
 
 @When[os == "Windows"]
@@ -346,19 +447,25 @@ func cjhInstallDir(): String {
 public func cjhBinPath(): String {
     let fromEnv = firstNonEmptyEnv(["LINGQU_CJH"])
     if (fromEnv.size > 0 && fileReadable(fromEnv)) {
+        // 成功路径也要留一行证据：排查"引擎没起来"时，先看它用的是哪个二进制
+        eprintln("[lingqu] cjh: 用 LINGQU_CJH 指定的${fromEnv}")
         return fromEnv
     }
     let install = cjhInstallDir()
     if (install.size > 0) {
         let p = install + cjhPathSep() + cjhBinName()
         if (fileReadable(p)) {
+            eprintln("[lingqu] cjh: 用部署目录里的${p}")
             return p
         }
     }
     let vendor = cjhVendorDir()
     if (cjhVendorVerified(vendor)) {
-        return vendor + cjhPathSep() + cjhBinName()
+        let p = vendor + cjhPathSep() + cjhBinName()
+        eprintln("[lingqu] cjh: 用随包引擎 ${p}")
+        return p
     }
+    eprintln("[lingqu] cjh: 随包引擎不可用，查过的目录 = ${vendor}（可用 LINGQU_HOME / LINGQU_CJH_HOME / LINGQU_CJH 覆盖）")
     return ""
 }
 
@@ -388,7 +495,10 @@ public func cjhStatusJson(): JsonValue {
         obj.put("binPath", JsonString(bin))
     } else {
         obj.put("state", JsonString("missing"))
+        // 把"查过的目录"和"包根线索"都回投：报障时一句话就能定位是路径问题还是文件缺失
         obj.put("vendorDir", JsonString(cjhVendorDir()))
+        obj.put("lingquHome", JsonString(firstNonEmptyEnv(["LINGQU_HOME"])))
+        obj.put("cjhHome", JsonString(firstNonEmptyEnv(["LINGQU_CJH_HOME"])))
     }
     return obj
 }
