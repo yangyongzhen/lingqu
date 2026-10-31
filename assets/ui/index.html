@@ -2411,7 +2411,7 @@ withBridge(function(tauri){
       // 扫描探针：后端把 LINGQU_SCAN_PATH 透传下来，就在启动时跑一次 t2h:scan
       if (d && d.scanPath) {
         // 「一键迁移」屏的路径框跟着带上，省得再手填一遍（一键迁移的主入口）
-        if ($('migratePath') && !$('migratePath').value) { $('migratePath').value = String(d.scanPath); }
+        if (!String((typeof PROJECT !== 'undefined' ? PROJECT.path : '') || '').trim() && d.scanPath) { setCurrentProject(String(d.scanPath)); }
         runScanProbe(String(d.scanPath));
       }
       // 编译探针（T5-1）：LINGQU_BUILD_PATH 显式设置时才跑（交叉编译以分钟计）
@@ -2856,6 +2856,7 @@ withBridge(function(tauri){
 
   /** 当前工程路径：与断点板同一套取值顺序，再补一个 ③ 屏的输入框 */
   function projectPathValue(){
+    if (typeof PROJECT !== 'undefined' && String(PROJECT.path || '').trim().length > 0) { return String(PROJECT.path).trim(); }
     var p = resumePathValue();
     if (p) { return p; }
     return ($('buildPath') && $('buildPath').value ? $('buildPath').value : '').trim();
@@ -3109,7 +3110,7 @@ withBridge(function(tauri){
       renderMigrate(st);
       if (st.running) {
         MIG.running = true;
-        if ($('migratePath') && !$('migratePath').value && st.path) { $('migratePath').value = String(st.path); }
+        if (!String((typeof PROJECT !== 'undefined' ? PROJECT.path : '') || '').trim() && st.path) { setCurrentProject(String(st.path)); }
         return;
       }
       // 结束：收尾一次（结果卡 + 断点板 + 失败现场交给 AI）
@@ -3177,7 +3178,7 @@ withBridge(function(tauri){
       if ($('migratePath')) { $('migratePath').focus(); }
       return;
     }
-    if ($('migratePath')) { $('migratePath').value = p; }
+    setCurrentProject(p);   // 0.39.8：只读回显，统一走「当前工程」
     MIG.done = false;
     if ($('migrateResultCard')) { $('migrateResultCard').style.display = 'none'; }
     $('btnMigrateStart').disabled = true;
@@ -3292,7 +3293,7 @@ withBridge(function(tauri){
     var p = migratePathValue();
     if (!p) { aiPortNote('请先填 Tauri 工程路径。'); if ($('migratePath')) { $('migratePath').focus(); } return; }
     if (!CJ.up) { aiPortNote('引擎没连上：等它就绪（右栏「一键部署并启动引擎」）再开始。'); reportUi('autoport-noengine'); return; }
-    if ($('migratePath')) { $('migratePath').value = p; }
+    setCurrentProject(p);   // 0.39.8：只读回显，统一走「当前工程」
     if ($('btnAiPort')) { $('btnAiPort').disabled = true; }
     if ($('migrateResultCard')) { $('migrateResultCard').style.display = 'none'; }
     aiPortNote('准备现场（技能 / 工程上下文 / 工具路径）…');
@@ -3375,7 +3376,7 @@ withBridge(function(tauri){
   if ($('btnPortAi')) {
     $('btnPortAi').onclick = function(){
       var p = ($('portPath') && $('portPath').value ? $('portPath').value : '').trim();
-      if (p && $('migratePath')) { $('migratePath').value = p; }
+      if (p && $('migratePath')) { setCurrentProject(p); }
       startAiPortScope('port');
     };
   }
@@ -5796,7 +5797,7 @@ withBridge(function(tauri){
       var fullProj = (mode === 'ai-full') ? 'E:/test/rust/m3u8dl-tauri' : 'E:/test/rust/habit-tree';
       window.__probePath = fullProj;
       setTimeout(function(){
-        if ($('migratePath')) { $('migratePath').value = fullProj; }
+        setCurrentProject(fullProj);   // 0.39.8：路径框只读了，探针改用「当前工程」
         startAiPort();
       }, 2600);
       setTimeout(function(){ reportUi('probe-ai-early'); }, 12000);
@@ -5807,8 +5808,8 @@ withBridge(function(tauri){
     if (mode === 'ai-port') {
       window.__probePath = 'E:/test/rust/habit-tree';
       setTimeout(function(){
-        if ($('migratePath')) { $('migratePath').value = 'E:/test/rust/habit-tree'; }
-        if ($('portPath')) { $('portPath').value = 'E:/test/rust/habit-tree'; }
+        setCurrentProject('E:/test/rust/habit-tree');
+        // portPath 已只读，跟随当前工程
         startAiPortScope('port');
       }, 2600);
       setTimeout(function(){ reportUi('probe-ai-port-early'); }, 20000);
