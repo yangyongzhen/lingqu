@@ -5,6 +5,30 @@
 
 ---
 
+## [0.39.2] - 2026-11-01
+
+**主题**：**第一次让 AI 全自动迁一个从没迁过的样本**（`m3u8dl-tauri`，此前只有 scan/deps）。跑通 4 步，卡在两个新缺陷上（都已定位）。
+
+### 实跑证据（Windows x64，`LINGQU_UI_PROBE=ai-full`，scope=all，合入后构建的 cjh）
+
+    ui_report：toolCards=32  frames=78  errorCount=0  agentTraceLines=64
+    trace.jsonl：bash 59 次，命令执行异常 = 0，exit code: 0 共 26 条
+    工程落档（**从零生成**）：m3u8dl-tauri/.lingqu/{scan,deps,port,build}
+    build 落档：target=aarch64-unknown-linux-ohos  exitCode=101  errorCount=1  ← 真编译错，等 AI 修
+
+顺序与行为：scan → deps → port --apply（有备份目录）→ build；中间自己 `cat` 了 build 日志
+（trace 里有真实 cargo 输出 `Compiling cfg-if v1.0.4 …`），最后调用 `lingqu-cli build --path .` 重跑。
+
+### 暴露的两个新缺陷（下一轮第一件事）
+
+1. **`--path .` 让落档名变成 `.`** → 文件写成 `..json / ..jsonl / ..log`
+   根因：`projectNameOf(".")` 原样返回 `"."`，`sanitizeFileName(".")` 清成空串；而我们的
+   AGENTS.md/任务书**正是教 agent 用 `--path .`**（agent cwd = 工程根）。
+   修法：命令入口统一把相对路径解析成绝对（`absProjectPath`），或 `projectNameOf` 对 `.`/`..`/空串
+   回退到 cwd 末段名。
+2. **长命令会卡住回合**：cargo 交叉编译是分钟级，而 cjh 的 bash 工具单条命令有超时；实测最后一帧
+   停在"已发起 build、结果没回"，`aiPortPolls=127` 但落档不再变化。
+   修法（cjh 侧建议）：bash 工具加"后台执行 + 轮询"，或暴露 `timeout` 参数让 agent 自己传。
 ## [0.39.1] - 2026-11-01
 
 **主题**：**AI 真的能动手了** —— cjh 的三个 PR 合入后，实机验证 agent 从"能看不能跑"变成"能看能跑"。
