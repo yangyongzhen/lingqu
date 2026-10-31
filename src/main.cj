@@ -8,6 +8,7 @@ import lingqu.deps.*
 import lingqu.port.*
 import lingqu.compiler.*
 import lingqu.verify.*
+import lingqu.report.*
 import std.collection.*
 import std.env.*
 import std.fs.*
@@ -174,6 +175,8 @@ public class EnvCommand <: CommandHandler {
         res.put("verifyPath", JsonString(envOr("LINGQU_VERIFY_PATH", "")))
         // 置 LINGQU_RESUME_PATH 就在启动时跑一次 t2h:resume（T6-5 断点续迁，纯读盘、秒级）
         res.put("resumePath", JsonString(envOr("LINGQU_RESUME_PATH", "")))
+        // 置 LINGQU_REPORT_PATH 就在启动时出一次迁移报告（T6-4，纯读盘、秒级）
+        res.put("reportPath", JsonString(envOr("LINGQU_REPORT_PATH", "")))
         return res
     }
 }
@@ -1133,6 +1136,17 @@ public class UiReportCommand <: CommandHandler {
         // 版面孔径：步骤行数 / 行高（和 verify 一个套路——没有视觉也能证明"没竖排"）
         o.put("resumeRows", JsonInt(argInt(args, "resumeRows", 0)))
         o.put("resumeRowH", JsonInt(argInt(args, "resumeRowH", 0)))
+        // T6-4 迁移报告（t2h:report 回投）：三段条数 + 结论数字 + 导出路径
+        o.put("reportOk", JsonBool(argBool(args, "reportOk", false)))
+        o.put("reportDid", JsonInt(argInt(args, "reportDid", 0)))
+        o.put("reportUndone", JsonInt(argInt(args, "reportUndone", 0)))
+        o.put("reportNeed", JsonInt(argInt(args, "reportNeed", 0)))
+        o.put("reportRate", JsonInt(argInt(args, "reportRate", -1)))
+        o.put("reportHuman", JsonInt(argInt(args, "reportHuman", 0)))
+        o.put("reportHtml", JsonString(argStr(args, "reportHtml", "")))
+        o.put("reportMd", JsonString(argStr(args, "reportMd", "")))
+        o.put("reportConclusion", JsonString(argStr(args, "reportConclusion", "")))
+        o.put("reportRows", JsonInt(argInt(args, "reportRows", 0)))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -2378,6 +2392,203 @@ func taskStepIdsJoined(): String {
 }
 
 /**
+ * t2h:report —— 迁移报告（三段式导出，T6-4）。
+ *
+ * 与 `t2h:verify` 的分工（别混）：
+ *   · verify  **采证**：跑 hdc 截图/faultlog，生成功能清单与可用率 → `.lingqu/verify/<工程>.{json,md,html}`
+ *   · report  **出报告**：把已有落档（含 verify 的结果、8 步断点板、决策记录）汇总成
+ *              「做了什么 / 没做什么 / 需要你做什么」→ `.lingqu/report/<工程>.{md,html,json}`
+ * 出报告**不采证、不跑子进程、不改工程**：它只读盘，所以可以反复出、随时出。
+ *
+ * 参数：{path?, outDir?}。`path` 缺省取 LINGQU_REPORT_PATH / LINGQU_VERIFY_PATH，
+ * 都没给就沿用 `.lingqu/tasks.json` 里记的工程名（"接着上次出报告"）。
+ */
+public class ReportCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_REPORT_PATH", "")
+        }
+        if (path.size == 0) {
+            path = envOr("LINGQU_VERIFY_PATH", "")
+        }
+        var projName = ""
+        if (path.size > 0) {
+            projName = sanitizeFileName(projectNameOf(path))
+        } else {
+            // 没给路径：沿用断点板里的工程名，省得为了出报告再填一遍
+            match (readJsonOrNone(taskBoardPath())) {
+                case Some(root) => projName = parseTaskBoardValue(root).project
+                case None => ()
+            }
+        }
+        if (projName == "") {
+            projName = "unknown"
+        }
+        var outDir = argStr(args, "outDir", "")
+        if (outDir.size == 0) {
+            outDir = ".lingqu/report"
+        }
+        let base = reportFileBase(projName)
+        let now = nowText()
+
+        let facts = collectReportFacts(projName, path, now)
+        let doc = buildReport(facts)
+        let md = renderReportMarkdown(doc)
+        let html = renderReportHtml(doc)
+
+        var outError = ""
+        var outMd = ""
+        var outHtml = ""
+        var outJson = ""
+        try {
+            if (!exists(Path(".lingqu"))) {
+                Directory.create(Path(".lingqu"))
+            }
+            ensureDirOf(outDir)
+            outMd = "${outDir}/${base}.md"
+            outHtml = "${outDir}/${base}.html"
+            outJson = "${outDir}/${base}.json"
+            File.writeTo(outMd, md.toArray())
+            File.writeTo(outHtml, html.toArray())
+            File.writeTo(outJson, reportJson(doc, facts, outMd, outHtml).toJsonString().toArray())
+        } catch (e: Exception) {
+            outError = "导出报告失败：${e}"
+        }
+
+        var secArr = JsonArray()
+        for (sec in doc.sections) {
+            var so = JsonObject()
+            so.put("key", JsonString(sec.key))
+            so.put("title", JsonString(sec.title))
+            var ls = JsonArray()
+            for (line in sec.lines) {
+                ls.add(JsonString(line))
+            }
+            so.put("lines", ls)
+            secArr.add(so)
+        }
+        var stats = JsonObject()
+        stats.put("stepDone", JsonInt(facts.stepDone))
+        stats.put("stepTotal", JsonInt(facts.stepTotal))
+        stats.put("stepPercent", JsonInt(facts.stepPercent))
+        stats.put("nextStep", JsonString(facts.nextStep))
+        stats.put("verifyRate", JsonInt(facts.verifyRate))
+        stats.put("verifyPass", JsonInt(facts.verifyPass))
+        stats.put("verifyTotal", JsonInt(facts.verifyTotal))
+        stats.put("verifyLimit", JsonInt(facts.verifyLimit))
+        stats.put("verifyUnknown", JsonInt(facts.verifyUnknown))
+        stats.put("humanAccepted", JsonInt(facts.humanAccepted))
+        stats.put("evidenceCount", JsonInt(facts.evidenceCount))
+
+        var artArr = JsonArray()
+        for (entry in doc.artifacts) {
+            var ao = JsonObject()
+            ao.put("label", JsonString(entry[0]))
+            ao.put("path", JsonString(entry[1]))
+            artArr.add(ao)
+        }
+
+        var res = JsonObject()
+        res.put("ok", JsonBool(outError == ""))
+        res.put("project", JsonString(projName))
+        res.put("path", JsonString(path))
+        res.put("generatedAt", JsonString(now))
+        res.put("conclusion", JsonString(doc.conclusion))
+        res.put("sections", secArr)
+        res.put("stats", stats)
+        res.put("didCount", JsonInt(doc.lineCount("did")))
+        res.put("undoneCount", JsonInt(doc.lineCount("undone")))
+        res.put("needCount", JsonInt(doc.lineCount("need")))
+        res.put("md", JsonString(outMd))
+        res.put("html", JsonString(outHtml))
+        res.put("json", JsonString(outJson))
+        res.put("artifacts", artArr)
+        res.put("error", JsonString(outError))
+        eprintln("[lingqu][report] ${projName} → ${outHtml}｜${doc.conclusion}")
+        return res
+    }
+}
+
+/** 报告的 JSON 落档（lingqu/report/v1）：三段全文 + 计数 + 文件路径，便于机器再加工 */
+func reportJson(doc: ReportDoc, facts: MigrationFacts, outMd: String, outHtml: String): JsonObject {
+    var root = JsonObject()
+    root.put("schema", JsonString("lingqu/report/v1"))
+    root.put("project", JsonString(doc.project))
+    root.put("path", JsonString(doc.path))
+    root.put("generatedAt", JsonString(doc.generatedAt))
+    root.put("conclusion", JsonString(doc.conclusion))
+    var secs = JsonArray()
+    for (sec in doc.sections) {
+        var so = JsonObject()
+        so.put("key", JsonString(sec.key))
+        so.put("title", JsonString(sec.title))
+        var ls = JsonArray()
+        for (line in sec.lines) {
+            ls.add(JsonString(line))
+        }
+        so.put("lines", ls)
+        secs.add(so)
+    }
+    root.put("sections", secs)
+    var arts = JsonArray()
+    for (entry in doc.artifacts) {
+        var ao = JsonObject()
+        ao.put("label", JsonString(entry[0]))
+        ao.put("path", JsonString(entry[1]))
+        arts.add(ao)
+    }
+    root.put("artifacts", arts)
+    var stats = JsonObject()
+    stats.put("stepDone", JsonInt(facts.stepDone))
+    stats.put("stepTotal", JsonInt(facts.stepTotal))
+    stats.put("stepPercent", JsonInt(facts.stepPercent))
+    stats.put("nextStep", JsonString(facts.nextStep))
+    stats.put("verifyRate", JsonInt(facts.verifyRate))
+    stats.put("verifyPass", JsonInt(facts.verifyPass))
+    stats.put("verifyTotal", JsonInt(facts.verifyTotal))
+    stats.put("verifyFail", JsonInt(facts.verifyFail))
+    stats.put("verifyLimit", JsonInt(facts.verifyLimit))
+    stats.put("verifyUnknown", JsonInt(facts.verifyUnknown))
+    stats.put("humanAccepted", JsonInt(facts.humanAccepted))
+    stats.put("humanIgnored", JsonInt(facts.humanIgnored))
+    stats.put("evidenceCount", JsonInt(facts.evidenceCount))
+    root.put("stats", stats)
+    var files = JsonObject()
+    files.put("md", JsonString(outMd))
+    files.put("html", JsonString(outHtml))
+    root.put("files", files)
+    return root
+}
+
+/** 确保目录存在（逐级建；`a/b/c` 这种导出目录要能一次建好） */
+func ensureDirOf(dir: String): Unit {
+    if (dir == "" || dir == "." || exists(Path(dir))) {
+        return
+    }
+    var start: Int64 = 0
+    let bytes = dir.toArray()
+    var i: Int64 = 0
+    while (i < bytes.size) {
+        // 字面量 92/47 直接比，别拿 Int64 数组元素跟 Byte 比（类型不匹配，见 AGENTS §4-59）
+        let isSep = bytes[i] == 92 || bytes[i] == 47
+        if (isSep && i > start) {
+            let part = dir[start..i]
+            if (part.size > 0 && !exists(Path(part))) {
+                Directory.create(Path(part))
+            }
+            start = i + 1
+        }
+        i += 1
+    }
+    if (!exists(Path(dir))) {
+        Directory.create(Path(dir))
+    }
+}
+
+/**
  * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。
  *
  * 把 0.17.0 手工跑通的那条链做成命令：`hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog。
@@ -2848,6 +3059,7 @@ public func build(): AppSpec {
         app.register("t2h:deploy", DeployCommand())
         app.register("t2h:verify", VerifyCommand())
         app.register("t2h:resume", ResumeCommand())
+        app.register("t2h:report", ReportCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

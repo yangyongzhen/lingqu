@@ -1,0 +1,159 @@
+package lingqu
+
+import lingqu.report.*
+import std.collection.*
+import std.fs.*
+import stdx.encoding.json.*
+
+/*
+ * `t2h:report` 的收数层：把 `.lingqu/` 下已有的落档汇总成一份 `MigrationFacts`。
+ *
+ * 与 `verify_feed.cj` 的分工：那边是"为验证清单取数"，这边是"为迁移报告取数"——
+ * 两者都**只读落档、不跑子进程**（报告不该有副作用：出报告不能反过来改工程）。
+ *
+ * 一条纪律：落档不存在就不写这段事实（不填假值）。报告里出现"0 份证据"是诚实的，
+ * 出现一个编出来的数字才是事故。
+ */
+
+/** 统计目录里以 `<工程>-` 开头的文件（证据张数；读不到目录就给 0） */
+func countEvidenceFiles(projName: String): Int64 {
+    let dir = ".lingqu/evidence"
+    if (!exists(Path(dir))) {
+        return 0
+    }
+    var entries: Array<FileInfo>
+    try {
+        entries = Directory.readFrom(dir)
+    } catch (e: Exception) {
+        let _ = e
+        return 0
+    }
+    var n: Int64 = 0
+    for (info in entries) {
+        if (info.isDirectory()) {
+            continue
+        }
+        // FileInfo 的名字是 `name` 属性（不是 toString()，见 AGENTS §4-59）
+        if (info.name.startsWith(projName + "-")) {
+            n += 1
+        }
+    }
+    return n
+}
+
+/** 读 `decisions.json` 里每条决策的 decision 值（没有落档给空表） */
+func collectDecisionValues(projName: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let p = ".lingqu/port/${projName}/decisions.json"
+    match (readJsonOrNone(p)) {
+        case Some(root) =>
+            let arr = objFieldOf(root, "items")
+            match (arr.kind()) {
+                case JsonKind.JsArray =>
+                    var i: Int64 = 0
+                    while (i < arr.asArray().size()) {
+                        out.add(jsonStrField(arr.asArray()[i], "decision"))
+                        i += 1
+                    }
+                case _ => ()
+            }
+        case None => ()
+    }
+    return out
+}
+
+/** 把 verify 清单里某一判定的标题收集起来（limit / unknown / fail 三类各取一份） */
+func collectVerdictTitles(verifyRoot: JsonValue, verdict: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let arr = objFieldOf(verifyRoot, "items")
+    match (arr.kind()) {
+        case JsonKind.JsArray =>
+            var i: Int64 = 0
+            while (i < arr.asArray().size()) {
+                let it = arr.asArray()[i]
+                if (jsonStrField(it, "verdict") == verdict) {
+                    out.add(jsonStrField(it, "title"))
+                }
+                i += 1
+            }
+        case _ => ()
+    }
+    return out
+}
+
+/** 落档存在才加进附录（不存在的路径写进报告等于虚构证据） */
+func addArtifactIfExists(list: ArrayList<(String, String)>, label: String, path: String): Unit {
+    if (path != "" && exists(Path(path))) {
+        list.add((label, path))
+    }
+}
+
+/**
+ * 汇总报告事实：8 步状态（走 `t2h:resume` 的同一套观测）+ 可用率清单 + 证据 + 产物 + A3 计数。
+ */
+public func collectReportFacts(projName: String, projPath: String, now: String): MigrationFacts {
+    let facts = MigrationFacts()
+    facts.project = projName
+    facts.path = projPath
+    facts.generatedAt = now
+
+    // ① 8 步状态机：与断点板同源（同一份观测，报告不会与 ④ 屏各说一套）
+    let board = collectTaskBoard(projName, projPath, now)
+    let pr = taskProgress(board)
+    facts.stepDone = pr.done
+    facts.stepTotal = pr.total
+    facts.stepPercent = pr.percent
+    facts.nextStep = firstUnfinished(board)
+    for (s in board.steps) {
+        facts.stepIds.add(s.id)
+        facts.stepTitles.add(s.title)
+        facts.stepStatuses.add(s.status)
+        facts.stepNotes.add(s.note)
+    }
+
+    // ② 可用率与清单
+    match (readJsonOrNone(".lingqu/verify/${projName}.json")) {
+        case Some(root) =>
+            let stats = objFieldOf(root, "stats")
+            facts.verifyTotal = intFieldOf(stats, "total", 0)
+            facts.verifyPass = intFieldOf(stats, "pass", 0)
+            facts.verifyFail = intFieldOf(stats, "fail", 0)
+            facts.verifyLimit = intFieldOf(stats, "limit", 0)
+            facts.verifyUnknown = intFieldOf(stats, "unknown", 0)
+            facts.verifyRate = intFieldOf(stats, "ratePercent", -1)
+            facts.limitItems = collectVerdictTitles(root, "limit")
+            facts.unknownItems = collectVerdictTitles(root, "unknown")
+            facts.failedItems = collectVerdictTitles(root, "fail")
+            facts.bundleName = jsonStrField(root, "bundleName")
+        case None => ()
+    }
+
+    // ③ A3 人工介入：只有"采纳"才算一次介入；没有记录就如实说明
+    let decisions = collectDecisionValues(projName)
+    let hc = countHumanDecisions(decisions)
+    facts.humanAccepted = hc.accepted
+    facts.humanIgnored = hc.ignored
+    if (decisions.size == 0) {
+        facts.decisionsNote = "本工程没有人工决策记录（A3 口径：guide 项被采纳才计一次介入）"
+    } else {
+        facts.decisionsNote = "人工决策：采纳 ${hc.accepted} 条 / 忽略 ${hc.ignored} 条（落 .lingqu/port/${projName}/decisions.json）"
+    }
+
+    // ④ 证据与产物
+    facts.evidenceCount = countEvidenceFiles(projName)
+    facts.artifacts.add(("断点板（8 步状态）", taskBoardPath()))
+    addArtifactIfExists(facts.artifacts, "扫描画像", ".lingqu/scan/${projName}.json")
+    addArtifactIfExists(facts.artifacts, "依赖矩阵", ".lingqu/deps/${projName}.json")
+    addArtifactIfExists(facts.artifacts, "人工决策", ".lingqu/port/${projName}/decisions.json")
+    addArtifactIfExists(facts.artifacts, "编译落档", ".lingqu/build/${projName}.json")
+    addArtifactIfExists(facts.artifacts, "HAP 装配", ".lingqu/hap/${projName}.json")
+    addArtifactIfExists(facts.artifacts, "签名体检", ".lingqu/sign/${projName}.json")
+    addArtifactIfExists(facts.artifacts, "真机部署", ".lingqu/deploy/${projName}.json")
+    addArtifactIfExists(facts.artifacts, "验证清单", ".lingqu/verify/${projName}.json")
+    addArtifactIfExists(facts.artifacts, "三段式报告（MD）", ".lingqu/verify/${projName}.md")
+    addArtifactIfExists(facts.artifacts, "三段式报告（HTML）", ".lingqu/verify/${projName}.html")
+    if (facts.evidenceCount > 0) {
+        facts.artifacts.add(("真机证据目录", ".lingqu/evidence/"))
+    }
+    return facts
+}

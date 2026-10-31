@@ -5,6 +5,67 @@
 
 ---
 
+## [0.27.0] - 2026-11-01
+
+**主题**：**P6 收口 —— `t2h:report` 上线 + ⑦ 迁移报告屏接真数据**：三段式报告完全从落档推导，
+MD / HTML / JSON 一键导出；⑦ 屏原来的假数据（"38 分钟 / 3 处人工介入 / 87% 可用率"）全部换成真实读数。
+
+### Added
+
+- **命令 `t2h:report`**（三处联动齐全）：读 `.lingqu` 下的落档 → 生成三段式报告
+  → `.lingqu/report/<工程>.{md,html,json}`（`lingqu/report/v1`）。
+  纯读盘：**不采证、不跑子进程、不改工程**，可以反复出。
+- `src/report/report.cj`（纯函数层，`lingqu.report`）：
+  - `buildReport`：8 步状态 + 可用率清单 + 决策 → 三段（做了什么 / 没做什么 / 需要你做什么）；
+    没跑的写「还没跑」、没过的写「没过」、跳过的写「按人工判断跳过」——**三种状态不混**；
+  - `stepActionHint`：每步对应界面上一个按钮（报告里的"需要你做什么"因此可执行、不是空话）；
+  - `renderReportMarkdown` / `renderReportHtml`（自包含单文件）/ `escapeHtmlText`
+    （按字节替换 5 个危险 ASCII，**中文原样保留**）；
+  - `countHumanDecisions`（A3 口径：`accepted` 才算一次介入，`ignored` 只留痕）
+- `src/report_feed.cj`：把落档汇总成 `MigrationFacts`（8 步走 `t2h:resume` 的同一套观测、
+  清单三类判定分列、证据文件计数、附录只列**真实存在**的落档）
+- **⑦ 屏接真数据**：四个指标（工程 / 8 步进度 / 人工介入 A3 / 可用率 A4）+ 三段卡片 +
+  「生成迁移报告」「导出 Markdown / JSON / HTML」+ 证据索引（附录逐条列出落档路径）
+- `ui_report` 新增 `reportOk/reportDid/reportUndone/reportNeed/reportRate/reportHuman/`
+  `reportHtml/reportMd/reportConclusion/reportRows`；探针 `LINGQU_REPORT_PATH`
+
+### Changed
+
+- 版本 0.26.0 → **0.27.0**；单测 **165 → 171**（`src/tests/report_test.cj`，6 例）
+
+### 口径（与 verify / task 一致，别改薄）
+
+| 类别 | 报告里的位置 | 为什么 |
+|---|---|---|
+| 平台限制 | 没做什么（标注「不算失败」） | 鸿蒙没有托盘是能力位 0，不是工具失败；混进失败会让人误判 |
+| 未验证 | 没做什么 + 需要你做什么（补验证） | 没证据就不算通过（A4 的分母口径） |
+| 失败 | 没做什么 + 需要你做什么（重跑） | 失败要能一眼看到闸的第一条原因 |
+| 人工跳过 | 没做什么（标注「按人工判断跳过」） | 跳过是人的结论，但它不是通过 |
+
+### 证据（本机 Windows x64，2026-11-01，habit-tree）
+
+```
+启动参数：LINGQU_REPORT_PATH=E:\test\rust\habit-tree  LINGQU_UI_SCREEN=report  LINGQU_UI_PROBE=1
+产物：.lingqu/report/habit-tree.md (2804 B) / .html (3796 B) / .json (3912 B)
+结论：habit-tree：8 步完成 5/8（62%），核心功能可用率 60%，0 处人工介入
+做了什么（7 条）：扫描 R=24… / 依赖 430 包… / HAP 7249837 字节… / 部署装启成功 hilog 40 行 /
+                验证可用率 60% / 采集到 2 份真机证据 / 功能清单通过 3/5 项
+没做什么（7 条）：「规则改造」还没跑 /「交叉编译」没过：…闸未过：.so 内嵌的 1 个前端产物在 dist/
+                里已不存在 /「签名体检」还没跑 / 平台限制（不算失败）1 项 / 未验证 2 项 / 无人工决策记录
+需要你做什么（5 条）：三条步骤动作（各对应界面按钮）+ 两条补验证
+ui_report：reportOk=true reportDid=7 reportUndone=7 reportNeed=5 reportRate=60 reportHuman=0
+           reportRows=19 errorCount=0 activeScreen=report
+```
+
+### 未做（如实）
+
+- 报告里没有"总耗时"这一项——落档目前不记每步耗时（要改各命令的落档 schema，单独一轮做）；
+  ⑦ 屏因此也去掉了原来的"38 分钟"假数字，而不是编一个
+- 报告未做「打开文件」按钮（跨平台 opener 涉及启动外部进程，本轮不动）；路径已给全，可自行打开
+- T5-4 release 签名两态、P7 5 样本矩阵仍未开工
+
+---
+
 ## [0.26.0] - 2026-11-01
 
 **主题**：**T6-5 断点续迁**——8 步迁移链的进度变成盘上可查的证据（`.lingqu/tasks.json`），

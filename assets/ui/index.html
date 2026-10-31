@@ -698,34 +698,43 @@ body.ai-hidden .ai-show{display:block}
       <!-- ⑦ 迁移报告 -->
       <section class="screen" data-screen="report">
         <div class="whead">
-          <div><h1>迁移报告</h1><p>结构化、可导出、带证据索引。三段式：做了什么 / 没做什么 / 需要你做什么。</p></div>
-          <div class="acts"><button class="btn">导出 Markdown</button><button class="btn">导出 JSON</button><button class="btn primary">导出 HTML 报告</button></div>
+          <div><h1>迁移报告</h1><p>三段式（做了什么 / 没做什么 / 需要你做什么）全部**从落档推导**；出报告不采证、不改工程，可反复出。</p></div>
+          <div class="acts">
+            <button class="btn primary" id="btnReport" title="读 .lingqu 下的落档 → 生成 MD / HTML / JSON 三份报告">生成迁移报告</button>
+            <button class="btn" id="btnReportMd" title="生成并指向 Markdown 报告">导出 Markdown</button>
+            <button class="btn" id="btnReportJson" title="生成并指向 JSON 报告">导出 JSON</button>
+            <button class="btn" id="btnReportHtml" title="生成并指向 HTML 报告（自包含单文件，双击可看）">导出 HTML 报告</button>
+          </div>
+        </div>
+        <div class="acts-row">
+          <input id="reportPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_REPORT_PATH；留空沿用断点板里的工程）" style="flex:1 1 240px;min-width:180px">
+          <input id="reportOutDir" class="mono" placeholder="导出目录（默认 .lingqu/report）" style="flex:0 1 200px">
         </div>
         <div class="grid4">
-          <div class="stat"><div class="k">应用</div><div class="v" style="font-size:15px">habit-tree 1.2.0</div></div>
-          <div class="stat"><div class="k">总耗时</div><div class="v">38<small>分钟</small></div></div>
-          <div class="stat"><div class="k">人工介入</div><div class="v" style="color:var(--warn)">3<small>处</small></div></div>
-          <div class="stat"><div class="k">核心功能可用率</div><div class="v" style="color:var(--ok)">87<small>%</small></div></div>
+          <div class="stat"><div class="k">工程</div><div class="v" style="font-size:15px" id="rpProject">—</div></div>
+          <div class="stat"><div class="k">8 步进度</div><div class="v" id="rpSteps">—</div></div>
+          <div class="stat"><div class="k">人工介入（A3 ≤5）</div><div class="v" style="color:var(--warn)" id="rpHuman">—</div></div>
+          <div class="stat"><div class="k">核心功能可用率（A4 ≥80%）</div><div class="v" id="rpRate">—</div></div>
         </div>
+        <div class="sethint" id="rpNote" style="margin-top:10px">点「生成迁移报告」按落档出报告。段内每一条都来自 `.lingqu` 下的证据；没跑过的步骤会明确写「还没跑」，不会编。</div>
         <div class="grid3" style="margin-top:13px">
-          <div class="card" style="margin-top:0"><div class="card-h"><h3 style="color:var(--ok)">做了什么</h3></div>
-            <div class="small" style="line-height:1.9">· 依赖切 OHOS fork 并钉 4 个精确版本<br>· 注入 localStorage 透明桥 / confirm·prompt polyfill / color 降级<br>· 平台路径与 cfg 分支 3 处；panic hook 落盘<br>· 生成 DevEco 壳 + 交叉编译 .so + HAP 装配 + 部署<br>· 采集 13 条真机证据</div></div>
-          <div class="card" style="margin-top:0"><div class="card-h"><h3 style="color:var(--warn)">没做什么（已知限制）</h3></div>
-            <div class="small" style="line-height:1.9">· 托盘图标 / 系统通知：鸿蒙能力位 0，降级为普通最小化与页内提示<br>· Blob 下载：ArkWeb 下载桥未接线，导出按钮暂走 Rust 落盘<br>· 原生文件夹选择器：改为应用内目录树</div></div>
-          <div class="card" style="margin-top:0"><div class="card-h"><h3 style="color:var(--acc)">需要你做什么</h3></div>
-            <div class="small" style="line-height:1.9">· 签名切回 release profile（当前 debug）<br>· compatibleSdkVersion 确认 ≤ 上架目标 API<br>· 隐私政策公网 URL 填入华为开发者平台<br>· 图标替换为正式 1024×1024 RGBA<br>· 上架自查 5 项</div></div>
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3 style="color:var(--ok)">做了什么</h3><span class="right" id="rpDidN">—</span></div>
+            <div class="small" style="line-height:1.9" id="rpDid"><span class="muted">还没生成——点上方「生成迁移报告」</span></div>
+          </div>
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3 style="color:var(--warn)">没做什么（已知限制 / 未验证）</h3><span class="right" id="rpUndoneN">—</span></div>
+            <div class="small" style="line-height:1.9" id="rpUndone"><span class="muted">还没生成</span></div>
+          </div>
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3 style="color:var(--acc)">需要你做什么</h3><span class="right" id="rpNeedN">—</span></div>
+            <div class="small" style="line-height:1.9" id="rpNeed"><span class="muted">还没生成</span></div>
+          </div>
         </div>
         <div class="card">
-          <div class="card-h"><h3>风险分级</h3><span class="right">总体：中等</span></div>
-          <table>
-            <thead><tr><th>项</th><th>级别</th><th>影响面</th><th>处置</th></tr></thead>
-            <tbody>
-              <tr><td>reqwest TLS 走 rustls 替代</td><td><span class="pill warn">中</span></td><td>所有 https 请求</td><td class="muted">已改造并在真机验证通过</td></tr>
-              <tr><td>托盘能力降级</td><td><span class="pill warn">中</span></td><td>常驻交互</td><td class="muted">已登记为平台限制</td></tr>
-              <tr><td>ArkWeb 版本差异（type=color 合成层）</td><td><span class="pill info">低</span></td><td>取色 UI</td><td class="muted">已 remove() 并改应用内色板</td></tr>
-              <tr><td>上游 fork rev 漂移</td><td><span class="pill info">低</span></td><td>构建可复现性</td><td class="muted">rev 已固定并写入报告</td></tr>
-            </tbody>
-          </table>
+          <div class="card-h"><h3>导出与证据索引</h3><span class="right" id="rpTime">—</span></div>
+          <div class="sethint" id="rpPaths">还没导出——点「生成迁移报告」会同时写 MD / HTML / JSON 三份。</div>
+          <div class="mono small" style="margin-top:8px;line-height:1.9" id="rpArtifacts"></div>
         </div>
       </section>
 
@@ -958,6 +967,11 @@ withBridge(function(tauri){
       // 不设也照样能跑——界面启动时会按 tasks.json 里记的工程名观测一次。
       if (d && d.resumePath) {
         loadResumeBoard(String(d.resumePath));
+      }
+      // 迁移报告探针（T6-4）：LINGQU_REPORT_PATH 显式设置时按落档出一次报告（纯读盘，秒级）
+      if (d && d.reportPath) {
+        $('reportPath').value = String(d.reportPath);
+        runReport('');
       }
       // 指定初始屏（LINGQU_UI_SCREEN=build 之类）：给「截某屏的版面证据」一个可复现入口，
       // 不必靠人手动点左栏（无视觉环境也能落到 ui-report 的 activeScreen 上）
@@ -2595,6 +2609,112 @@ withBridge(function(tauri){
     });
   });
 
+  /* ===== T6-4 迁移报告（⑦ 屏）=====
+   * 三段式全部来自落档；出报告不采证、不改工程，可反复出。
+   * 「导出 Markdown / JSON / HTML」三个按钮走同一条命令：三份文件一起写，
+   * 按钮的区别只是把哪一份的路径高亮出来（不假装"只导出一种格式"）。 */
+  var REPORT = { ok: false, project: '', did: [], undone: [], need: [], stats: {},
+                 paths: {}, conclusion: '', artifacts: [], error: '' };
+
+  function reportPathValue(){
+    var p = ($('reportPath') && $('reportPath').value ? $('reportPath').value : '').trim();
+    if (p) { return p; }
+    return resumePathValue();
+  }
+
+  function reportListInto(el, lines){
+    el.innerHTML = '';
+    (lines || []).forEach(function(t){
+      var d = document.createElement('div');
+      d.textContent = '· ' + String(t);
+      el.appendChild(d);
+    });
+    if (!(lines || []).length) { el.innerHTML = '<span class="muted">（空）</span>'; }
+  }
+
+  function renderReport(r){
+    r = r || {};
+    var st = r.stats || {};
+    REPORT = {
+      ok: r.ok === true,
+      project: String(r.project || ''),
+      did: (r.sections && r.sections[0] && r.sections[0].lines) ? r.sections[0].lines : [],
+      undone: (r.sections && r.sections[1] && r.sections[1].lines) ? r.sections[1].lines : [],
+      need: (r.sections && r.sections[2] && r.sections[2].lines) ? r.sections[2].lines : [],
+      stats: st,
+      paths: { md: String(r.md || ''), html: String(r.html || ''), json: String(r.json || '') },
+      conclusion: String(r.conclusion || ''),
+      artifacts: (r.artifacts && r.artifacts.length) ? r.artifacts : [],
+      error: String(r.error || '')
+    };
+    $('rpProject').textContent = REPORT.project || '—';
+    $('rpSteps').innerHTML = (typeof st.stepDone === 'number')
+      ? (st.stepDone + '<small>/ ' + st.stepTotal + '（' + st.stepPercent + '%）</small>') : '—';
+    $('rpHuman').innerHTML = (typeof st.humanAccepted === 'number')
+      ? (st.humanAccepted + '<small>处</small>') : '—';
+    var rate = (typeof st.verifyRate === 'number') ? st.verifyRate : -1;
+    $('rpRate').innerHTML = (rate < 0 ? '—' : (rate + '<small>%</small>'));
+    $('rpRate').style.color = rate >= 80 ? 'var(--ok)' : (rate >= 0 ? 'var(--err)' : '');
+    $('rpDid').removeAttribute('style');
+    reportListInto($('rpDid'), REPORT.did);
+    reportListInto($('rpUndone'), REPORT.undone);
+    reportListInto($('rpNeed'), REPORT.need);
+    $('rpDid').className = 'small';
+    $('rpDid').style.lineHeight = '1.9';
+    $('rpUndone').className = 'small'; $('rpUndone').style.lineHeight = '1.9';
+    $('rpNeed').className = 'small'; $('rpNeed').style.lineHeight = '1.9';
+    $('rpDidN').textContent = REPORT.did.length + ' 条';
+    $('rpUndoneN').textContent = REPORT.undone.length + ' 条';
+    $('rpNeedN').textContent = REPORT.need.length + ' 条';
+    $('rpTime').textContent = r.generatedAt ? ('生成于 ' + String(r.generatedAt)) : '—';
+    if (REPORT.error) {
+      $('rpNote').style.color = 'var(--err)';
+      $('rpNote').textContent = '出报告失败：' + REPORT.error;
+    } else {
+      $('rpNote').style.color = '';
+      $('rpNote').textContent = REPORT.conclusion
+        ? ('结论：' + REPORT.conclusion + '（三段逐条来自 .lingqu 下的落档）')
+        : '点「生成迁移报告」按落档出报告。';
+    }
+    $('rpPaths').innerHTML = REPORT.paths.html
+      ? ('已导出：<br><span class="mono">' + esc(REPORT.paths.md) + '</span><br><span class="mono">'
+         + esc(REPORT.paths.html) + '</span><br><span class="mono">' + esc(REPORT.paths.json) + '</span>')
+      : '还没导出——点「生成迁移报告」会同时写 MD / HTML / JSON 三份。';
+    var art = $('rpArtifacts');
+    art.innerHTML = '';
+    REPORT.artifacts.forEach(function(a){
+      var d = document.createElement('div');
+      d.textContent = '· ' + String(a.label || '') + '：' + String(a.path || '');
+      art.appendChild(d);
+    });
+    reportUi('report-done');
+  }
+
+  function runReport(which){
+    var btn = $('btnReport');
+    btn.disabled = true;
+    $('rpNote').style.color = '';
+    $('rpNote').textContent = '读落档生成报告…';
+    var arg = { outDir: ($('reportOutDir').value || '').trim() };
+    if (reportPathValue()) { arg.path = reportPathValue(); }
+    invoke('t2h:report', arg).then(function(r){
+      renderReport(r || {});
+      if (which && REPORT.paths[which]) {
+        $('rpPaths').innerHTML += '<br><span class="pill ok">已导出 ' + esc(which.toUpperCase())
+          + '：' + esc(REPORT.paths[which]) + '</span>';
+      }
+    }).catch(function(e){
+      $('rpNote').style.color = 'var(--err)';
+      $('rpNote').textContent = '出报告失败：' + (e && e.message ? e.message : e);
+      reportUi('report-error');
+    }).then(function(){ btn.disabled = false; });
+  }
+
+  $('btnReport').addEventListener('click', function(){ runReport(''); });
+  $('btnReportMd').addEventListener('click', function(){ runReport('md'); });
+  $('btnReportJson').addEventListener('click', function(){ runReport('json'); });
+  $('btnReportHtml').addEventListener('click', function(){ runReport('html'); });
+
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -2717,6 +2837,19 @@ withBridge(function(tauri){
       resumeRowH: (function(){
         var r = document.querySelector("#resumeList .rstep");
         return r ? Math.round(r.getBoundingClientRect().height) : 0;
+      })(),
+      // T6-4 迁移报告：三段条数 / 结论数字 / 导出路径（reportRows = 三段总条数）
+      reportOk: REPORT.ok === true,
+      reportDid: (REPORT.did || []).length,
+      reportUndone: (REPORT.undone || []).length,
+      reportNeed: (REPORT.need || []).length,
+      reportRate: (REPORT.stats && typeof REPORT.stats.verifyRate === "number") ? REPORT.stats.verifyRate : -1,
+      reportHuman: (REPORT.stats && typeof REPORT.stats.humanAccepted === "number") ? REPORT.stats.humanAccepted : 0,
+      reportHtml: (REPORT.paths && REPORT.paths.html) ? REPORT.paths.html : '',
+      reportMd: (REPORT.paths && REPORT.paths.md) ? REPORT.paths.md : '',
+      reportConclusion: REPORT.conclusion || '',
+      reportRows: (function(){
+        return document.querySelectorAll("#rpDid div, #rpUndone div, #rpNeed div").length;
       })(),
       // ⑥ 真机部署（T5-5）
       deployOk: DEPLOY.ok === true,

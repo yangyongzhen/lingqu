@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.26.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.27.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -172,6 +172,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 56 | 写 `var out: Array<String> = []; out.add(x)` → `'add' is not a member of struct 'Array<Struct-String>'` | 仓颉的 **`Array` 是定长**，没有 `add`；要按需追加就用 `ArrayList<T>()` 再 `toArray()`（`HashMap` 也不是 `put`，见第 21 条）。写"拼数组"这类代码前先在仓里搜一眼现有写法 |
 | 57 | 断点/报告里出现「HAP 0 字节」「前端指纹 0 项一致」这类**假数字**，实际落档里字段明明有值 | 读别人写的落档**必须对着 schema 抄字段名**：本项目实测 `hap.json` 是 `hapBytes` 不是 `bytes`、`rawfileCount` 嵌在 `entries` 里、`assetDiff.matched` 是**数组**（用 `arraySizeFieldOf` 取条数，别当整数）。判定与摘要写在同一处时，**失败必须把闸的第一条 `failures` 贴出来**——否则界面只有"失败"两个字，没人知道为什么 |
 | 58 | 断点板里某步"跑过了却永远显示未开始" | 落档位置有历史形态：`t2h:port` 的 `decisions.json` 只在记过人工决策时才写，但改造本身留下 `.lingqu/port/<工程>/` 备份目录。观测规则要**同时认两种证据**（落档文件 or 备份目录），否则断点会一直卡在那一步。同理任何"落档路径"改动都要回看消费方（第 33 条） |
+| 59 | `Directory.readFrom(dir)` 的返回值当字符串用 → `'toString' is not a member of struct 'FileInfo'`；或 `bytes[i] == 92` 换成 `for (s in [92,47]) if (bytes[i] == s)` → `invalid binary operator '==' on type 'UInt8' and 'Int64'` | `Directory.readFrom` 返回 `Array<FileInfo>`，**名字是 `info.name` 属性**（另有 `isDirectory()`）。而 Byte 只能和**字面量**比：`bytes[i] == 92` 可以，数组元素是 `Int64`、与 `Byte` 比要显式转换。两个错误都在 0.27.0 编译期报出——好在都是编译期，不会进产物 |
 
 ---
 

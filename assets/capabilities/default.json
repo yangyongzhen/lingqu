@@ -17,6 +17,7 @@
     "t2h:deploy",
     "t2h:verify",
     "t2h:resume",
+    "t2h:report",
     "t2h:cjh_status",
     "t2h:cjh_deploy",
     "t2h:cjh_start",
