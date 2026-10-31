@@ -506,12 +506,65 @@ public func testWritebackSilentWhenNoCandidate(): Unit {
 
 @Test
 public func testWritebackWithoutProjectBundle(): Unit {
-    // 读不到工程 bundleName（AppScope 缺失）时也要给出可执行的下一步，而不是静默"匹配"
+    // 读不到工程 bundleName（AppScope 缺失）：**不能编"包名不一致"**（0.39.11 实测：
+    // atomMqtt 就是这样被写成"工程包名 （读不到） 与候选材料包名不一致"的，读着像真结论）
+    // 只提示先确认 AppScope，原判定的下一步保持不变。
     let base = judgeSign(false, false, false, "", UDID_IN_SAMPLE, true)
     let refined = judgeSignForWriteback(base, "", "com.yang.testcj", "")
     @Assert(refined.bundleMatch, false)
-    @Assert(refined.nextStep.contains("app.json5"), true)
-    @Assert(refined.nextStep.contains("00303074"), true)
-    // 候选包名清单为空时的兜底文案
-    @Assert(refined.nextStep.contains(".ohos"), true)
+    @Assert(refined.reason.contains("无法判断候选材料是否匹配"), true)
+    @Assert(refined.reason.contains("与候选材料包名不一致"), false)
+    @Assert(refined.nextStep, base.nextStep)
+}
+
+// ============================================================
+// 0.39.11：装配前的签名预检（judgeSignPreflight）
+// ============================================================
+//
+// 复现的浪费：m3u8dl-tauri 的 signingConfigs 指向别的包名的材料 → `t2h:hap` 先跑分钟级的
+// hvigor，跑完只换来一句 00303074。预检把这条判定挪到 hvigor 之前（秒级）。
+// 纪律：**只在必然失败时拦**——没配签名（能产 unsigned HAP）与"材料缺文件但 unsigned 仍可能产出"
+// 都不拦，只留提示。
+
+@Test
+public func testPreflightAllowsUnsignedBuild(): Unit {
+    // 没配 signingConfigs：不拦（不签名也能产 HAP，闸门会如实报"未签名"）
+    let p = judgeSignPreflight(false, false, "com.a.b", "")
+    @Assert(p.block, false)
+    @Assert(p.reason, "")
+    @Assert(p.projectBundle, "com.a.b")
+}
+
+@Test
+public func testPreflightWarnsOnMissingMaterialWithoutBlocking(): Unit {
+    // 配了但材料文件不存在 → 不拦，提示 00303107（unsigned HAP 仍可能产出）
+    let p = judgeSignPreflight(true, false, "com.a.b", "")
+    @Assert(p.block, false)
+    @Assert(p.reason.contains("00303107"), true)
+    @Assert(p.reason.contains("签名体检"), true)
+}
+
+@Test
+public func testPreflightBlocksOnBundleMismatch(): Unit {
+    // 现场复刻：工程 com.atomgit.m3u8dl_tauri，材料签给 com.yang.testcj
+    let p = judgeSignPreflight(true, true, "com.atomgit.m3u8dl_tauri", "com.yang.testcj")
+    @Assert(p.block, true)
+    @Assert(p.reason.contains("00303074"), true)
+    @Assert(p.reason.contains("com.atomgit.m3u8dl_tauri"), true)
+    @Assert(p.reason.contains("com.yang.testcj"), true)
+    @Assert(p.reason.contains("DevEco"), true)         // 正解必须在
+    // 反过来同样要拦（材料签给别的包名，方向无关）
+    @Assert(judgeSignPreflight(true, true, "com.x", "com.y").block, true)
+}
+
+@Test
+public func testPreflightPassesWhenBundleMatches(): Unit {
+    // 包名一致（habit-tree 的真机现场）：不拦、无提示
+    let p = judgeSignPreflight(true, true, "com.jiujiang.habit_tree", "com.jiujiang.habit_tree")
+    @Assert(p.block, false)
+    @Assert(p.reason, "")
+    // 读不到工程包名 → 不拦（把判定交回 hvigor，别自己造假阴性）
+    let q = judgeSignPreflight(true, true, "", "com.yang.testcj")
+    @Assert(q.block, false)
+    @Assert(q.reason.contains("bundleName"), true)
 }

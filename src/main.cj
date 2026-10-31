@@ -1930,6 +1930,47 @@ public class HapCommand <: CommandHandler {
             }
         }
 
+        // ---- 签名预检（0.39.11）：包名不一致时**别让 hvigor 白跑三分钟** ----
+        //
+        // 实测动机：m3u8dl-tauri 的 signingConfigs 指向别的包名的材料，hvigor 跑完只报 00303074；
+        // 而这件事在跑之前就能从「AppScope/app.json5 的 bundleName」与「已配 profile 的 bundle-name」
+        // 判定出来（判定是纯函数 judgeSignPreflight，见 sign.cj）。
+        var pre = SignPreflight()
+        var preProjectBundle = ""
+        var preProfileBundle = ""
+        if (errMsg == "") {
+            var hasSignCfg = false
+            var cfgProfilePath = ""
+            let appJson = "${ohosDir}/AppScope/app.json5"
+            if (exists(Path(appJson))) {
+                try {
+                    preProjectBundle = json5ValueAfter(String.fromUtf8(File.readFrom(appJson)), "bundleName")
+                } catch (e: Exception) {
+                    let _ = e
+                }
+            }
+            let bp = "${ohosDir}/build-profile.json5"
+            if (exists(Path(bp))) {
+                try {
+                    let proj = parseProjSigning(String.fromUtf8(File.readFrom(bp)))
+                    hasSignCfg = proj.hasSigningConfigs && proj.signingConfigName != ""
+                    cfgProfilePath = resolveProjectPath(proj.profilePath, ohosDir)
+                } catch (e: Exception) {
+                    let _ = e
+                }
+            }
+            let profileOK = cfgProfilePath != "" && exists(Path(cfgProfilePath))
+            if (profileOK) {
+                preProfileBundle = profileBundleOf(cfgProfilePath)
+            }
+            pre = judgeSignPreflight(hasSignCfg, profileOK, preProjectBundle, preProfileBundle)
+            phaseLog += "[sign-preflight] block=${pre.block} project=${preProjectBundle} " +
+                "profile=${preProfileBundle} reason=${pre.reason}\n"
+            if (pre.block) {
+                errMsg = "签名预检未通过（未跑 hvigor，省一次分钟级白等）：${pre.reason}"
+            }
+        }
+
         // ---- hvigor assembleHap ----
         var hvigorText = ""
         if (errMsg == "") {
@@ -1981,6 +2022,16 @@ public class HapCommand <: CommandHandler {
             gateReports.add(hintRep)
             phaseLog += "[sign-hint] ${signHint}\n"
         }
+        // 预检的提示也要进闸门：没拦下（材料缺文件）不代表没问题，得让人看见
+        if (pre.reason != "" && !pre.block) {
+            let preRep = GateReport()
+            preRep.fail("HAP 闸（签名预检）：${pre.reason}")
+            gateReports.add(preRep)
+        } else if (pre.block) {
+            let preRep = GateReport()
+            preRep.fail("HAP 闸（签名预检，已拦下）：${pre.reason}")
+            gateReports.add(preRep)
+        }
         let gates = mergeGates(gateReports)
 
         var outError = ""
@@ -2006,6 +2057,7 @@ public class HapCommand <: CommandHandler {
             root.put("hapBytes", JsonInt(hapBytes))
             root.put("entries", entries.toJson())
             root.put("gates", gates.toJson())
+            root.put("signPreflight", pre.toJson())
             root.put("installedDeps", JsonBool(installedDeps))
             root.put("expectedSo", JsonString(expectedSo))
             root.put("soCopied", JsonString(soCopied))
@@ -2016,6 +2068,10 @@ public class HapCommand <: CommandHandler {
             outError = "落档失败：${e}"
         }
 
+        res.put("signPreflightBlock", JsonBool(pre.block))
+        res.put("signPreflightReason", JsonString(pre.reason))
+        res.put("projectBundle", JsonString(preProjectBundle))
+        res.put("profileBundle", JsonString(preProfileBundle))
         res.put("ok", JsonBool(errMsg == "" && outError == "" && gates.passed))
         res.put("ohosDir", JsonString(ohosDir))
         res.put("built", JsonBool(hv.built))
@@ -2464,6 +2520,24 @@ func profileAllows(p7bPath: String, udid: String): Bool {
 }
 
 /**
+ * 这份 `.p7b` 签给哪个包名（读不到返回 ""）。
+ *
+ * 0.39.11 起 `t2h:hap` 的签名预检要用它：profile 按包名签发，包名对不上 hvigor 直接 00303074。
+ */
+func profileBundleOf(p7bPath: String): String {
+    if (p7bPath == "" || !exists(Path(p7bPath))) {
+        return ""
+    }
+    try {
+        let raw = latin1Of(File.readFrom(p7bPath))
+        return parseOhosProfile(extractProfileJson(raw), p7bPath).bundleName
+    } catch (e: Exception) {
+        let _ = e
+        return ""
+    }
+}
+
+/**
  * t2h:verify —— 证据采集 + 可用率 + 报告导出（P6，0.24.0）。
  *
  * 一条命令把前面几轮的东西串起来：
@@ -2884,10 +2958,26 @@ func reportJson(doc: ReportDoc, facts: MigrationFacts, outMd: String, outHtml: S
     return root
 }
 
-/** 确保目录存在（逐级建；`a/b/c` 这种导出目录要能一次建好） */
+/**
+ * 确保目录存在。
+ *
+ * 0.39.11 修：原来逐段 `Directory.create(Path(part))` 在「工程的 `.lingqu` 还不存在」时会炸
+ * （`Failed to create directory …\.lingqu\sign, parent …\.lingqu does not exist`），
+ * 于是**落档整块丢掉**——实测 5 个样本里有 3 个（cc-switch / atomMqtt / tauri-mqtt）就因为这个
+ * 拿不到 `.lingqu/sign/<工程>.json`。现在优先用标准库的递归创建（`recursive: true`，
+ * 与 `saveTaskBoard` 同一种写法），失败再退回逐段创建。
+ */
 func ensureDirOf(dir: String): Unit {
     if (dir == "" || dir == "." || exists(Path(dir))) {
         return
+    }
+    try {
+        Directory.create(Path(dir), recursive: true)
+        if (exists(Path(dir))) {
+            return
+        }
+    } catch (e: Exception) {
+        let _ = e
     }
     var start: Int64 = 0
     let bytes = dir.toArray()
@@ -2898,7 +2988,11 @@ func ensureDirOf(dir: String): Unit {
         if (isSep && i > start) {
             let part = dir[start..i]
             if (part.size > 0 && !exists(Path(part))) {
-                Directory.create(Path(part))
+                try {
+                    Directory.create(Path(part))
+                } catch (e: Exception) {
+                    let _ = e
+                }
             }
             start = i + 1
         }

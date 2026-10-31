@@ -580,6 +580,11 @@ public func judgeSignForWriteback(c: SignCheck, projectBundle: String, candidate
         // 再叠一层"包名不一致"只会误导（实测：设备离线时 udid="" 就会走到这里）
         return out
     }
+    if (projectBundle.trimAscii() == "") {
+        // 读不到工程包名：**不能**断言"包名不一致"（那是编事实）。只提示先确认 AppScope
+        out.reason = "${out.reason}；读不到工程 AppScope/app.json5 的 bundleName，无法判断候选材料是否匹配"
+        return out
+    }
     // 候选材料是"别的包名"，写回/抄过来都会在 hvigor 的 SignHap 阶段被 00303074 拦下
     let mine = if (projectBundle == "") { "（工程 AppScope/app.json5 里没读到 bundleName）" } else {
         "`${projectBundle}`"
@@ -594,6 +599,71 @@ public func judgeSignForWriteback(c: SignCheck, projectBundle: String, candidate
         "或把 AppScope/app.json5 的 bundleName 临时改成上面某个已有包名（仅限本机验证，别用于交付）。"
     out.reason = "${out.reason}；工程包名 ${mine} 与候选材料包名不一致"
     out.nextStep = tail + how
+    return out
+}
+
+// ============================================================
+// 装配前的签名预检（0.39.11）：能秒级说清的事，别让 hvigor 跑三分钟去说
+// ============================================================
+//
+// 实测动机（m3u8dl-tauri）：`t2h:hap` 先跑 `hvigor assembleHap`（分钟级），最后只换来一句
+// `00303074`——而"签名材料的包名与工程 bundleName 不一致"这件事**跑之前**就能判定。
+// agent 的轮次预算是稀缺资源（ADR D-015：工具要"好用"，不只是"正确"）。
+
+/** 装配前签名预检的结论 */
+public class SignPreflight {
+    /** true = 别跑 hvigor 了，必然失败 */
+    public var block: Bool = false
+    /** 拦下/提示的原因（空 = 一切正常） */
+    public var reason: String = ""
+    /** 工程 `AppScope/app.json5` 的 bundleName（读不到为空） */
+    public var projectBundle: String = ""
+    /** 已配 profile 的 bundle-name（读不到为空） */
+    public var profileBundle: String = ""
+
+    public func toJson(): JsonObject {
+        var o = JsonObject()
+        o.put("block", JsonBool(this.block))
+        o.put("reason", JsonString(this.reason))
+        o.put("projectBundle", JsonString(this.projectBundle))
+        o.put("profileBundle", JsonString(this.profileBundle))
+        return o
+    }
+}
+
+/**
+ * 纯判定（不读盘，调用方把事实传进来）。三条规则——**只在真的必然失败时才拦**：
+ *
+ *   ① 没配 signingConfigs → 不拦（不签名也能产 HAP；闸门会如实报"未签名"）
+ *   ② 配了但材料文件不存在 → **不拦**，只留提示（hvigor 报 00303107，但 unsigned HAP 仍可能产出，
+ *      对"只想看看包里有什么"的人还有用）
+ *   ③ 材料存在但 profile 的 bundle-name ≠ 工程 bundleName → **拦**（hvigor 必然 00303074，
+ *      一个产物都不会有，白等三分钟）
+ */
+public func judgeSignPreflight(hasConfig: Bool, profileExists: Bool, projectBundle: String,
+    profileBundle: String): SignPreflight {
+    let out = SignPreflight()
+    out.projectBundle = projectBundle
+    out.profileBundle = profileBundle
+    if (!hasConfig) {
+        return out
+    }
+    if (!profileExists) {
+        out.reason = "签名材料文件不存在（hvigor 会报 00303107 Invalid storeFile）：先跑「签名体检」" +
+            "确认 build-profile.json5 里 certify/profile/storeFile 三个路径"
+        return out
+    }
+    if (projectBundle.trimAscii() == "") {
+        // 读不到工程包名（AppScope 里的写法超出轻量 json5 提取能力）：不拦，交给 hvigor 自己判
+        out.reason = "读不到工程 AppScope/app.json5 的 bundleName，签名预检跳过（hvigor 会自己判定）"
+        return out
+    }
+    if (!bundleMatches(projectBundle, profileBundle)) {
+        out.block = true
+        out.reason = "工程包名 `${projectBundle}` 与已配签名材料的包名 `${profileBundle}` 不一致" +
+            "（hvigor 必然报 ${SIGN_BUNDLE_MISMATCH_CODE}，一个产物都不会有）：" +
+            "在 DevEco 里对本工程自动签名一次，或把 signingConfig 换成本机同包名的材料"
+    }
     return out
 }
 

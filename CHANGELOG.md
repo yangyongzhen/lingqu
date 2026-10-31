@@ -5,6 +5,63 @@
 
 ---
 
+## [0.39.11] - 2026-11-01
+
+**主题**：把「签名不对」从**分钟级的白等**变成**秒级的说清**，并修掉一个让落档整块消失的建目录缺陷。
+背景是上一轮把根因钉在「profile 按包名签发」之后，剩下的成本问题：`t2h:hap` 仍要先跑 `hvigor assembleHap`，
+而包名不匹配这件事在跑之前就能判。
+
+### 实测证据（Windows x64 · 鸿蒙 PC 在线）
+
+    # ① 预检拦下（把 m3u8dl-tauri 的 signingConfigs 指向本机现存但**别的包名**的材料）
+    lingqu-cli hap --path E:\test\rust\m3u8dl-tauri
+      elapsed = 1s（此前要跑完 hvigor：约 3 分钟才拿到同一条 00303074）
+      signPreflightBlock  = true
+      signPreflightReason = 工程包名 `com.atomgit.m3u8dl_tauri` 与已配签名材料的包名
+                            `com.yang.testcj` 不一致（hvigor 必然报 00303074，一个产物都不会有）…
+      gates.failures      = 「HAP 闸（签名预检，已拦下）：…」       ← 落档 .lingqu/hap/<工程>.json
+      （实验后已把样本 build-profile.json5 还原，storeFile 仍指向原路径）
+
+    # ② 正常路径不受影响（habit-tree 包名匹配）
+    lingqu-cli hap --path E:\test\rust\habit-tree
+      signPreflightBlock=false · built=true · signed=true · gates.ok=true
+
+### Fixed
+
+- **落档整块丢失（5 个样本里 3 个中招）**：`ensureDirOf` 逐段 `Directory.create(Path(part))` 在
+  「工程的 `.lingqu` 还不存在」时抛 `Failed to create directory …\.lingqu\sign, parent …\.lingqu does not exist`，
+  于是 `t2h:sign` 的 `.lingqu/sign/<工程>.json` 一个都写不出来（cc-switch-harmonyos / atomMqtt /
+  tauri-mqtt-client-ohos 实测）。改为优先 `Directory.create(Path(dir), recursive: true)`（与
+  `saveTaskBoard` 同一种写法），失败再退回逐段创建——修后三份落档分别 4445 / 3736 / 4197 字节。
+  这是 D-013「静默失败零容忍」的又一次落实：**证据写不出来必须能被发现**。
+- **"读不到包名"被写成"包名不一致"**：`judgeSignForWriteback` 在工程 `AppScope/app.json5` 读不到
+  `bundleName` 时，原先照样拼出"工程包名 （…读不到…） 与候选材料包名不一致"——读着像真结论，
+  其实是没有事实支撑。现在只提示"无法判断候选材料是否匹配"，不动原判定的下一步。
+
+### Added
+
+- `src/compiler/sign.cj`：`SignPreflight` + `judgeSignPreflight()`（纯函数）。三条规则**只在必然失败时拦**：
+  没配 signingConfigs 不拦（能产 unsigned HAP）· 材料文件缺失只提示（unsigned 仍可能产出，
+  提示 00303107）· 包名不一致**拦**（必然 00303074，产物为零）· 读不到工程包名不拦（交回 hvigor）。
+- `src/main.cj`：`t2h:hap` 在跑 hvigor 之前做预检，结论进 `phaseLog`、落档 `signPreflight{}` 与
+  HAP 闸 failures；返回值加 `signPreflightBlock / signPreflightReason / projectBundle / profileBundle`。
+  `profileBundleOf(p7bPath)` 读 profile 的 `bundle-name`（与 `profileTypeOf` / `profileAllows` 同族）。
+- 4 例新单测（`judgeSignPreflight` 四态），总 **290 例**。
+
+### 5 样本签名就绪度（同一台机器 · 已连设备，`t2h:sign` 实跑）
+
+| 样本 | 工程 bundleName | 本机候选材料包名 | 可签吗 |
+|---|---|---|---|
+| habit-tree | `com.jiujiang.habit_tree` | 同（`m7Gx…`） | ✅ `ok=true`，已装机 |
+| m3u8dl-tauri | `com.atomgit.m3u8dl_tauri` | `com.yang.testcj` | ❌ 需 DevEco 对本工程自动签名 |
+| cc-switch-harmonyos | `com.ccswitch.desktop` | `com.yang.testcj` | ❌ 同上 |
+| tauri-mqtt-client-ohos | `com.atomgit.mqtt_client_ohos` | `com.yang.testcj` | ❌ 同上 |
+| atomMqtt | （无 `gen/ohos/AppScope`） | `com.yang.testcj` | ❌ 先补鸿蒙脚手架 |
+
+**口径**：这四条"❌"不是工具缺陷，是**每个新包名都需要一次 DevEco 登录自动签名**（ADR D-017，
+计入 A3 人工介入）。本轮还确认了没有可脚本化的替代入口：`devecocli`（1.0.0）只有 `build/run/device`，
+`DevEcoStudio6.1` 的配置目录里没有任何登录态文件，`hap-sign-tool.jar` 只能签、不能签发 profile。
+
 ## [0.39.10] - 2026-11-01
 
 **主题**：**habit-tree 首次拿到真机的完整链路与 100% 可用率**，同时修掉让可用率"假低分"的两个
