@@ -491,9 +491,173 @@ public func judgeSign(hasConfig: Bool, filesExist: Bool, allowsDevice: Bool, pro
     return c
 }
 
+// ============================================================
+// T5-4 签名两态（debug / release）+ 上架前强提醒
+// ============================================================
+//
+// 两态的**用途不同，不能互相替代**（这是本模块唯一要讲清的事）：
+//
+//   debug   —— profile 含 device-ids，只认已注册的设备；能直装真机做验证，**不能上架**
+//              （AGC 不接受 debug 证书）
+//   release —— profile 不含 device-ids，可上架；**直装真机必被 9568322 拒**（这是正常的）
+//
+// 所以工具的价值不是"帮你签名"，而是**在正确的时机说清楚"你现在是哪一态、另一态该怎么切"**：
+//   · 开发期忘了切 debug → 装机失败（0.18.0 的 judgeSign 已经在拦）
+//   · 上架前忘了切 release → 提交审核被拒（本案要补的那一半）
+// 判定全部是纯函数，可单测；读盘/跑 hdc 在命令层。
+
+public let SIGN_MODE_DEBUG: String = "debug"
+public let SIGN_MODE_RELEASE: String = "release"
+public let SIGN_MODE_UNKNOWN: String = "unknown"
+
+/** 签名态评估（`t2h:sign` 回投、⑤ 屏渲染、报告引用都用这一个结构，避免各处各说一套） */
+public class SignModeState {
+    /** 当前工程配置所处的态：debug / release / unknown */
+    public var mode: String = SIGN_MODE_UNKNOWN
+    /** 给人看的一行态名 */
+    public var modeLabel: String = ""
+    /** 能不能直装真机（= debug 且材料齐全） */
+    public var canInstallDevice: Bool = false
+    /** 是否具备上架条件（= release 且材料齐全）；真正上传 AGC 还有隐私/图标等非签名项 */
+    public var releaseReady: Bool = false
+    /** 强提醒（上架前必须看到的那句话；unknown 态也给出说明） */
+    public var reminder: String = ""
+    /** 想装真机时的下一步 */
+    public var installNextStep: String = ""
+    /** 想上架时的下一步 */
+    public var releaseNextStep: String = ""
+    /** 切到目标态的步骤清单 */
+    public var switchSteps: ArrayList<String> = ArrayList<String>()
+    /** 本机 `~/.ohos/config` 里可解析的 release profile 份数（0 说明还没做过 release 签名） */
+    public var releaseProfileCount: Int64 = 0
+
+    public func toJson(): JsonObject {
+        var o = JsonObject()
+        o.put("mode", JsonString(this.mode))
+        o.put("modeLabel", JsonString(this.modeLabel))
+        o.put("canInstallDevice", JsonBool(this.canInstallDevice))
+        o.put("releaseReady", JsonBool(this.releaseReady))
+        o.put("reminder", JsonString(this.reminder))
+        o.put("installNextStep", JsonString(this.installNextStep))
+        o.put("releaseNextStep", JsonString(this.releaseNextStep))
+        o.put("releaseProfileCount", JsonInt(this.releaseProfileCount))
+        var arr = JsonArray()
+        for (s in this.switchSteps) {
+            arr.add(JsonString(s))
+        }
+        o.put("switchSteps", arr)
+        return o
+    }
+}
+
+/**
+ * 纯判定：工程当前的签名态。
+ *
+ * 只看 profile 的 `type` 字段——`hasConfig=false`（没配 signingConfigs）时无从判断，
+ * 给 unknown 而不是猜成 debug：**猜错会让人以为"能装"，这个代价太贵**。
+ */
+public func judgeSignMode(hasConfig: Bool, profileType: String): String {
+    if (!hasConfig) {
+        return SIGN_MODE_UNKNOWN
+    }
+    if (profileType == SIGN_MODE_DEBUG) {
+        return SIGN_MODE_DEBUG
+    }
+    if (profileType == SIGN_MODE_RELEASE) {
+        return SIGN_MODE_RELEASE
+    }
+    return SIGN_MODE_UNKNOWN
+}
+
+/** 态名（界面与报告共用一份措辞） */
+public func signModeLabel(mode: String): String {
+    if (mode == SIGN_MODE_DEBUG) {
+        return "debug（开发直装）"
+    }
+    if (mode == SIGN_MODE_RELEASE) {
+        return "release（上架）"
+    }
+    return "未判定"
+}
+
+/**
+ * 上架前强提醒（**这一句是 T5-4 的核心交付**）。
+ *
+ * debug 态必须明确写出"不能上架 + 上架前要切回 release"——上架被拒的成本远高于多一句提醒。
+ */
+public func signModeReminder(mode: String): String {
+    if (mode == SIGN_MODE_DEBUG) {
+        return "⚠ 当前是 debug 签名：profile 绑定了本机 UDID，只能装到已注册设备，**不能上架**" +
+            "（AGC 不接受 debug 证书）。上架前必须切回 release profile 并重新签名。"
+    }
+    if (mode == SIGN_MODE_RELEASE) {
+        return "当前是 release 签名：可以上架。真机直装会被 9568322 拒（release profile 不含 " +
+            "device-ids），这是正常的——真机验证请切回 debug 那份。"
+    }
+    return "无法判定签名态：工程没配 signingConfigs，或 profile 读取/解析失败。" +
+        "先跑一次「签名体检」，没配的话点「写回签名配置」。"
+}
+
+/** 切到 release 的步骤（上架前照着做；顺序不能乱，第 1 步没做后面全是空谈） */
+public func signReleaseSteps(): ArrayList<String> {
+    let out = ArrayList<String>()
+    out.add("在 AGC（AppGallery Connect）或 DevEco 里生成 **release 证书**（.cer）+ **release profile**（.p7b，不含 device-ids）")
+    out.add("把 .p12 / .cer / .p7b 三个文件放进工程（或记下绝对路径）")
+    out.add("build-profile.json5：新增（或切换）一份 release 的 signingConfigs，并让 products.<product>.signingConfig 指过去")
+    out.add("重跑「装配 HAP」——产出 release 签名包（本工具会校验签名态仍是 release）")
+    out.add("上传 AGC 前再跑一次「签名体检」确认 mode=release（debug 包被拒是常见返工原因）")
+    return out
+}
+
+/** 切回 debug 的步骤（要装真机验证时照着做） */
+public func signDebugSteps(): ArrayList<String> {
+    let out = ArrayList<String>()
+    out.add("把 products.<product>.signingConfig 切回含本机 UDID 的 debug 那份")
+    out.add("工程没有 debug 材料时，点「写回签名配置」（t2h:sign apply）从本机同套材料的工程抄回")
+    out.add("重跑「装配 HAP」，再「安装并启动」（hdc install -r → aa start）")
+    return out
+}
+
+/**
+ * 两态汇总：给界面/报告一个"当前态 + 两个方向怎么走"的完整结论。
+ *
+ * `releaseProfileCount` 是本机可解析的 release profile 份数——0 说明还没做过 release 签名，
+ * 提醒里要能体现这一点（否则人以为是"切一下开关"那么简单）。
+ */
+public func assessSignMode(hasConfig: Bool, filesExist: Bool, profileType: String,
+    releaseProfileCount: Int64): SignModeState {
+    let st = SignModeState()
+    st.mode = judgeSignMode(hasConfig, profileType)
+    st.modeLabel = signModeLabel(st.mode)
+    st.releaseProfileCount = releaseProfileCount
+    st.reminder = signModeReminder(st.mode)
+    st.canInstallDevice = st.mode == SIGN_MODE_DEBUG && filesExist
+    st.releaseReady = st.mode == SIGN_MODE_RELEASE && filesExist
+    if (st.mode == SIGN_MODE_RELEASE) {
+        st.installNextStep = "要装真机请先切回 debug（见下），release 包直装会被拒是正常的"
+        st.switchSteps = signDebugSteps()
+    } else if (st.mode == SIGN_MODE_DEBUG) {
+        st.installNextStep = "hvigor assembleHap → hdc install -r → aa start（debug 态已可直装）"
+        if (releaseProfileCount == 0) {
+            st.releaseNextStep = "上架前：本机还没有 release profile（~/.ohos/config 里 0 份），" +
+                "先去 AGC 生成 release 证书与 profile，再按下面步骤切"
+        } else {
+            st.releaseNextStep = "上架前：把 signingConfig 切到 release 那份（本机已有 ${releaseProfileCount} 份 release profile）"
+        }
+        st.switchSteps = signReleaseSteps()
+    } else {
+        st.installNextStep = "先配好签名（t2h:sign apply 写回，或在 DevEco 里自动签名一次）"
+        st.releaseNextStep = "先确认签名态，再谈上架"
+        let steps = signDebugSteps()
+        for (s in steps) {
+            st.switchSteps.add(s)
+        }
+    }
+    return st
+}
+
 /** 扫 `~/.ohos/config` 下的 `.p7b`，返回能解析的 profile 列表（解析失败也收，带 parseError） */
-public func discoverProfiles(configDir: String): ArrayList<OhosProfile> {
-    let out = ArrayList<OhosProfile>()
+public func discoverProfiles(configDir: String): ArrayList<OhosProfile> {    let out = ArrayList<OhosProfile>()
     if (!exists(Path(configDir))) {
         return out
     }

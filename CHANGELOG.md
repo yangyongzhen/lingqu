@@ -5,6 +5,70 @@
 
 ---
 
+## [0.28.0] - 2026-11-01
+
+**主题**：**T5-4 签名两态（debug / release）+ 上架前强提醒**——P5 的最后一块。
+工具现在会明确告诉你"当前是哪一态、另一态怎么切"，而不是只在装机失败时给一句 9568322。
+
+### Added
+
+- `src/compiler/sign.cj` 新增两态纯函数层：
+  - `judgeSignMode(hasConfig, profileType)` → `debug` / `release` / `unknown`；
+    **判不出来就说 unknown，绝不猜 debug**（猜错会让人以为能装机）
+  - `assessSignMode(...)` → `SignModeState`：当前态 + 能否直装 + 是否上架齐备 +
+    **强提醒** + 双向下一步 + 切态步骤 + 本机 release profile 份数
+  - `signModeReminder(mode)`：debug 态写明「只能装已注册设备，**不能上架**」；
+    release 态写明「可以上架；真机直装被 9568322 拒是正常的」
+  - `signReleaseSteps()` / `signDebugSteps()`：两个方向的可照做步骤清单
+- `t2h:sign` 回投并落档 `mode` 段（`mode / modeLabel / canInstallDevice / releaseReady /
+  reminder / installNextStep / releaseNextStep / releaseProfileCount / switchSteps`），
+  日志增 `[mode]` 行
+- ⑤ 屏签名卡：签名态 / 可直装 / 上架齐备三个指标 + 按态染色的提醒栏 + 切态步骤清单
+- `ui_report` 新增 `signMode/signModeLabel/signReleaseReady/signReminder/signReleaseProfiles/signSwitchRows`
+- 报告（`t2h:report`）：debug 态时「没做什么」写「签名是 debug 态：可直装真机，但**不能上架**」，
+  「需要你做什么」原文引用强提醒 + 上架下一步
+- 断点板（`t2h:resume`）：**release 态不再被算成"签名体检失败"**——它装不上真机是设计使然
+
+### Changed
+
+- 版本 0.27.0 → **0.28.0**；单测 **171 → 177**（`src/tests/sign_mode_test.cj` 5 例 +
+  报告带签名的 1 例）
+
+### 证据（本机 Windows x64 + 真机 HAD-W32 在线的 UDID 读取，2026-11-01，habit-tree）
+
+```
+LINGQU_SIGN_PATH=E:\test\rust\habit-tree
+.lingqu/sign/habit-tree.json 的 mode 段：
+  mode=debug  modeLabel="debug（开发直装）"  canInstallDevice=true  releaseReady=false
+  releaseProfileCount=0
+  reminder="⚠ 当前是 debug 签名：profile 绑定了本机 UDID，只能装到已注册设备，**不能上架**
+            （AGC 不接受 debug 证书）。上架前必须切回 release profile 并重新签名。"
+  releaseNextStep="上架前：本机还没有 release profile（~/.ohos/config 里 0 份），
+                   先去 AGC 生成 release 证书与 profile，再按下面步骤切"
+  switchSteps=5 条（生成 release 证书/profile → 放材料 → 改 build-profile.json5 →
+                    重跑装配 HAP → 上传前再体检确认 mode=release）
+ui_report：signMode=debug signModeLabel=debug（开发直装） signReleaseReady=false
+           signReleaseProfiles=0 signSwitchRows=5 errorCount=0
+报告（.lingqu/report/habit-tree.md）：
+  没做什么：签名是 debug 态：可直装真机，但**不能上架**（AGC 不接受 debug 证书）
+  需要你做什么：⚠ 当前是 debug 签名…（强提醒原文）+ 上架前：本机还没有 release profile…
+           （reportDid=8 reportUndone=7 reportNeed=6，errorCount=0）
+```
+
+> 真机侧事实：`hdc shell bm get --udid` 读到本机 UDID、profile 含它 → debug 态判定可直装；
+> `~/.ohos/config` 里 **0 份 release profile**，所以"切回 release"不是拨开关，要先做材料——
+> 提醒里如实写了这一点（不做 release 签名的前提是**没有**华为 release 证书，本机确实没有）。
+
+### 未做（如实）
+
+- **release 态的实机判定未验证**：本机没有 release 材料，无法造出 release profile 来跑一遍
+  `mode=release` 的真机路径（判定逻辑有单测覆盖 `assessSignMode(release)`，属"纯函数已验、
+  真机未验"）。拿到 release 证书后需补一次真机实测
+- 未做"一键切换 signingConfig"（要改工程文件且依赖 release 材料存在，风险高；本轮只给步骤与提醒）
+- 上架除签名外还有隐私政策/图标/兼容 SDK 版本等非签名项，不在 T5-4 范围
+
+---
+
 ## [0.27.0] - 2026-11-01
 
 **主题**：**P6 收口 —— `t2h:report` 上线 + ⑦ 迁移报告屏接真数据**：三段式报告完全从落档推导，

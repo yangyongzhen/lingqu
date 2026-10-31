@@ -127,8 +127,23 @@ func fillObservation(obs: StepObservation, stepId: String, root: JsonValue): Uni
     }
     if (stepId == "sign") {
         let check = objFieldOf(root, "check")
-        obs.ok = boolFieldOf(check, "ok")
-        obs.note = jsonStrField(check, "reason")
+        let modeObj = objFieldOf(root, "mode")
+        let modeName = jsonStrField(modeObj, "mode")
+        // T5-4：**release 态也算这一步"有结论"**——它装不上真机是设计使然（profile 不含
+        // device-ids），不能因此在断点板上显示"失败"，否则人会去"修"一个正常的状态。
+        // 老落档没有 mode 段（0.26 之前），此时退回"可直装就算过"的旧口径。
+        obs.ok = boolFieldOf(check, "ok") || modeName == "release"
+        let label = jsonStrField(modeObj, "modeLabel")
+        let reason = jsonStrField(check, "reason")
+        if (modeName != "") {
+            var tail = ""
+            if (reason != "") {
+                tail = "｜" + reason
+            }
+            obs.note = "签名态 ${label}${tail}"
+        } else {
+            obs.note = reason
+        }
         return
     }
     if (stepId == "deploy") {

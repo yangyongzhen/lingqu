@@ -1102,6 +1102,14 @@ public class UiReportCommand <: CommandHandler {
         o.put("signType", JsonString(argStr(args, "signType", "")))
         o.put("signCandCount", JsonInt(argInt(args, "signCandCount", 0)))
         o.put("signApplied", JsonBool(argBool(args, "signApplied", false)))
+        // T5-4 签名两态（debug / release）：当前态 + 上架齐备度 + 强提醒
+        o.put("signMode", JsonString(argStr(args, "signMode", "")))
+        o.put("signModeLabel", JsonString(argStr(args, "signModeLabel", "")))
+        o.put("signReleaseReady", JsonBool(argBool(args, "signReleaseReady", false)))
+        o.put("signReminder", JsonString(argStr(args, "signReminder", "")))
+        o.put("signReleaseProfiles", JsonInt(argInt(args, "signReleaseProfiles", 0)))
+        // 切态步骤行数（版面可断言：提醒有了，步骤没渲染出来同样是 bug）
+        o.put("signSwitchRows", JsonInt(argInt(args, "signSwitchRows", 0)))
         // T5-5 真机部署（t2h:deploy 回投）
         o.put("deployOk", JsonBool(argBool(args, "deployOk", false)))
         o.put("deploySerial", JsonString(argStr(args, "deploySerial", "")))
@@ -2009,6 +2017,17 @@ public class SignCommand <: CommandHandler {
             }
         }
 
+        // ---- ④.5 T5-4 签名两态：当前是哪一态 + 上架前强提醒 ----
+        // 本机 release profile 份数直接从已扫到的候选里数（0 份 = 还没做过 release 签名，
+        // 这时"切回 release"不是切开关，是要先去 AGC 生成材料——提醒里必须说清）
+        var releaseProfileCount: Int64 = 0
+        for (p in cands) {
+            if (p.profileType == SIGN_MODE_RELEASE && p.parseError == "") {
+                releaseProfileCount += 1
+            }
+        }
+        let modeState = assessSignMode(hasConfig, filesExist, outProfileType, releaseProfileCount)
+
         // ---- 落档（证据：hdc 原文 + 材料明细，供人复核） ----
         var outError = ""
         var outJson = ""
@@ -2023,6 +2042,9 @@ public class SignCommand <: CommandHandler {
         logText += "[signing] name=${proj.signingConfigName} type=${proj.certType} " +
             "certpath=${certPath} profile=${profilePath} storeFile=${storeFile} filesExist=${filesExist}\n"
         logText += "[verdict] ok=${check.ok} reason=${check.reason}\n"
+        logText += "[mode] ${modeState.mode} label=${modeState.modeLabel} canInstall=${modeState.canInstallDevice} " +
+            "releaseReady=${modeState.releaseReady} releaseProfiles=${releaseProfileCount}\n"
+        logText += "[mode/reminder] ${modeState.reminder}\n"
         if (applyText != "") {
             // 写回后重读一遍：日志里要留"改完之后长什么样"，否则事后只剩一个 applied=true
             let after = parseProjSigning(applyText)
@@ -2061,6 +2083,7 @@ public class SignCommand <: CommandHandler {
             root.put("profiles", carr)
             root.put("signing", signingJson(proj, certPath, profilePath, storeFile, filesExist))
             root.put("check", check.toJson())
+            root.put("mode", modeState.toJson())
             var applyObj = JsonObject()
             applyObj.put("requested", JsonBool(wantApply))
             applyObj.put("applied", JsonBool(applyText != ""))
@@ -2098,6 +2121,20 @@ public class SignCommand <: CommandHandler {
         res.put("applyError", JsonString(applyError))
         res.put("outJson", JsonString(outJson))
         res.put("outLog", JsonString(outLog))
+        // T5-4 签名两态：mode/两态齐备度/强提醒/双向切态步骤
+        res.put("mode", JsonString(modeState.mode))
+        res.put("modeLabel", JsonString(modeState.modeLabel))
+        res.put("canInstallDevice", JsonBool(modeState.canInstallDevice))
+        res.put("releaseReady", JsonBool(modeState.releaseReady))
+        res.put("signReminder", JsonString(modeState.reminder))
+        res.put("installNextStep", JsonString(modeState.installNextStep))
+        res.put("releaseNextStep", JsonString(modeState.releaseNextStep))
+        res.put("releaseProfileCount", JsonInt(releaseProfileCount))
+        var switchArr = JsonArray()
+        for (s in modeState.switchSteps) {
+            switchArr.add(JsonString(s))
+        }
+        res.put("switchSteps", switchArr)
         var em = outError
         if (em == "") {
             em = buildProfileError
@@ -2107,7 +2144,8 @@ public class SignCommand <: CommandHandler {
         }
         res.put("error", JsonString(em))
         eprintln("[lingqu][sign] ${projName} udid=${udid} ok=${check.ok} candidates=${cands.size} " +
-            "hasConfig=${hasConfig} filesExist=${filesExist}")
+            "hasConfig=${hasConfig} filesExist=${filesExist} mode=${modeState.mode} " +
+            "releaseReady=${modeState.releaseReady}")
         return res
     }
 }

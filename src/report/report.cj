@@ -103,6 +103,11 @@ public class MigrationFacts {
     // 证据与产物
     public var evidenceCount: Int64 = 0
     public var artifacts: ArrayList<(String, String)> = ArrayList<(String, String)>()
+    // T5-4 签名两态：当前签名态 + 上架前强提醒（debug 态必须出现在"没做什么/需要你做什么"）
+    public var signMode: String = ""
+    public var signReminder: String = ""
+    public var signReleaseNextStep: String = ""
+    public var signReleaseReady: Bool = false
     // A3：人工介入（guide 项被采纳才算一次，忽略也要留痕）
     public var humanAccepted: Int64 = 0
     public var humanIgnored: Int64 = 0
@@ -222,6 +227,11 @@ public func buildReport(facts: MigrationFacts): ReportDoc {
     if (facts.decisionsNote != "") {
         undone.lines.add(facts.decisionsNote)
     }
+    // T5-4：debug 签名是"能装真机但绝不能上架"的态，必须出现在"没做什么"里——
+    // 这是上架前最容易漏的一条（真机跑得好好的，提交审核却被拒）
+    if (facts.signMode == "debug" && !facts.signReleaseReady) {
+        undone.lines.add("签名是 debug 态：可直装真机，但**不能上架**（AGC 不接受 debug 证书）")
+    }
     if (undone.lines.size == 0) {
         undone.lines.add("没有已知遗留——8 步都有结论，清单项全部通过或已登记平台限制")
     }
@@ -247,6 +257,18 @@ public func buildReport(facts: MigrationFacts): ReportDoc {
     }
     if (facts.humanAccepted > 0) {
         need.lines.add("复核 ${facts.humanAccepted} 处人工介入的结论（验收 A3：单应用 ≤5 处）")
+    }
+    // T5-4 上架前强提醒：原文照引（含"必须切回 release"那句），后面再给出具体下一步
+    if (facts.signMode == "debug" && !facts.signReleaseReady) {
+        if (facts.signReminder != "") {
+            need.lines.add(facts.signReminder)
+        }
+        if (facts.signReleaseNextStep != "") {
+            // 这句自己已经以「上架前：」开头（sign.cj 的措辞），别再叠一层前缀
+            need.lines.add(facts.signReleaseNextStep)
+        } else {
+            need.lines.add("上架前：把 signingConfig 切到 release profile，重跑「装配 HAP」再提交审核")
+        }
     }
     if (need.lines.size == 0) {
         need.lines.add("没有需要你处理的事项——报告可直接归档")

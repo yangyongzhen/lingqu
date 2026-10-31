@@ -202,6 +202,40 @@ public func testReportRendering(): Unit {
 }
 
 @Test
+public func testReportCarriesSignReleaseReminder(): Unit {
+    // T5-4：debug 签名是"能装真机、不能上架"的态，报告必须两边（没做什么 + 需要你做什么）都提醒
+    let f = satisfiedFacts()
+    f.signMode = "debug"
+    f.signReleaseReady = false
+    f.signReminder = "⚠ 当前是 debug 签名：只能装到已注册设备，不能上架。"
+    f.signReleaseNextStep = "上架前：把 signingConfig 切到 release 那份"
+    let doc = buildReport(f)
+    var undone = ""
+    for (l in doc.linesOf("undone")) {
+        undone += l + "\n"
+    }
+    @Assert(undone.contains("debug 态"), true)
+    @Assert(undone.contains("不能上架"), true)
+    var need = ""
+    for (l in doc.linesOf("need")) {
+        need += l + "\n"
+    }
+    @Assert(need.contains("debug 签名"), true)
+    @Assert(need.contains("上架前"), true)
+
+    // release 态（或上架已齐备）时不该再出现这条提醒——别让人去"修"一个正常状态
+    let g = satisfiedFacts()
+    g.signMode = "release"
+    g.signReleaseReady = true
+    let doc2 = buildReport(g)
+    var need2 = ""
+    for (l in doc2.linesOf("need")) {
+        need2 += l + "\n"
+    }
+    @Assert(need2.contains("上架前"), false)
+}
+
+@Test
 public func testStepActionHints(): Unit {
     // 每个步骤都要有可执行动作（报告里"需要你做什么"才落得到界面上）
     let ids = ["scan", "deps", "port", "build", "hap", "sign", "deploy", "verify"]

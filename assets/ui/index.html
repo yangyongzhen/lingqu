@@ -239,6 +239,16 @@ tbody tr:hover td{background:var(--panel2)}
 .rstep .ract{flex:0 0 auto;display:flex;gap:6px;align-items:center}
 .rstep .btn{padding:2px 8px;font-size:11px}
 
+/* 签名两态（T5-4）：态提醒要显眼（上架提醒漏看的代价是审核被拒），切态步骤要能照做 */
+.signmode{margin-top:8px;padding:9px 12px;border-radius:9px;font-size:12.5px;line-height:1.65;
+  background:var(--panel2);border:1px solid var(--line)}
+.signmode.warn{background:var(--errsoft);border-color:rgba(255,123,114,.45);color:var(--fg)}
+.signmode.ok{background:var(--oksoft);border-color:rgba(126,226,168,.45)}
+.signmode.na{background:var(--panel2)}
+.signsteps{margin-top:7px;font-size:11.5px;color:var(--dim);line-height:1.85}
+.signsteps b{color:var(--fg);font-weight:600}
+.signsteps .n{display:inline-block;min-width:16px;color:var(--acc)}
+
 .note{font-size:11.5px;color:var(--dim);background:var(--panel2);border:1px dashed var(--line);
   border-radius:10px;padding:10px 13px;margin-top:13px}
 .note b{color:var(--fg)}
@@ -606,6 +616,9 @@ body.ai-hidden .ai-show{display:block}
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="signCard">
           <div class="legend" style="margin:0 0 6px">
+            <span>签名态：<b id="signMode">—</b></span>
+            <span>可直装真机：<b id="signCanInstall">—</b></span>
+            <span>上架齐备：<b id="signReleaseReady">—</b></span>
             <span>本机 UDID：<b id="signUdid" class="mono">—</b></span>
             <span>工程签名配置：<b id="signConfig">—</b></span>
             <span>材料文件：<b id="signFiles">—</b></span>
@@ -613,7 +626,8 @@ body.ai-hidden .ai-show{display:block}
             <span>含本机 UDID：<b id="signDevice">—</b></span>
             <span>本机候选材料：<b id="signCand">—</b></span>
           </div>
-          <div class="sethint" id="signNote">「签名体检」不需要华为账号、不联网：读 `hdc shell bm get --udid` + 工程 build-profile.json5 + `~/.ohos/config` 里的 .p7b，判定装得上还是会被 9568322 拒。</div>
+          <div class="signmode" id="signNote">「签名体检」不需要华为账号、不联网：读 `hdc shell bm get --udid` + 工程 build-profile.json5 + `~/.ohos/config` 里的 .p7b，判定装得上还是会被 9568322 拒，并告诉你当前是 debug 还是 release 态。</div>
+          <div class="signsteps" id="signSwitch"></div>
         </div>
         <div class="card">
           <div class="card-h"><h3>流水线</h3><span class="right">占位示意</span></div>
@@ -2269,7 +2283,9 @@ withBridge(function(tauri){
    * 真机实测的痛点：hvigor 有没有产出 signed.hap 跟"装不装得上"完全无关，
    * 判据是 profile 的 device-ids 里有没有本机 UDID。这条判定可以离线做（不需要账号）。 */
   var SIGN = { ok: false, hasUdid: false, hasConfig: false, filesExist: false,
-               allowsDevice: false, type: '', candCount: 0, applied: false };
+               allowsDevice: false, type: '', candCount: 0, applied: false,
+               mode: '', modeLabel: '', canInstall: false, releaseReady: false,
+               reminder: '', releaseProfiles: 0, steps: [] };
   function renderSign(r){
     r = r || {};
     SIGN = {
@@ -2279,8 +2295,22 @@ withBridge(function(tauri){
       filesExist: r.filesExist === true,
       allowsDevice: r.allowsDevice === true,
       type: String(r.profileType || ''),
-      candCount: (typeof r.candidateCount === 'number') ? r.candidateCount : 0
+      candCount: (typeof r.candidateCount === 'number') ? r.candidateCount : 0,
+      mode: String(r.mode || ''),
+      modeLabel: String(r.modeLabel || ''),
+      canInstall: r.canInstallDevice === true,
+      releaseReady: r.releaseReady === true,
+      reminder: String(r.signReminder || ''),
+      releaseProfiles: (typeof r.releaseProfileCount === 'number') ? r.releaseProfileCount : 0,
+      steps: (r.switchSteps && r.switchSteps.length) ? r.switchSteps : []
     };
+    $('signMode').textContent = SIGN.modeLabel || '—';
+    $('signMode').style.color = SIGN.mode === 'debug' ? 'var(--warn)'
+      : (SIGN.mode === 'release' ? 'var(--ok)' : 'var(--err)');
+    $('signCanInstall').textContent = SIGN.canInstall ? '可以（debug）' : '不行';
+    $('signCanInstall').style.color = SIGN.canInstall ? 'var(--ok)' : 'var(--err)';
+    $('signReleaseReady').textContent = SIGN.releaseReady ? '齐备（release）' : '未齐备';
+    $('signReleaseReady').style.color = SIGN.releaseReady ? 'var(--ok)' : 'var(--warn)';
     $('signUdid').textContent = r.udid ? String(r.udid).slice(0, 12) + '…' : '—';
     $('signUdid').title = String(r.udid || '拿不到（设备没连？）');
     $('signUdid').style.color = r.udid ? 'var(--ok)' : 'var(--err)';
@@ -2300,6 +2330,28 @@ withBridge(function(tauri){
     note.style.color = SIGN.ok ? 'var(--ok)' : 'var(--err)';
     note.textContent = (r.reason || r.error || '尚未体检。') + (r.nextStep ? ('　下一步：' + r.nextStep) : '');
     if (r.error) { note.textContent = String(r.error).split('\n')[0]; }
+    // 签名两态（T5-4）：态提醒单独一栏并且按态染色——debug 态要说清"不能上架"，
+    // release 态要说清"直装被拒是正常的"。这条提醒比"装不上/装得上"更重要。
+    if (SIGN.reminder) {
+      note.className = 'signmode ' + (SIGN.mode === 'debug' ? 'warn'
+        : (SIGN.mode === 'release' ? 'ok' : 'na'));
+      note.style.color = '';
+      note.textContent = SIGN.reminder
+        + (r.releaseNextStep && SIGN.mode === 'debug' ? ('　上架下一步：' + r.releaseNextStep) : '')
+        + (r.installNextStep && SIGN.mode === 'release' ? ('　装机下一步：' + r.installNextStep) : '');
+    }
+    // 切态步骤：debug 态给"怎么切 release"，release 态给"怎么切回 debug"（照做即可）
+    var steps = $('signSwitch');
+    steps.innerHTML = '';
+    if (SIGN.steps.length) {
+      steps.innerHTML = '<b>' + (SIGN.mode === 'release' ? '要装真机？切回 debug' : '上架前切 release')
+        + '（本机 release profile：' + SIGN.releaseProfiles + ' 份）：</b>';
+      SIGN.steps.forEach(function(s, i){
+        var d = document.createElement('div');
+        d.innerHTML = '<span class="n">' + (i + 1) + '.</span> ' + esc(String(s));
+        steps.appendChild(d);
+      });
+    }
     // 写回签名配置（apply）的结果：三种结局要分清，别把"已配好"当失败
     if (r.applyRequested) {
       SIGN.applied = r.applied === true;
@@ -2796,6 +2848,13 @@ withBridge(function(tauri){
       signType: SIGN.type || '',
       signCandCount: (typeof SIGN.candCount === 'number') ? SIGN.candCount : 0,
       signApplied: SIGN.applied === true,
+      // T5-4 签名两态：当前态 / 上架齐备度 / 提醒（没有视觉也要能断言"提醒确实出现了"）
+      signMode: SIGN.mode || "",
+      signModeLabel: SIGN.modeLabel || "",
+      signReleaseReady: SIGN.releaseReady === true,
+      signReminder: SIGN.reminder || "",
+      signReleaseProfiles: (typeof SIGN.releaseProfiles === "number") ? SIGN.releaseProfiles : 0,
+      signSwitchRows: (function(){ return document.querySelectorAll("#signSwitch div").length; })(),
       // 引擎发现证据（"没找到可用的 cjh"只能靠这个事后核对：Cangjie 的 eprintln 到不了日志文件）
       cjhState: CJ_STATUS.state || "",
       cjhBin: CJ_STATUS.binPath || "",

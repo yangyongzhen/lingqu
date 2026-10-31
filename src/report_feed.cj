@@ -1,6 +1,7 @@
 package lingqu
 
 import lingqu.report.*
+import lingqu.compiler.*
 import std.collection.*
 import std.fs.*
 import stdx.encoding.json.*
@@ -128,7 +129,21 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
         case None => ()
     }
 
-    // ③ A3 人工介入：只有"采纳"才算一次介入；没有记录就如实说明
+    // ③ T5-4 签名两态：debug 态必须进"没做什么"与"需要你做什么"（上架前强提醒）
+    match (readJsonOrNone(".lingqu/sign/${projName}.json")) {
+        case Some(root) =>
+            let modeObj = objFieldOf(root, "mode")
+            facts.signMode = jsonStrField(modeObj, "mode")
+            facts.signReminder = jsonStrField(modeObj, "reminder")
+            facts.signReleaseNextStep = jsonStrField(modeObj, "releaseNextStep")
+            facts.signReleaseReady = boolFieldOf(modeObj, "releaseReady")
+            if (facts.signMode == SIGN_MODE_DEBUG) {
+                facts.artifacts.add(("签名体检（debug 态）", ".lingqu/sign/${projName}.json"))
+            }
+        case None => ()
+    }
+
+    // ④ A3 人工介入：只有"采纳"才算一次介入；没有记录就如实说明
     let decisions = collectDecisionValues(projName)
     let hc = countHumanDecisions(decisions)
     facts.humanAccepted = hc.accepted
@@ -139,7 +154,7 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
         facts.decisionsNote = "人工决策：采纳 ${hc.accepted} 条 / 忽略 ${hc.ignored} 条（落 .lingqu/port/${projName}/decisions.json）"
     }
 
-    // ④ 证据与产物
+    // ⑤ 证据与产物
     facts.evidenceCount = countEvidenceFiles(projName)
     facts.artifacts.add(("断点板（8 步状态）", taskBoardPath()))
     addArtifactIfExists(facts.artifacts, "扫描画像", ".lingqu/scan/${projName}.json")
