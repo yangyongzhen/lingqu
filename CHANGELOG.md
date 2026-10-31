@@ -40,6 +40,24 @@
   合计 **296 例**。
 - 文件头注释同步纠正：口令不再只能"从别处搬"，`material/` 本机就有（见路线 A）。
 
+
+### 追加（同一轮）：AGC 协议层与 HTTP 客户端骨架
+
+- 新增 `src/compiler/sign_agc.cj`（路线 A 的协议层）：
+  - **纯函数**：`oauthLoginUrl` / `tempTokenCheckUrl` / `jwtCheckUrl` / `agcUrl` / `loginRedirectUrl` /
+    `isChinaSite` / `isJwtShaped` / `parseQueryParams` / `urlEncode` / `urlDecode` /
+    `certNameFor`（`auto_debug_<teamId>.cer`）/ `provisionNameOf`（`sha256("p_b_b")[0:16]`）/
+    `agcSucceeded`（判 `ret.code==0`）/ `agcErrorCode` / `agcErrorMsg`（`msg` 两种形态都认）
+  - **动作层**：`agcHttp(method, url, headers, body, timeout)`、`ohosConfigDir` / `agcStateDir` / `agcTempDir`
+- 6 例新单测（`src/tests/sign_agc_test.cj`），合计 **302 例**。`provisionNameOf` 的期望值来自
+  **独立的 SHA256 计算**（PowerShell），不靠自证。
+
+**从实测里学到的三条硬约束**（已写进代码注释，避免下次再踩）：
+
+1. **HTTPS 必须显式 `tlsConfig(TlsClientConfig())`**，否则 `HttpException: TLS must be configured…`；
+2. **必须 `.noProxy()`**——客户端默认读系统 `http_proxy/https_proxy`，否则连本机回环都可能被送去代理；
+3. 响应体是 `InputStream`，用 `StringReader(resp.body).readToEnd()` 取字符串并 `close()`；且
+   **lambda 不能捕获 `var` 局部变量**（loopback 回调要把结果带回主线程，得用类实例字段）。
 ### 说明（未验证的部分）
 
 路线 A 的**联网部分**（OAuth 登录、团队、设备注册、证书、profile 申请与下载）本轮**一行未写**，
