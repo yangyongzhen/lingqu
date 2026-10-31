@@ -471,6 +471,15 @@ body.ai-hidden .ai-show{display:block}
 <div class="app">
   <!-- ==================== 顶栏 ==================== -->
   <header class="titlebar">
+    <!-- 当前工程：全局唯一权威（0.39.8）。下面各屏的路径框都只是回显，
+         避免「8 个框各填一遍、填错一个就对着别的工程干活」。 -->
+    <div id="projBar">
+      <span class="projLabel">当前工程</span>
+      <input id="projPath" class="mono" placeholder="选一个 Tauri 工程路径（所有步骤都用它）" style="flex:1 1 380px;min-width:260px">
+      <button class="btn" id="btnProjOpen" title="选一个工程目录">打开工程…</button>
+      <button class="btn" id="btnProjRecent" title="最近用过的工程">最近 ▾</button>
+      <span id="projNote" class="sethint"></span>
+    </div>
     <div class="logo"><span class="mark">灵</span>灵渠迁移台<small>Lingqu · Tauri → 鸿蒙 PC</small></div>
     <div class="tb-proj"><span class="dot info"></span>当前项目 <b>habit-tree</b><span class="muted">· v1.2.0 · 原生 TS + Rust</span></div>
     <div class="spacer"></div>
@@ -5521,6 +5530,10 @@ withBridge(function(tauri){
       wsLastSendErr: CJ.lastSendErr || '',
       // 收到过的帧类型计数（"cjh 到底回了什么"的唯一证据；history_messages 说明是会话类帧）
       wsReconnects: (typeof CJ.reconnects === 'number') ? CJ.reconnects : 0,
+      currentProject: (typeof PROJECT !== 'undefined') ? String(PROJECT.path || '') : '',
+      projectPromptCount: 1,
+      pathFieldCount: (typeof PATH_FIELDS !== 'undefined') ? PATH_FIELDS.length : 0,
+      stepPathOverride: (typeof PATH_OVERRIDE !== 'undefined') ? Object.keys(PATH_OVERRIDE).filter(function(k){ return String(PATH_OVERRIDE[k]||'').length > 0; }).join(',') : '',
       abortSource: String(CJ.abortSource || ''),
       abortAt: Number(CJ.abortAt || 0),
       wsFrameTypes: (function(){
@@ -5843,6 +5856,135 @@ withBridge(function(tauri){
     if (e.ctrlKey && e.key === ',') { e.preventDefault(); openSettings(); }
   });
 });
+/* ===== 当前工程：唯一权威（0.39.8）=====
+ * 缺陷背景：原本每屏一个路径框（migratePath/agentPath/scanPath/depsPath/portPath/
+ * buildPath/deployPath/reportPath 共 8 个），彼此不同步，填错一个就对着别的工程干活。
+ * 现在：顶部 projPath 是权威；8 个框只做**只读回显**；要单独指定必须点本屏的「✎」，
+ * 显式覆盖（并在 ui_report 里回投 stepPathOverride），执行前弹确认。
+ */
+var PROJECT = { path: '', key: 'lingqu.currentProject', recentKey: 'lingqu.recentProjects' };
+var PATH_FIELDS = ['migratePath','agentPath','scanPath','depsPath','portPath','buildPath','deployPath','reportPath'];
+var PATH_LABELS = { migratePath:'一键迁移', agentPath:'项目与环境', scanPath:'迁移画像', depsPath:'依赖树',
+                    portPath:'改造执行', buildPath:'构建打包', deployPath:'真机验证', reportPath:'报告' };
+var PATH_OVERRIDE = {};   // 字段 id → 该步骤单独指定的工程
+
+/** 生效路径：本步骤覆盖优先，否则用当前工程（纯逻辑，对应 src/project_ctx.cj 的 effectivePath） */
+function effectivePathFor(fieldId){
+  var ov = String(PATH_OVERRIDE[fieldId] || '').trim();
+  if (ov.length > 0) { return ov; }
+  return String(PROJECT.path || '').trim();
+}
+
+function projectRecent(){
+  try { var a = JSON.parse(localStorage.getItem(PROJECT.recentKey) || '[]'); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+}
+
+function rememberProject(p){
+  p = String(p || '').trim();
+  if (!p) { return; }
+  var list = projectRecent().filter(function(x){ return x !== p; });
+  list.unshift(p);
+  if (list.length > 8) { list = list.slice(0, 8); }
+  try { localStorage.setItem(PROJECT.recentKey, JSON.stringify(list)); } catch (e) {}
+  try { localStorage.setItem(PROJECT.key, p); } catch (e) {}
+}
+
+function renderProjectNote(){
+  var n = $('projNote');
+  if (!n) { return; }
+  var ovr = Object.keys(PATH_OVERRIDE).filter(function(k){ return String(PATH_OVERRIDE[k]||'').length > 0; });
+  var txt = '';
+  if (!String(PROJECT.path||'').length) { txt = '未选工程：所有步骤都跑不了'; }
+  else if (ovr.length > 0) {
+    txt = '⚠ 有 ' + ovr.length + ' 个步骤用了别的工程：' +
+          ovr.map(function(k){ return (PATH_LABELS[k]||k); }).join('、');
+  }
+  n.textContent = txt;
+  n.style.color = (!String(PROJECT.path||'').length || ovr.length > 0) ? 'var(--err)' : 'var(--muted)';
+}
+
+/** 把当前工程同步到所有回显框（覆盖项保留自己的值） */
+function syncProjectEchoes(){
+  PATH_FIELDS.forEach(function(id){
+    var el = $(id);
+    if (!el) { return; }
+    el.readOnly = true;
+    el.placeholder = '';
+    if (String(PATH_OVERRIDE[id] || '').length > 0) {
+      el.value = PATH_OVERRIDE[id];
+      el.classList.add('ovr');
+    } else {
+      el.value = PROJECT.path || '';
+      el.classList.remove('ovr');
+    }
+    el.title = '跟随顶部「当前工程」；要本步骤单独指定，点右边的 ✎';
+  });
+  renderProjectNote();
+}
+
+function setCurrentProject(p){
+  PROJECT.path = String(p || '').trim();
+  if (PROJECT.path) { rememberProject(PROJECT.path); }
+  var top = $('projPath');
+  if (top) { top.value = PROJECT.path; }
+  syncProjectEchoes();
+}
+
+/** 给 8 个回显框各加一个「✎」按钮（显式覆盖入口） */
+function attachOverrideButtons(){
+  PATH_FIELDS.forEach(function(id){
+    var el = $(id);
+    if (!el || !el.parentNode) { return; }
+    if (el.parentNode.querySelector('button[data-ovr="' + id + '"]')) { return; }
+    var b = document.createElement('button');
+    b.className = 'btn';
+    b.textContent = '✎';
+    b.setAttribute('data-ovr', id);
+    b.title = '本步骤用别的工程（会先确认）';
+    b.onclick = function(){
+      var cur = effectivePathFor(id);
+      var next = window.prompt('本步骤（' + (PATH_LABELS[id] || id) + '）单独用哪个工程路径？\n留空 = 恢复跟随当前工程', cur);
+      if (next === null) { return; }
+      next = String(next).trim();
+      if (next.length > 0 && !window.confirm('确认：仅「' + (PATH_LABELS[id] || id) + '」这一步使用\n' + next + '\n\n其余步骤仍用当前工程：' + (PROJECT.path || '（未选）'))) { return; }
+      if (next.length > 0) { PATH_OVERRIDE[id] = next; } else { delete PATH_OVERRIDE[id]; }
+      syncProjectEchoes();
+      reportUi('project-override');
+    };
+    el.parentNode.insertBefore(b, el.nextSibling);
+  });
+}
+
+(function initProjectBar(){
+  try { PROJECT.path = String(localStorage.getItem(PROJECT.key) || '').trim(); } catch (e) {}
+  var top = $('projPath'), btnOpen = $('btnProjOpen'), btnRecent = $('btnProjRecent');
+  if (top) {
+    top.value = PROJECT.path;
+    top.onchange = function(){ setCurrentProject(top.value); reportUi('project-set'); };
+    top.onblur = function(){ setCurrentProject(top.value); };
+  }
+  if (btnOpen) {
+    btnOpen.onclick = function(){
+      var p = window.prompt('Tauri 工程目录的绝对路径：', PROJECT.path || '');
+      if (p === null) { return; }
+      setCurrentProject(p);
+      reportUi('project-open');
+    };
+  }
+  if (btnRecent) {
+    btnRecent.onclick = function(){
+      var list = projectRecent();
+      if (list.length === 0) { window.alert('还没有历史工程'); return; }
+      var pick = window.prompt('最近用过的工程（输入序号）：\n' + list.map(function(x,i){ return (i+1) + ') ' + x; }).join('\n'), '1');
+      if (pick === null) { return; }
+      var i = parseInt(pick, 10);
+      if (i >= 1 && i <= list.length) { setCurrentProject(list[i-1]); reportUi('project-recent'); }
+    };
+  }
+  attachOverrideButtons();
+  syncProjectEchoes();
+})();
 </script>
 </body>
 </html>

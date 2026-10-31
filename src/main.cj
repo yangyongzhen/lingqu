@@ -1272,6 +1272,12 @@ public class UiReportCommand <: CommandHandler {
         // 中止来源（0.39.8）：0.39.7 端到端跑出现"cjh 收到 interrupt 但查不到谁按的"，
         // 现在两处 abort 入口（停止按钮 / 对话面板中止）都标来源，随报告留痕
         o.put("abortSource", JsonString(argStr(args, "abortSource", "")))
+        // 当前工程（0.39.8）：界面只有一个权威输入，其余 8 处是只读回显。
+        // projectPromptCount 修好后必须为 1；stepPathOverride 非空说明某步用了别的工程。
+        o.put("currentProject", JsonString(argStr(args, "currentProject", "")))
+        o.put("projectPromptCount", JsonInt(argInt(args, "projectPromptCount", 0)))
+        o.put("pathFieldCount", JsonInt(argInt(args, "pathFieldCount", 0)))
+        o.put("stepPathOverride", JsonString(argStr(args, "stepPathOverride", "")))
         o.put("abortAt", JsonInt(argInt(args, "abortAt", 0)))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
