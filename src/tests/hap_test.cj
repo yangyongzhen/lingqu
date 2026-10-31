@@ -184,3 +184,40 @@ public func testHapHasExpectedSo(): Unit {
     @Assert(hapHasSo(onlyStub, ""), false)
 }
 
+// ============================================================
+// 0.39.9：HAP 闸的签名根因提示（hapSignHint）
+// ============================================================
+//
+// 复现的缺陷：装配失败时闸只说「assembleHap 没成功（看 hvigor 输出与 .lingqu/hap/<工程>.log）」——
+// 人得自己翻几十行 task 日志才知道是签名材料包名不一致（00303074）。真实日志证据：
+// m3u8dl-tauri（com.atomgit.m3u8dl_tauri）写回一份**文件齐全**的 probe 材料后仍然失败，
+// 报错就是 00303074；这说明"换成现存材料"并不是解法。
+
+@Test
+public func testHapSignHintBundleMismatch(): Unit {
+    let log = """
+    > hvigor ERROR: Failed :entry:default@SignHap...
+    > hvigor ERROR: 00303074 Configuration Error
+    Error Message: The bundleName in app.json5/hvigorfile.ts does not match the bundleName in the generated SigningConfigs. At file: E:/x/build-profile.json5
+    > hvigor ERROR: BUILD FAILED in 11 s 128 ms
+    """
+    let hint = hapSignHint(log)
+    @Assert(hint.contains("00303074"), true)
+    @Assert(hint.contains("包名"), true)
+    @Assert(hint.contains("DevEco"), true)      // 正解必须写出来，别只报现象
+    // 没命中时不许瞎猜
+    @Assert(hapSignHint("hvigor Finished :entry:default@PackageHap"), "")
+    @Assert(hapSignHint(""), "")
+}
+
+@Test
+public func testHapSignHintMissingMaterial(): Unit {
+    let log = "hvigor ERROR 00303107 Configuration Error: Invalid storeFile value. Make sure it is not null or empty."
+    let hint = hapSignHint(log)
+    @Assert(hint.contains("00303107"), true)
+    @Assert(hint.contains("不存在"), true)
+    @Assert(hint.contains("签名体检"), true)
+    // 两条都命中时先报包名那条（更根因）
+    let both = hapSignHint(log + "\n00303074 Configuration Error")
+    @Assert(both.contains("00303074"), true)
+}

@@ -4693,6 +4693,10 @@ withBridge(function(tauri){
       allowsDevice: r.allowsDevice === true,
       type: String(r.profileType || ''),
       candCount: (typeof r.candidateCount === 'number') ? r.candidateCount : 0,
+      bundleMatch: r.candidateBundleMatch === true,
+      projectBundle: String(r.projectBundle || ''),
+      candidateBundle: String(r.candidateBundle || ''),
+      candidateBundles: String(r.candidateBundles || ''),
       mode: String(r.mode || ''),
       modeLabel: String(r.modeLabel || ''),
       canInstall: r.canInstallDevice === true,
@@ -4720,9 +4724,12 @@ withBridge(function(tauri){
     $('signDevice').textContent = r.allowsDevice ? '是' : '否';
     $('signDevice').style.color = r.allowsDevice ? 'var(--ok)' : 'var(--err)';
     $('signCand').textContent = SIGN.candCount > 0
-      ? (SIGN.candCount + ' 份（可用：' + (r.candidatePath ? '有' : '无') + '）')
+      ? (SIGN.candCount + ' 份（可用：' + (SIGN.bundleMatch ? '有' : '无——包名不符') + '）')
       : '0 份（先跑一次 DevEco 自动签名）';
-    $('signCand').style.color = SIGN.candCount > 0 ? '' : 'var(--warn)';
+    $('signCand').style.color = SIGN.candCount > 0 ? (SIGN.bundleMatch ? '' : 'var(--err)') : 'var(--warn)';
+    $('signCand').title = SIGN.candCount > 0
+      ? ('工程包名 ' + (SIGN.projectBundle || '（未读到）') + '；本机材料包名：' + (SIGN.candidateBundles || '（不可解析）'))
+      : '本机 ~/.ohos/config 里没有可解析的 .p7b';
     var note = $('signNote');
     note.style.color = SIGN.ok ? 'var(--ok)' : 'var(--err)';
     note.textContent = (r.reason || r.error || '尚未体检。') + (r.nextStep ? ('　下一步：' + r.nextStep) : '');
@@ -5607,6 +5614,9 @@ withBridge(function(tauri){
       signAllowsDevice: SIGN.allowsDevice === true,
       signType: SIGN.type || '',
       signCandCount: (typeof SIGN.candCount === 'number') ? SIGN.candCount : 0,
+      // 包名门槛（0.39.9）：候选数 > 0 但包名不符 = 材料用不了（hvigor 会报 00303074）
+      signBundleMatch: SIGN.bundleMatch === true,
+      signCandidateBundles: SIGN.candidateBundles || '',
       signApplied: SIGN.applied === true,
       // T5-4 签名两态：当前态 / 上架齐备度 / 提醒（没有视觉也要能断言"提醒确实出现了"）
       signMode: SIGN.mode || "",

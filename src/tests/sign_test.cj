@@ -415,3 +415,103 @@ public func testMaterialIdentityAndEscaping(): Unit {
     @Assert(unescapeJson5(json5EscapeOf("D:\\oh\\x.cer")), "D:\\oh\\x.cer")
 }
 
+// ============================================================
+// 0.39.9：包名门槛（hvigor 00303074）
+// ============================================================
+//
+// 复现的缺陷（先红后绿的用例）：工程包名 com.atomgit.m3u8dl_tauri、本机只有别的包名的材料时，
+// 0.39.8 的工具说"机器上已有匹配本机 UDID 的材料 → 抄回来即可"。照着做，hvigor 在
+// default@SignHap 报 00303074（bundleName 与 SigningConfigs 不一致）——建议本身就是错的。
+// 现在：候选包名不等于工程包名时，结论必须明确"用不了"，并把正解（DevEco 自动签名）写进下一步。
+
+@Test
+public func testBundleMatchesExactOnly(): Unit {
+    @Assert(bundleMatches("com.a.b", "com.a.b"), true)
+    @Assert(bundleMatches(" com.a.b ", "com.a.b"), true)      // 容忍两侧空白（读 json5 会带）
+    @Assert(bundleMatches("com.a.b", "com.a.c"), false)
+    @Assert(bundleMatches("com.a.b", "COM.A.B"), false)       // bundleName 区分大小写
+    @Assert(bundleMatches("", "com.a.b"), false)              // 空包名不算匹配（别把"不知道"当"匹配"）
+    @Assert(bundleMatches("com.a.b", ""), false)
+    @Assert(bundleMatches("", ""), false)
+}
+
+@Test
+public func testProfileBundleCensusListsBundlesAndDeviceState(): Unit {
+    let a = parseOhosProfile("{\"type\":\"debug\",\"bundle-info\":{\"bundle-name\":\"com.x\"},\"debug-info\":{\"device-ids\":[\"${UDID_IN_SAMPLE}\"]}}", "a.p7b")
+    let b = parseOhosProfile("{\"type\":\"debug\",\"bundle-info\":{\"bundle-name\":\"com.y\"},\"debug-info\":{\"device-ids\":[\"OTHER\"]}}", "b.p7b")
+    let bad = OhosProfile()
+    bad.p7bPath = "c.p7b"
+    bad.parseError = "读不到"
+    let cands = ArrayList<OhosProfile>()
+    cands.add(a)
+    cands.add(b)
+    cands.add(bad)
+    let census = profileBundleCensus(cands, UDID_IN_SAMPLE)
+    // 解析失败的份不列（列出来只会误导）
+    @Assert(census.contains("com.x"), true)
+    @Assert(census.contains("com.y"), true)
+    @Assert(census.contains("含本机"), true)
+    @Assert(census.contains("不含本机"), true)
+    // 空候选 / 全部解析失败 → 空串
+    @Assert(profileBundleCensus(ArrayList<OhosProfile>(), UDID_IN_SAMPLE), "")
+}
+
+@Test
+public func testWritebackRefusesOtherBundle(): Unit {
+    // 现场复刻：材料文件缺（m3u8dl-tauri 的真实状态）+ 候选是别的包名
+    let base = judgeSign(true, false, false, "debug", UDID_IN_SAMPLE, true)
+    let refined = judgeSignForWriteback(base, "com.atomgit.m3u8dl_tauri", "com.yang.testcj",
+        "com.yang.testcj(27台/含本机)、com.jiujiang.habit_tree(26台/含本机)")
+    @Assert(refined.ok, false)
+    @Assert(refined.bundleMatch, false)
+    // 必须点名 hvigor 的错误码与真正原因（否则人还会去查路径/口令）
+    @Assert(refined.nextStep.contains("00303074"), true)
+    @Assert(refined.reason.contains("包名"), true)
+    @Assert(refined.nextStep.contains("com.atomgit.m3u8dl_tauri"), true)   // 缺的是哪个包名
+    @Assert(refined.nextStep.contains("com.jiujiang.habit_tree"), true)    // 本机有哪几个包名
+    @Assert(refined.nextStep.contains("DevEco"), true)                     // 正解
+    // 原始判定不被改写（副本语义）
+    @Assert(base.bundleMatch, true)
+    @Assert(base.nextStep.contains("00303074"), false)
+}
+
+@Test
+public func testWritebackKeepsAdviceWhenBundleMatches(): Unit {
+    // 包名对得上：结论原样保留（"抄回来即可"在这时是对的）
+    let base = judgeSign(false, false, false, "", UDID_IN_SAMPLE, true)
+    let refined = judgeSignForWriteback(base, "com.jiujiang.habit_tree", "com.jiujiang.habit_tree", "")
+    @Assert(refined.bundleMatch, true)
+    @Assert(refined.nextStep, base.nextStep)
+    // 已经能装（ok=true）的工程：即使候选串对不上也不改文案——它用的是自己那份材料
+    let good = judgeSign(true, true, true, "debug", UDID_IN_SAMPLE, false)
+    let kept = judgeSignForWriteback(good, "com.jiujiang.habit_tree", "", "")
+    @Assert(kept.ok, true)
+    @Assert(kept.reason, good.reason)
+    @Assert(kept.nextStep, good.nextStep)
+}
+
+@Test
+public func testWritebackSilentWhenNoCandidate(): Unit {
+    // 没有候选材料（设备离线 → udid="" → pickProfile 挑不到）：不叠"包名不一致"那句，
+    // 「拿不到设备 UDID」才是真正要处理的事（实测踩到：设备离线时被误报成包名问题）
+    let base = judgeSign(true, true, true, "debug", "", false)
+    let refined = judgeSignForWriteback(base, "com.atomgit.m3u8dl_tauri", "",
+        "com.yang.testcj(27台/UDID未知)")
+    @Assert(refined.bundleMatch, false)
+    @Assert(refined.nextStep, base.nextStep)
+    @Assert(refined.reason, base.reason)
+    // UDID 未知时清单里不写"不含本机"（会让人误以为是设备没注册进 profile）
+    @Assert(refined.reason.contains("不含本机"), false)
+}
+
+@Test
+public func testWritebackWithoutProjectBundle(): Unit {
+    // 读不到工程 bundleName（AppScope 缺失）时也要给出可执行的下一步，而不是静默"匹配"
+    let base = judgeSign(false, false, false, "", UDID_IN_SAMPLE, true)
+    let refined = judgeSignForWriteback(base, "", "com.yang.testcj", "")
+    @Assert(refined.bundleMatch, false)
+    @Assert(refined.nextStep.contains("app.json5"), true)
+    @Assert(refined.nextStep.contains("00303074"), true)
+    // 候选包名清单为空时的兜底文案
+    @Assert(refined.nextStep.contains(".ohos"), true)
+}

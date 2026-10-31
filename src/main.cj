@@ -1342,6 +1342,10 @@ public class UiReportCommand <: CommandHandler {
         o.put("signAllowsDevice", JsonBool(argBool(args, "signAllowsDevice", false)))
         o.put("signType", JsonString(argStr(args, "signType", "")))
         o.put("signCandCount", JsonInt(argInt(args, "signCandCount", 0)))
+        // 包名门槛（0.39.9）：候选材料包名是否等于工程 bundleName
+        // （false = 有材料但用不了，hvigor 会报 00303074；「候选数 > 0」不能当"能写回"）
+        o.put("signBundleMatch", JsonBool(argBool(args, "signBundleMatch", false)))
+        o.put("signCandidateBundles", JsonString(argStr(args, "signCandidateBundles", "")))
         o.put("signApplied", JsonBool(argBool(args, "signApplied", false)))
         // T5-4 签名两态（debug / release）：当前态 + 上架齐备度 + 强提醒
         o.put("signMode", JsonString(argStr(args, "signMode", "")))
@@ -1968,6 +1972,15 @@ public class HapCommand <: CommandHandler {
         let gateReports = ArrayList<GateReport>()
         gateReports.add(checkHapGate(hv.built, entries.hasModuleJson, entries.hasArm64So, entries.rawfileCount,
             expectedSo, hapHasSo(entries, expectedSo)))
+        // 签名根因（00303074 / 00303107）：光有「assembleHap 没成功」不指路，把 hvigor 里
+        // 真正的原因翻成人话进闸门（纯函数，见 gates.cj 的 hapSignHint）
+        let signHint = hapSignHint(hvigorText)
+        if (signHint != "") {
+            let hintRep = GateReport()
+            hintRep.fail(signHint)
+            gateReports.add(hintRep)
+            phaseLog += "[sign-hint] ${signHint}\n"
+        }
         let gates = mergeGates(gateReports)
 
         var outError = ""
@@ -2096,6 +2109,13 @@ public class SignCommand <: CommandHandler {
             }
         }
 
+        // 探针：显式指定 UDID（设备离线/无设备机器上复跑取证用；日志里标明来源，不当成 hdc 实测）
+        let udidOverride = envOr("LINGQU_SIGN_UDID", "")
+        if (udidOverride != "") {
+            udid = udidOverride.trimAscii()
+            hdcLog += "[udid/override] LINGQU_SIGN_UDID=${udid}（探针覆盖，非 hdc 实测）\n"
+        }
+
         // ---- ② 工程签名配置（build-profile.json5 是 JSON5，用轻量提取） ----
         let buildProfile = if (ohosDir == "") { "" } else { hostPath("${ohosDir}/build-profile.json5") }
         var projText = ""
@@ -2175,8 +2195,12 @@ public class SignCommand <: CommandHandler {
         var hasConfig = proj.hasSigningConfigs && proj.signingConfigName != ""
         var outProfileType = configured.profileType
         var outAllowsDevice = configured.allows(udid)
-        let check = judgeSign(hasConfig, filesExist, configured.allows(udid), configured.profileType,
+        // 包名门槛（0.39.9）：profile 是按包名签发的，候选材料包名不等于工程 bundleName 时
+        // **不能**建议"抄回来"——hvigor 在 SignHap 会报 00303074（实测）。见 sign.cj 的注
+        let census = profileBundleCensus(cands, udid)
+        let base = judgeSign(hasConfig, filesExist, configured.allows(udid), configured.profileType,
             udid, candidatePath != "")
+        let check = judgeSignForWriteback(base, bundleName, candidateBundle, census)
         check.configuredName = proj.signingConfigName
 
         // ---- ⑤ 写回签名配置（apply=true / LINGQU_SIGN_APPLY=1）----
@@ -2203,6 +2227,14 @@ public class SignCommand <: CommandHandler {
                 applyError = "找不到 ${buildProfile}（先跑 `cargo tauri ohos init --ci` 生成脚手架）"
             } else if (candidatePath == "") {
                 applyError = "机器上没有含本机 UDID 的可用材料，无可写回的内容（先在 DevEco 自动签名一次）"
+            } else if (!bundleMatches(bundleName, candidateBundle)) {
+                // 写回一份别的包名的材料 = 制造一个 hvigor 必然报 00303074 的配置，
+                // 比"没配"更难排查（人会以为是口令/路径问题）。宁可拒绝并说清怎么做。
+                applyError = "拒绝写回：本机候选材料的包名是 ${candidateBundle}，与工程包名 ${bundleName} 不一致" +
+                    "（hvigor 会报 ${SIGN_BUNDLE_MISMATCH_CODE}）。" +
+                    "正解：在 DevEco 里对**本工程**点一次「Automatically generate signature」（需登录），" +
+                    "或把 AppScope/app.json5 的 bundleName 临时改成 ${candidateBundle}（仅本机验证）。" +
+                    "本机现有材料的包名：${census}"
             } else {
                 // 比对基准必须是 p12（signingConfigs 里的 storeFile 就是 p12）——
                 // 拿 .p7b 去比会永远不匹配（实测踩到）
@@ -2251,6 +2283,8 @@ public class SignCommand <: CommandHandler {
                                 check.configuredName = proj2.signingConfigName
                                 check.configuredFilesExist = filesExist
                                 check.configuredAllowsDevice = allows2
+                                // 写回只在包名匹配时发生（上面已拦），所以包名门槛这关算过了
+                                check.bundleMatch = true
                             }
                         } catch (e: Exception) {
                             applyError = "写回失败：${e}"
@@ -2284,6 +2318,9 @@ public class SignCommand <: CommandHandler {
                 "devices=${p.deviceIds.size} allowsLocal=${p.allows(udid)} err=${p.parseError}\n"
         }
         logText += "[project] ${buildProfile}\n"
+        logText += "[bundle] project=${bundleName} candidate=${candidateBundle} " +
+            "match=${check.bundleMatch}\n"
+        logText += "[bundle/census] ${census}\n"
         logText += "[signing] name=${proj.signingConfigName} type=${proj.certType} " +
             "certpath=${certPath} profile=${profilePath} storeFile=${storeFile} filesExist=${filesExist}\n"
         logText += "[verdict] ok=${check.ok} reason=${check.reason}\n"
@@ -2317,6 +2354,10 @@ public class SignCommand <: CommandHandler {
             root.put("configDir", JsonString(configDir))
             root.put("candidateCount", JsonInt(Int64(cands.size)))
             root.put("candidatePath", JsonString(candidatePath))
+            root.put("candidateBundle", JsonString(candidateBundle))
+            root.put("projectBundle", JsonString(bundleName))
+            root.put("candidateBundleMatch", JsonBool(check.bundleMatch))
+            root.put("candidateBundles", JsonString(census))
             var carr = JsonArray()
             for (p in cands) {
                 carr.add(p.toJson())
@@ -2353,6 +2394,9 @@ public class SignCommand <: CommandHandler {
         res.put("candidateCount", JsonInt(Int64(cands.size)))
         res.put("candidatePath", JsonString(candidatePath))
         res.put("candidateBundle", JsonString(candidateBundle))
+        res.put("projectBundle", JsonString(bundleName))
+        res.put("candidateBundleMatch", JsonBool(check.bundleMatch))
+        res.put("candidateBundles", JsonString(census))
         res.put("buildProfile", JsonString(buildProfile))
         res.put("applyRequested", JsonBool(wantApply))
         res.put("applied", JsonBool(applyText != ""))

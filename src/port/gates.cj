@@ -253,3 +253,31 @@ public func checkHapGate(built: Bool, hasModuleJson: Bool, hasArm64So: Bool, raw
     }
     return rep
 }
+
+/**
+ * 从 hvigor 输出里认**签名根因**（纯函数；返回 "" = 没命中）。
+ *
+ * 为什么单拎出来：`assembleHap 没成功` 这句话不指路，而真正的根因藏在几十行 task 日志中间。
+ * 0.39.9 实测两条：
+ *
+ *   · `00303074` —— 签名材料的 bundleName 与 `AppScope/app.json5` 不一致。
+ *     **profile 是按包名签发的**，本机没有这个包名的材料就装不上；写回别的包名的材料同样报这条。
+ *     正解：在 DevEco 里对**该工程**点一次自动签名（需登录）——属必须计入 A3 的人工介入。
+ *   · `00303107 Invalid storeFile value` —— 材料文件不存在（被删/换机器）。
+ *
+ * 这两条以前只以 hvigor 原文形式躺在 `.lingqu/hap/<工程>.log` 里，得人自己去扒；
+ * 现在直接进 HAP 闸的 failures，界面第一眼就能看到"差哪一步、该找谁"。
+ */
+public func hapSignHint(logText: String): String {
+    if (logText.contains("00303074")) {
+        return "HAP 闸：签名材料的包名与工程不一致（hvigor 00303074）——" +
+            "profile 按包名签发，本机没有该包名的材料时，写回/抄用别的包名的材料也会报这一条。" +
+            "先在 DevEco 对本工程自动签名一次（需登录），再重跑装配；材料清单见「签名体检」"
+    }
+    if (logText.contains("00303107")) {
+        return "HAP 闸：签名材料文件不存在（hvigor 00303107 Invalid storeFile）——" +
+            "build-profile.json5 的 signingConfigs 指向的 .p12/.cer/.p7b 已被删除或换机器丢了；" +
+            "先跑「签名体检」看材料是否齐全，缺就重新自动签名一次"
+    }
+    return ""
+}

@@ -149,6 +149,23 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
         "看紧随其后的 `cargo:warning=` 行确定缺什么；桌面专属依赖（glib/gtk/x11）应 patch 掉而不是硬配 pkg-config",
         "", PK_GUIDE))
 
+    // ---- 0.39.9：签名材料的包名门槛（实测信号来自 hvigor 的 default@SignHap）----
+    // 证据：m3u8dl-tauri（bundleName=com.atomgit.m3u8dl_tauri）在本机 `~/.ohos/config` 的 4 套
+    // profile（com.yang.testcj / com.jiujiang.habit_tree / com.yang.ohosnes.fceux）里没有自己这份，
+    // 即使把 signingConfigs 改指向一份**文件齐全**的材料，hvigor 仍然这样失败：
+    //     00303074 Configuration Error
+    //     The bundleName in app.json5/hvigorfile.ts does not match the bundleName in the generated SigningConfigs.
+    // 结论：profile 按包名签发，**没有该包名的材料就装不上**，写回别的包名的材料只是把
+    // 「材料缺失」换成「配置错误」。正解是 DevEco 自动签名一次（需登录，计入 A3 人工介入）。
+    lib.add(Fingerprint("FP-018", "00303074",
+        "签名材料的 bundleName 与工程 AppScope/app.json5 的 bundleName 不一致（profile 按包名签发，本机没有该包名的材料）",
+        "在 DevEco 里对**本工程**点一次自动签名（需登录华为账号）拿到该包名的 profile；临时验证可把 bundleName 改成已有材料的包名",
+        "", PK_GUIDE))
+    lib.add(Fingerprint("FP-019", "00303107",
+        "build-profile.json5 的 signingConfigs 指向的签名材料文件不存在（.p12/.cer/.p7b 被删或换机器丢了）",
+        "跑「签名体检」确认三个路径是否都在；缺了就重新自动签名一次，别手填别的工程的路径",
+        "", PK_GUIDE))
+
     return lib
 }
 

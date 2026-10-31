@@ -427,6 +427,13 @@ public class SignCheck {
     public var configuredAllowsDevice: Bool = false
     /** 本机 UDID */
     public var udid: String = ""
+    /**
+     * 本机候选材料的**包名**是否等于工程 `AppScope/app.json5` 的 bundleName。
+     *
+     * 不是"锦上添花"的字段：hvigor 在签名阶段会校验它，不匹配直接失败（0.39.9 实测）——
+     * 所以"机器上有含本机 UDID 的材料"并不等于"能写回"。默认 true（不涉及候选的路径不受影响）。
+     */
+    public var bundleMatch: Bool = true
 
     public func toJson(): JsonObject {
         var o = JsonObject()
@@ -437,6 +444,7 @@ public class SignCheck {
         o.put("configuredFilesExist", JsonBool(this.configuredFilesExist))
         o.put("configuredAllowsDevice", JsonBool(this.configuredAllowsDevice))
         o.put("udid", JsonString(this.udid))
+        o.put("bundleMatch", JsonBool(this.bundleMatch))
         return o
     }
 }
@@ -489,6 +497,104 @@ public func judgeSign(hasConfig: Bool, filesExist: Bool, allowsDevice: Bool, pro
     c.reason = "签名配置齐全，且 profile 绑定了本机 UDID，可直装"
     c.nextStep = "hvigor assembleHap → hdc install -r → aa start"
     return c
+}
+
+// ============================================================
+// 包名门槛：**签名材料的 bundle-name 必须等于工程的 bundleName**（0.39.9 实测）
+// ============================================================
+//
+// 0.39.7 的遗留问题写的是"材料文件不存在"，照那个改法（换成 ~/.ohos/config 里现存的另一套）
+// 仍然装不上：hvigor 在 `default@SignHap` 直接拦下并报
+//
+//     00303074 Configuration Error
+//     The bundleName in app.json5/hvigorfile.ts does not match the bundleName in the
+//     generated SigningConfigs.
+//
+// 也就是说：**profile 是按包名签发的**。"机器上有含本机 UDID 的材料"只过了两道门里的一道，
+// 另一道是包名。所以这里把包名独立成一条判定，而不是塞进 `filesExist` 之类的开关里——
+// 否则工具会给出"抄回来即可"这种**照着做也失败**的建议（比不说更糟）。
+//
+// 正解只有一条：在 DevEco 里对**该工程**点一次自动签名（需登录华为账号），
+// 由签名服务按这个包名签发 profile。它属于必须计入 A3 的人工介入，工具要做的是
+// **一次说清**（哪个包名缺、本机有哪些包名、hvigor 会报什么码、该点哪里），别让人试错。
+
+/** hvigor 的包名不匹配错误码（写进 reason 里，方便按报错原文检索） */
+public let SIGN_BUNDLE_MISMATCH_CODE: String = "00303074"
+
+/** 候选材料的包名是否等于工程包名（两边都非空且逐字符相等；bundleName 区分大小写） */
+public func bundleMatches(projectBundle: String, candidateBundle: String): Bool {
+    let a = projectBundle.trimAscii()
+    let b = candidateBundle.trimAscii()
+    if (a == "" || b == "") {
+        return false
+    }
+    return a == b
+}
+
+/**
+ * 本机材料的包名清单（回答"为什么没有我这个包名的"）：`com.a(27台/含本机)、com.b(26台/含本机)`。
+ *
+ * 空目录返回 ""；解析失败的份不列（列出来只会误导）。
+ */
+public func profileBundleCensus(cands: ArrayList<OhosProfile>, udid: String): String {
+    var text = ""
+    for (p in cands) {
+        if (p.parseError != "" || p.bundleName == "") {
+            continue
+        }
+        if (text != "") {
+            text += "、"
+        }
+        let allows = if (udid == "") { "UDID未知" } else if (p.allows(udid)) { "含本机" } else {
+            "不含本机"
+        }
+        text += "${p.bundleName}(${p.deviceIds.size}台/${allows})"
+    }
+    return text
+}
+
+/**
+ * 把包名门槛叠到体检结论上（纯函数，`judgeSign` 的补充而不是替代）。
+ *
+ * 只在"需要走候选材料"的两条路径上动结论（没配签名 / 配了但材料缺），且**只在包名不匹配时**改：
+ * 已经能装（ok=true）的工程原样返回——它用的材料当然是匹配的那个包名的。
+ *
+ * 返回**副本**（不改入参，方便调用方保留原始判定做对照）。
+ */
+public func judgeSignForWriteback(c: SignCheck, projectBundle: String, candidateBundle: String,
+    census: String): SignCheck {
+    let out = SignCheck()
+    out.ok = c.ok
+    out.reason = c.reason
+    out.nextStep = c.nextStep
+    out.configuredName = c.configuredName
+    out.configuredFilesExist = c.configuredFilesExist
+    out.configuredAllowsDevice = c.configuredAllowsDevice
+    out.udid = c.udid
+    out.bundleMatch = bundleMatches(projectBundle, candidateBundle)
+    if (out.ok || out.bundleMatch) {
+        return out
+    }
+    if (candidateBundle.trimAscii() == "") {
+        // 压根没有候选材料（没连设备 / 目录里没有 .p7b）：judgeSign 自查给出的那句话已经够具体，
+        // 再叠一层"包名不一致"只会误导（实测：设备离线时 udid="" 就会走到这里）
+        return out
+    }
+    // 候选材料是"别的包名"，写回/抄过来都会在 hvigor 的 SignHap 阶段被 00303074 拦下
+    let mine = if (projectBundle == "") { "（工程 AppScope/app.json5 里没读到 bundleName）" } else {
+        "`${projectBundle}`"
+    }
+    let others = if (census == "") { "（本机 ~/.ohos/config 里没有可解析的材料）" } else { census }
+    let tail = "工程包名 ${mine} 没有对应的签名材料（profile 按包名签发）。" +
+        "本机现有材料的包名：${others}。" +
+        "hvigor 写回/抄用别的包名的材料会报 ${SIGN_BUNDLE_MISMATCH_CODE}" +
+        "（bundleName 与 SigningConfigs 不一致）。"
+    let how = "在 DevEco 里对**本工程**点一次「Automatically generate signature」" +
+        "（需登录华为账号，会把本机 UDID 注册进这个包名的 profile）；" +
+        "或把 AppScope/app.json5 的 bundleName 临时改成上面某个已有包名（仅限本机验证，别用于交付）。"
+    out.reason = "${out.reason}；工程包名 ${mine} 与候选材料包名不一致"
+    out.nextStep = tail + how
+    return out
 }
 
 // ============================================================

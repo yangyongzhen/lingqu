@@ -5,6 +5,63 @@
 
 ---
 
+## [0.39.9] - 2026-11-01
+
+**主题**：**签名链路的真根因是「包名」，不是「材料路径」**。0.39.7 把 `hap/sign` 的 `ok=false`
+记成「`signingConfigs` 指向不存在的材料，改指向现存那套即可」——**这个改法照着做仍然装不上**。
+本轮把它钉死：`profile` 是**按包名签发**的，hvigor 在 `default@SignHap` 会校验它。
+
+### 决定性证据（Windows x64，m3u8dl-tauri，bundleName=`com.atomgit.m3u8dl_tauri`）
+
+把工程 `signingConfigs` 改成指向本机**现存且文件齐全、含本机 UDID** 的那套材料（`default_ohos-probe…`，
+口令密文一并从用同一套材料的工程搬过来），`hvigor assembleHap` 仍然失败，而且错误变了：
+
+    > hvigor ERROR: Failed :entry:default@SignHap...
+    > hvigor ERROR: 00303074 Configuration Error
+    Error Message: The bundleName in app.json5/hvigorfile.ts does not match the bundleName
+    in the generated SigningConfigs. At file: …\src-tauri\gen\ohos\build-profile.json5
+
+本机 4 套 profile 的包名是 `com.yang.testcj` / `com.jiujiang.habit_tree` / `com.yang.ohosnes.fceux`，
+**没有** `com.atomgit.m3u8dl_tauri`。结论：这道门不是路径问题，是**包名门槛**；
+"机器上有含本机 UDID 的材料"≠"能写回"。（实验后已把工程文件按原样还原，SHA256 校验一致。）
+
+### 实跑证据（`lingqu-cli sign --path E:\test\rust\m3u8dl-tauri`）
+
+    reason   : …有文件不存在…；工程包名 `com.atomgit.m3u8dl_tauri` 与候选材料包名不一致
+    nextStep : 工程包名 `com.atomgit.m3u8dl_tauri` 没有对应的签名材料（profile 按包名签发）。
+               本机现有材料的包名：com.yang.testcj(27台/含本机)、com.jiujiang.habit_tree(26台/含本机)…
+               hvigor 写回/抄用别的包名的材料会报 00303074（bundleName 与 SigningConfigs 不一致）。
+               在 DevEco 里对**本工程**点一次「Automatically generate signature」（需登录）…
+    candidateBundleMatch : false
+    apply（LINGQU_SIGN_APPLY=1）: applied=false，applyError="拒绝写回：本机候选材料的包名是 com.yang.testcj…"
+    且工程 build-profile.json5 的 SHA256 前后一致（**拒绝而不是写坏**）
+
+### Added
+
+- `src/compiler/sign.cj`：`bundleMatches()` / `profileBundleCensus()` / `judgeSignForWriteback()`
+  —— 把"包名门槛"做成独立判定（`SignCheck.bundleMatch`），不再塞进 `filesExist` 之类的开关里。
+  没有候选材料时**不叠**这句（设备离线就是"拿不到 UDID"，别把人带偏）。
+- `src/port/gates.cj`：`hapSignHint(logText)` —— HAP 闸直接给出签名根因
+  （`00303074` 包名不一致 / `00303107` 材料文件不存在），不用再自己去 `.lingqu/hap/<工程>.log` 里扒。
+- 指纹库 **FP-018**（00303074）/ **FP-019**（00303107），走 guide 档（涉及 DevEco 登录，不自动改）。
+- 探针 `LINGQU_SIGN_UDID`：设备离线/无设备机器上复跑签名体检（日志里标注"探针覆盖，非 hdc 实测"）。
+- `ui_report` 新增 `signBundleMatch` / `signCandidateBundles`（前端 `reportUi` 与后端白名单两处同批加，
+  见 AGENTS §4-60）；⑤ 屏候选行改成「N 份（可用：有 / 无——包名不符）」，hover 给出两边包名。
+
+### Fixed
+
+- **误导性建议**：候选材料包名与工程不一致时，以前会说"抄回来即可"——照着做 hvigor 必然 00303074。
+  现在结论明确不可用，并把"缺哪个包名 / 本机有哪些包名 / 该点哪里"一次说清。
+- **apply 不再写坏工程**：包名不匹配时拒绝写回（以前会写进一份注定失败的 signingConfigs，
+  比"没配"更难排查——人会以为是口令/路径问题）。
+- HAP 装配失败时闸门只报「assembleHap 没成功」→ 现在带签名根因那一行。
+
+### 测试
+
+`cjpm test` **284 例**（+9）：`bundleMatches` 边界（空/空白/大小写）· `profileBundleCensus`
+（解析失败不列 / UDID 未知不写"不含本机"）· **复现用例** `testWritebackRefusesOtherBundle`（先红后绿）·
+无候选时不误报 · 包名匹配时保留原建议 · `hapSignHint` 两条 + 不瞎猜 · 指纹 FP-018/FP-019 命中。
+
 ## [0.39.8] - 2026-11-01
 
 **主题**：**断点板跟着工程走**。`tasks.json` 原先写在灵渠应用目录、跨工程共用，

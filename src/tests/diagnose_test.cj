@@ -151,3 +151,34 @@ public func testFailLedgerCountsPerFingerprint(): Unit {
     }
     @Assert(led.rounds, 3)
 }
+
+@Test
+public func testDiagnoseSignMaterialFingerprints(): Unit {
+    // 0.39.9 实测的两条 hvigor 签名失败信号：包名不一致（00303074）/ 材料文件不存在（00303107）
+    // 注意（AGENTS §4-28）：仓颉多行字符串必须以换行开头，且串内反斜杠仍是转义
+    let mismatch = """
+    hvigor ERROR: Failed :entry:default@SignHap...
+    > hvigor ERROR: 00303074 Configuration Error
+    The bundleName in app.json5/hvigorfile.ts does not match the bundleName in the generated SigningConfigs.
+    """
+    let hits = diagnoseLog(mismatch)
+    var found = false
+    for (d in hits) {
+        if (d.fingerprint.id == "FP-018") {
+            found = true
+            @Assert(d.patchKind, PK_GUIDE)              // 涉及 DevEco 登录 → guide 档，不自动改
+            @Assert(d.fingerprint.fix.contains("DevEco"), true)
+            @Assert(d.evidence.contains("00303074"), true)
+        }
+    }
+    @Assert(found, true)
+    // 材料缺文件那条
+    let missing = "hvigor ERROR 00303107 Configuration Error: Invalid storeFile value."
+    var found2 = false
+    for (d in diagnoseLog(missing)) {
+        if (d.fingerprint.id == "FP-019") {
+            found2 = true
+        }
+    }
+    @Assert(found2, true)
+}
