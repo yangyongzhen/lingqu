@@ -99,3 +99,52 @@ public func agentTraceLines(projectPath: String): Int64 {
         return -1
     }
 }
+
+/**
+ * 从一条轨迹记录里取 kind（纯函数，不引 JSON 解析器：只认 `"kind": "xxx"`）
+ */
+public func traceKindOfLine(line: String): String {
+    let marker = "\"kind\":"
+    let at = line.indexOf(marker)
+    match (at) {
+        case Some(i) =>
+            var rest = line[i + marker.size..].trimAscii()
+            if (rest.startsWith("\"")) {
+                rest = rest[1..]
+            }
+            let end = rest.indexOf("\"")
+            match (end) {
+                case Some(e) => return rest[0..e]
+                case None => return ""
+            }
+        case None => return ""
+    }
+}
+
+/**
+ * agent 是否**正在跑一个工具**（最后一条记录是 `tool`，还没有对应的 `tool_done`）
+ *
+ * 为什么需要：停滞判定的输入只有落档与轨迹行数，而**单个长工具调用期间两者都不动**
+ * （轨迹在 tool 开始/结束各记一条）——0.39.6 实测：分钟级交叉编译跑到一半，
+ * 连续 6 次轮询签名完全相同，「AI 好像在绕圈」又报了出来。
+ * 正在跑工具显然不是绕圈，这类期间不该判停滞。
+ */
+public func agentTraceBusy(projectPath: String): Bool {
+    let f = tracePathOf(projectPath)
+    if (!exists(Path(f))) {
+        return false
+    }
+    try {
+        let text = String.fromUtf8(File.readFrom(f))
+        var last = ""
+        for (l in text.split("\n", -1)) {
+            let t = l.trimAscii()
+            if (t.size > 0) {
+                last = t
+            }
+        }
+        return traceKindOfLine(last) == "tool"
+    } catch (e: Exception) {
+        return false
+    }
+}

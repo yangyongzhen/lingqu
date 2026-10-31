@@ -215,13 +215,15 @@ public func testStatePushSigKeepsWindow(): Unit {
     let st = AutoPortState()
     st.reset("E:/x", "x", 10, 20)
     @Assert(st.active, true)
-    for (i in 0..12) {
+    // 推 window 条数再多推 5 条：窗口只保留最后 AUTOPORT_STALL_POLLS 条。
+    // 用常量驱动（0.39.6 把阈值 6 → 20，硬编码条数的用例会假红）
+    let pushes = AUTOPORT_STALL_POLLS + 5
+    for (i in 0..pushes) {
         st.pushSig("sig${i}")
     }
-    // 只留最后 AUTOPORT_STALL_POLLS 条（否则历史无限长，判定也要扫全表）
     @Assert(Int64(st.history.size), AUTOPORT_STALL_POLLS)
-    @Assert(st.history[Int64(st.history.size) - 1], "sig11")
-    @Assert(st.polls, 12)
+    @Assert(st.history[Int64(st.history.size) - 1], "sig${pushes - 1}")
+    @Assert(st.polls, pushes)
     st.stop()
     @Assert(st.active, false)
 }
@@ -297,4 +299,26 @@ public func testEveryScopeHasAGoal(): Unit {
     // 未知 scope：空串（调用方据此退回全自动文案，不编一段假目标）
     @Assert(autoPortScopeGoal("nope"), "")
     @Assert(autoPortScopeGoal("all"), "")
+}
+
+@Test
+public func testAutoPortStateClearHistoryKeepsPolls(): Unit {
+    // agent 正在跑工具时清快照：窗口重开，但 polls 计数保留（进度显示要用）
+    let st = AutoPortState()
+    st.pushSig("a")
+    st.pushSig("a")
+    st.pushSig("a")
+    @Assert(st.polls, 3)
+    @Assert(isStalled(st.history, 3), true)
+    st.clearHistory()
+    @Assert(Int64(st.history.size), 0)
+    @Assert(st.polls, 3)
+    @Assert(isStalled(st.history, 3), false)
+}
+
+@Test
+public func testStallWindowIsLongerThanOneLlmTurn(): Unit {
+    // 轮询 900ms：阈值必须明显大于一次 LLM 思考（5-30s），否则正常停顿就误报。
+    // 0.39.7 把阈值设成 6（≈5.4s），端到端实跑反复误报。
+    @Assert(AUTOPORT_STALL_POLLS >= 15, true)
 }

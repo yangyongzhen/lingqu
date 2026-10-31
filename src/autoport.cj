@@ -27,8 +27,14 @@ public let AUTOPORT_MAX_ITERATIONS: Int64 = 40
 /** 默认时间预算（分钟）：到点就让 AI 收尾总结，别无限挂着 */
 public let AUTOPORT_MAX_MINUTES: Int64 = 40
 
-/** 停滞判定阈值：连续多少次轮询快照完全一样就认为绕圈 */
-public let AUTOPORT_STALL_POLLS: Int64 = 6
+/**
+ * 停滞判定阈值：连续多少次轮询快照完全一样就认为绕圈
+ *
+ * 轮询间隔 900ms，所以 6 次 ≈ 5.4 秒——比一次 LLM 思考（5–30 秒）还短。
+ * 0.39.7 实测因此反复误报（agent 只是在一个长工具/一次长思考里）。
+ * 20 次 ≈ 18 秒：仍能抓住"真绕圈"，但不会在正常停顿上叫停。
+ */
+public let AUTOPORT_STALL_POLLS: Int64 = 20
 
 /** 一次 AI 自动迁移的输入（命令层填，纯函数只读） */
 public class AutoPortInput {
@@ -382,6 +388,16 @@ public class AutoPortState {
             history.remove(at: 0)
         }
         polls += 1
+    }
+
+    /**
+     * 丢弃已有快照（但**保留** polls 计数）：agent 正在跑工具时调用。
+     *
+     * 为什么要清：单个长工具调用期间落档与轨迹都不动，这期间的签名会攒成一串相同值；
+     * 工具一结束如果不清理，窗口里还留着那一串，下一次轮询就立刻判"停滞"。
+     */
+    public func clearHistory(): Unit {
+        history.clear()
     }
 
     /** 清空（开始新一轮时） */

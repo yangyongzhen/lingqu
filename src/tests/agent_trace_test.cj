@@ -71,3 +71,20 @@ public func testTraceLinesCountOfMissingFile(): Unit {
     // 不存在的工程：0 行（不是 -1，也不是抛异常）
     @Assert(agentTraceLines("E:/definitely-not-exist-project"), 0)
 }
+
+@Test
+public func testTraceKindOfLineExtractsKind(): Unit {
+    // 纯函数：只认 "kind": "xxx"（不引 JSON 解析器，轨迹是单行记录）
+    @Assert(traceKindOfLine("{\"ts\":\"t\",\"kind\":\"tool\",\"name\":\"bash\",\"detail\":\"x\"}"), "tool")
+    @Assert(traceKindOfLine("{\"ts\":\"t\",\"kind\": \"tool_done\"}"), "tool_done")
+    @Assert(traceKindOfLine("{\"kind\":\"turn_done\"}"), "turn_done")
+    // 异常路径：没有 kind / 空行 → 空串（调用方据此不判"忙"）
+    @Assert(traceKindOfLine("{\"ts\":\"t\"}"), "")
+    @Assert(traceKindOfLine(""), "")
+}
+
+@Test
+public func testTraceBusyFalseOnMissingFile(): Unit {
+    // 没有轨迹文件 = 无从判断"在跑工具"，必须给 false（宁可判不忙，也不要假忙）
+    @Assert(agentTraceBusy("E:/definitely-not-exist-project"), false)
+}

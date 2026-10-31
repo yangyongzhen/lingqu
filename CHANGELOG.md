@@ -5,6 +5,40 @@
 
 ---
 
+## [0.39.7] - 2026-11-01
+
+**主题**：把"假停滞"彻底修掉（0.39.6 只修了一半），并拿到第一次**完整链路**实跑证据：
+`build` 落档从 `exitCode=101` 变成 **0**，hap/sign 也真的被跑到。
+
+### 实跑证据（Windows x64，`LINGQU_UI_PROBE=ai-full`，m3u8dl-tauri，cjh 分支构建 + `CJH_BASH_TIMEOUT=600`）
+
+    wsFrameTypes：delta:86  done:1  tool_start:40  tool_result:40   ← 40/40 完全配对，无丢帧
+    aiPortPolls=151  aiPortStalled=false  abortSource=""  wsReconnects=0  errorCount=0
+    trace.jsonl：67 KB；trace 里 `| tail` 0 次、`> /tmp/` 5 次（长命令都改成重定向了）
+    落档：scan ✓ / deps ✓ / port ✓ / **build exitCode=0** / hap（hvigor BUILD FAILED，但已产出 7.9 MB HAP）/ sign（debug，材料探测不到）
+
+- **build exitCode=0 的原因**：agent 读了任务书新加「交叉编译的硬前置」+ R2-PORT-008 的 guide 片段，
+  自己给 `src-tauri/.cargo/config.toml` 补了 `[env] CC_aarch64_unknown_linux_ohos`（trace 里有那条 edit），
+  `ring` / `ohos-arkui-sys` 的 C 依赖这才找到 NDK clang。
+- **这轮把应用中途打断的是我自己的门禁**：`scripts/test.bat` 第 ④ 闸检测到旧 `main.exe` 在跑，
+  结束进程以释放产物（日志原文：`[!] 上一版 main.exe 仍在运行，先结束它以释放产物`），
+  所以 deploy/verify 没跑到。**教训进 §4：实机探针与门禁不要同时跑。**
+
+### Fixed
+
+- **假停滞（第二轮）**：0.39.6 只把"轨迹行数"编进签名，但**单个长工具调用期间轨迹也不动**
+  （tool / tool_done 各一条）——实跑到 poll≈106 又报了「AI 好像在绕圈」。现在：
+  ① 新增 `agentTraceBusy(path)`（最后一条轨迹是 `tool` 且没有 `tool_done` = 正在干活），
+  正在跑工具时**不判停滞**并清空已攒的窗口（`AutoPortState.clearHistory()`，polls 计数保留）；
+  ② `AUTOPORT_STALL_POLLS` 6 → **20**（轮询 900ms，6 次 ≈5.4 秒，比一次 LLM 思考还短，必然误报）。
+
+### Changed
+
+- 用例改成常量驱动：`testStatePushSigKeepsWindow` 原先硬编码"推 12 条、留 6 条"，
+  阈值一改就假红——现在按 `AUTOPORT_STALL_POLLS + 5` 推、按常量断言。
+
+---
+
 ## [0.39.6] - 2026-11-01
 
 **主题**：端到端实跑暴露的两个"能打死整轮"的问题各修一处——停滞判定并入 agent 活动、

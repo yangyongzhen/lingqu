@@ -222,6 +222,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 69 | 改了 `src/` 却只重建业务包 → `run-dev.sh` 起的还是旧行为（"改了没生效"） | `run-dev.sh` 跑的是 **`targets/desktop`** 的产物；业务包改了必须 `cd targets/desktop && cjpm build`（或直接跑 `scripts/test.sh` 的第 ④ 闸）。0.37.0 的绝对路径修复因此白跑了一轮实机探针 |
 | 70 | 交给 agent 的工具有了，但它「跑不动」：任务书里写相对路径 `cli\target\release\bin\main.exe` | agent 的 bash **cwd = 目标工程**（`workspaces/switch` 之后），相对路径全部失效。凡是要给 agent 用的路径一律**绝对**（`getWorkingDirectory()` 拼），而且要先把工程上下文/工作区切好**再**发任务书 |
 | 71 | agent 的 bash 里 `cat`/`sed`/`grep` 全报 `command not found`（exit 127），**看起来像模型把命令写错了**，于是它反复换写法重试、白烧轮次 | cjh 用**绝对路径**找到 Git Bash，但 `<git>/usr/bin`（coreutils）不在继承来的 PATH 上 —— 目标机器 Git 没进 PATH 时必然如此（`cjpm test` 里也撞到过：会话 PATH 一个 MSYS 目录都没有）。cjh 0.39.7 起 `shellPathFix()` 幂等追加 `<git>/bin`/`<git>/usr/bin`/`<git>/mingw64/bin`（**追加不覆盖**）。**排查口诀：`command -v cat`（内建）先探一下，再怀疑代码**；写测试也别把"外部命令存不存在"和"被测行为对不对"搅在一起 |
+| 72 | 实机探针跑到一半应用**凭空退出**，日志里只剩几行 `[PASS]` | **别一边跑 `scripts/test.bat` 一边跑实机探针**：第 ④ 闸发现 `targets/desktop` 的 `main.exe` 在跑时会**结束进程以释放产物**（日志原文 `[!] 上一版 main.exe 仍在运行，先结束它以释放产物`）。要边看边改就先只跑 `cjpm test` 或第 ①②③ 闸，整个五道闸留到探针结束之后 |
+| 73 | 改 `cjpm.toml` / `cj-tauri.toml` 的版本号或注释，改完中文全成乱码、还多了 BOM | **别用 `Get-Content \| Set-Content` 回写含中文的文件**（PS 5.1 按 GBK 误解码无 BOM 的 UTF-8，还顺手加 BOM）。单行改动（版本号）用编辑器/工具的精确替换；非要在 PowerShell 里写就用 `[System.IO.File]::WriteAllText($p, $t, (New-Object System.Text.UTF8Encoding($false)))`，改完 `git diff` 逐行复核 |
 
 ---
 

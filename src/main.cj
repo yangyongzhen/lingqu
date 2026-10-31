@@ -3866,13 +3866,22 @@ public class AutoPortStatusCommand <: CommandHandler {
         // 停滞判定要带上 agent 活动量：分钟级交叉编译期间落档当然不动，
         // 只看落档会把"正在干活"误判成"在绕圈"（0.39.7 实测踩到）
         let sig = autoportSnapshotWith(rows, agentTraceLines(path))
+        // 但**单个长工具调用期间**连轨迹都不动（tool / tool_done 各一条）——
+        // 这时按"正在干活"处理：不判停滞，并清空已攒的快照（否则工具一结束就立刻误报）
+        let busy = agentTraceBusy(path)
         var stalled = false
         var polls: Int64 = 0
         synchronized(gAutoPortLock) {
             if (gAutoPort.active) {
-                gAutoPort.pushSig(sig)
+                if (busy) {
+                    // agent 正在跑工具：清掉攒下的快照，且本轮不判停滞
+                    gAutoPort.clearHistory()
+                    gAutoPort.polls += 1
+                } else {
+                    gAutoPort.pushSig(sig)
+                    stalled = isStalled(gAutoPort.history, AUTOPORT_STALL_POLLS)
+                }
                 polls = gAutoPort.polls
-                stalled = isStalled(gAutoPort.history, AUTOPORT_STALL_POLLS)
             }
         }
         let done = autoportDoneCount(rows)
