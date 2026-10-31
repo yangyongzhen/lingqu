@@ -5,6 +5,45 @@
 
 ---
 
+## [0.37.1] - 2026-11-01
+
+**主题**：**两种自动化档次 + 把 WS 排障的证据补齐**。
+
+用户澄清了产品形态，这一轮据此对齐：
+
+| 档位 | 入口 | 谁干活 | 收尾 |
+|---|---|---|---|
+| **半自动** | 左栏各屏（②画像 / ③依赖 / ④改造 / ⑤构建 …） | 人点一步，**AI 干那一步**（改代码、跑验证） | 做完**停下**，下一步由人点 |
+| **全自动** | 「⚡ AI 自动迁移」（默认屏 / 顶栏） | cjh 一路干到 verify | 卡住/超预算才叫人 |
+
+两档共用**同一套引擎**（`t2h:autoport_start { scope }`），只有任务书的"范围与收尾条件"不同。
+
+### Added
+
+- `scope` 参数（`all` = 全自动；`port`/`deps`/`build`/`hap`/`sign`/`deploy`/`verify` = 半自动）：
+  `autoPortScopeTitle` / `isFullScope` / `autoPortScopeGoal`（纯函数 + 5 条单测）。
+  半自动任务书会写明「只做「规则改造」这一步」+ 该步收尾条件 + **做完就停，不要顺手把后面几步也做了**
+- ④ 改造执行屏新增 **`🤖 交给 AI 改造`** 按钮（与「预览改造 / 应用（落盘）」并排，互不冲突：
+  规则引擎是不花模型钱的快通道，也是 agent 的手）
+- `ui_report` 新增排障字段：`wsSendFail` / `wsLastSendErr` / `wsFrameTypes`（帧类型计数）
+  —— 以前发送失败是静默的，分不清"没发出去"和"cjh 没回"
+
+### Changed
+
+- 撤回 0.37.0 的"补 `POST /api/chat`"计划：**用户指出 WS 已经能直接发消息**，产品是桌面 GUI、
+  页面永远在场，REST 对话入口不是需求。那是在给一个 WS bug 打补丁（详见 docs/上游回馈-cjh.md 排障进度）
+
+### 证据（Windows x64，2026-11-01）
+
+```
+门禁：五道闸全绿 build-biz:PASS test:PASS(TOTAL=238) check:PASS build-app:PASS build-cli:PASS
+WS 排障（LINGQU_UI_PROBE=ai，habit-tree）：
+  wsSendFail=0  wsFrameTypes="history_messages:1"  frames=1  toolCards=0
+  → 任务书**发送成功**，cjh 只回一帧 history_messages 就静默；会话文件 158 B（只有 system 消息）
+  同会话里探针短消息正常：frames=3 / lastFrameType=done / replyPreview=收到
+  ⇒ 排除"通道不通"与"发送失败"；剩下两个变量：消息长度（4448 字）与 workspace 切换后的会话状态
+```
+
 ## [0.37.0] - 2026-11-01
 
 **主题**：**方向纠偏 —— AI 是执行者，不是"失败后给建议的顾问"**。

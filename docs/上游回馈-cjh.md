@@ -3,6 +3,11 @@
 > 背景：本项目（灵渠迁移台）在 0.32～0.37 把 **cjh 当成迁移主循环的执行者**用起来之后，
 > 撞到下面几处能力缺口。每条都带**现象 / 根因（文件:行）/ 建议**，可直接粘成 issue。
 > 版本基准：`cjh` 1.6.1（Windows x64 实测）。
+>
+> **状态（2026-11-01）**：第 1 条已修并推分支
+> `fix/declarative-tool-shell` → https://gitcode.com/qq8864/cjh/merge_requests/new?source_branch=fix/declarative-tool-shell
+> **第 2 条（REST 对话入口）经用户指出后撤回**：产品是桌面 GUI，页面永远在场，WS 通道够用；
+> 当初想加它其实是在给一个 WS bug 打补丁（见文末"排障进度"）。这条从"需求"降级为"可选的 headless 便利"。
 
 ---
 
@@ -85,8 +90,48 @@ Windows 上往 `PATH` 里塞目录是全局副作用，我们只能退化成"在
 
 | 缺口 | 我们的绕法 |
 |---|---|
-| 1 | 不依赖声明式技能工具；把工具用法写进工程 `AGENTS.md` 区块 + 技能正文，让模型走 bash 调 `lingqu-cli` |
-| 2 | 由界面（WebView）发任务书；后端只准备现场 + 盯落档（`t2h:autoport_*`） |
+| 1 | ✅ 已修（分支 `fix/declarative-tool-shell`） |
+| 5 | `AGENTS.md` 里写 `lingqu-cli` 的**绝对路径**（`t2h:autoport_start` 现算） |
 | 3 | 迁移前用 `t2h:cjh_settings_save {maxIterations: 40}` 临时抬全局值（**副作用已知，未还原**） |
 | 4 | 技能装完提示"新建一次会话"；`t2h:agent_context` 走 workspace 切换降低影响 |
-| 5 | `AGENTS.md` 里写 `lingqu-cli` 的**绝对路径**（`t2h:autoport_start` 现算） |
+
+---
+
+## 排障进度：`chat` 帧发出去 cjh 不干活（比上面几条更值得先查）
+
+**现象（灵渠 0.37.0，`LINGQU_UI_PROBE=ai` 三次实跑一致）**
+
+```
+wsSendFail   = 0            ← 发送本身没报错
+wsFrameTypes = "history_messages:1"   ← cjh 只回了这一帧，之后 70 秒静默
+frames = 1, toolCards = 0
+～/.cjh/sessions/<新会话>.json = 158 B（只有一条 system 消息，没有 user/assistant）
+```
+
+也就是说：页面通过既有的 `ws:send {text: JSON.stringify({type:'chat', message})}` 发了 4448 字的
+任务书（**发送成功**），cjh 回了一帧 `history_messages` 就再没动，会话文件里也没落我们那条消息。
+
+**已排除**
+
+- ❌ 通道不通：同一次会话里探针的短消息 `{type:'chat', message:'只回复两个字：收到'}` 正常得到
+  `frames=3 / lastFrameType=done / replyPreview=收到`。
+- ❌ 发送失败：`wsSendFail=0`、`wsLastSendErr=""`。
+- ❌ 我们多余地发 `new_session`：已去掉，现象不变。
+
+**剩下的两个变量（下一步一次跑完就能二分）**
+
+1. **消息长度**：失败的都是 4448 字任务书，成功的是 9 字短句。怀疑 WS 读侧有单帧上限，
+   超长帧被截断/丢弃（截断的 JSON 也不会有 error 帧，正好符合"静默"）。
+2. **`POST /api/workspaces/switch` 之后的状态**：失败路径都先切了 cjh 的 workspace
+   （chdir + 重置持久 bash 会话），成功路径没有。
+
+**建议的验证顺序**（都很便宜）
+
+- ② 先发短句 `ping` 再发长任务书：短句有 delta/done 而长文没有 → 就是长度问题；
+  两者都静默 → 是 workspace 切换后的会话状态问题。
+- 若是长度：请 cjh 在 WS 读侧对超限帧**显式回一个 `error` 帧**（现在是静默丢弃），
+  并给出上限值；灵渠侧则把任务书按段发送。
+- 若是切换：建议 `POST /api/workspaces/switch` 的响应里带上"会话是否需要重建"的字段，
+  或在切换后主动给所有连接推一帧 `session_reset`，让客户端知道要 `new_session`。
+
+

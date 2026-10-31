@@ -1268,6 +1268,10 @@ public class UiReportCommand <: CommandHandler {
         o.put("aiPortVerdict", JsonString(argStr(args, "aiPortVerdict", "")))
         o.put("aiPortDirective", JsonInt(argInt(args, "aiPortDirective", 0)))
         o.put("aiPortCli", JsonString(argStr(args, "aiPortCli", "")))
+        // WS 发送可观测（0.37.0）：发送失败数 / 最后一次失败原因 / 收到的帧类型计数
+        o.put("wsSendFail", JsonInt(argInt(args, "wsSendFail", 0)))
+        o.put("wsLastSendErr", JsonString(argStr(args, "wsLastSendErr", "")))
+        o.put("wsFrameTypes", JsonString(argStr(args, "wsFrameTypes", "")))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
@@ -3706,6 +3710,11 @@ public class AutoPortStartCommand <: CommandHandler {
         let safe = sanitizeFileName(name)
         let budget = argInt(args, "budget", AUTOPORT_MAX_ITERATIONS)
         let minutes = argInt(args, "minutes", AUTOPORT_MAX_MINUTES)
+        // scope：`all` = 一键迁移（全自动）；`port`/`deps`/`build`/… = 左侧各屏的「🤖 交给 AI」（半自动）
+        var scope = argStr(args, "scope", "all")
+        if (scope.size == 0) {
+            scope = "all"
+        }
 
         // ---- ① 准备现场：技能 / 工程 AGENTS.md + 工作区 / 工具路径 ----
         // 三件都是幂等的；缺哪件 agent 就"看不见工具"，所以每次开始前补一遍（不猜、不静默失败）
@@ -3765,6 +3774,7 @@ public class AutoPortStartCommand <: CommandHandler {
         inp.budget = budget
         inp.minutes = minutes
         inp.stateLines = stateLines
+        inp.scope = scope
         let directive = buildAutoPortDirective(inp)
 
         synchronized(gAutoPortLock) {
@@ -3777,6 +3787,8 @@ public class AutoPortStartCommand <: CommandHandler {
         res2.put("budget", JsonInt(budget))
         res2.put("minutes", JsonInt(minutes))
         res2.put("device", JsonBool(device))
+        res2.put("scope", JsonString(scope))
+        res2.put("scopeTitle", JsonString(autoPortScopeTitle(scope)))
         res2.put("cliPath", JsonString(cliPath))
         res2.put("directive", JsonString(directive))
         res2.put("directiveChars", JsonInt(Int64(directive.size)))

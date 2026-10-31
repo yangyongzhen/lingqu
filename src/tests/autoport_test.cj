@@ -171,3 +171,65 @@ public func testStatePushSigKeepsWindow(): Unit {
     st.stop()
     @Assert(st.active, false)
 }
+
+/* ---------- 半自动作用域（0.37.0：左侧各屏「🤖 交给 AI」与一键迁移共用一套引擎）---------- */
+
+@Test
+public func testScopeTitlesAndFullFlag(): Unit {
+    @Assert(autoPortScopeTitle("port"), "规则改造")
+    @Assert(autoPortScopeTitle("build"), "交叉编译")
+    @Assert(autoPortScopeTitle("all"), "全流程")
+    @Assert(autoPortScopeTitle(""), "全流程")
+    @Assert(isFullScope("all"), true)
+    @Assert(isFullScope(""), true)
+    @Assert(isFullScope("port"), false)
+}
+
+@Test
+public func testHalfAutoDirectiveScopesToOneStep(): Unit {
+    let inp = AutoPortInput()
+    inp.project = "habit-tree"
+    inp.projectDir = "E:/test/rust/habit-tree"
+    inp.cliPath = "C:/lingqu/lingqu-cli.exe"
+    inp.device = true
+    inp.scope = "port"
+    let d = buildAutoPortDirective(inp)
+    // 标题与范围都要点明"只做这一步"
+    @Assert(d.contains("半自动"), true)
+    @Assert(d.contains("规则改造"), true)
+    @Assert(d.contains("只做"), true)
+    // 收尾条件：读完落档 → 改代码 → 跑 build 验证 → 停下
+    @Assert(d.contains(".lingqu/scan/"), true)
+    @Assert(d.contains(".lingqu/deps/"), true)
+    @Assert(d.contains("build --path ."), true)
+    // 关键约束：做完就停，不许顺手做后面几步
+    @Assert(d.contains("做完就停"), true)
+    @Assert(d.contains("不要顺手把后面的步骤也做了"), true)
+    // 仍然是"执行者不是顾问"
+    @Assert(d.contains("执行者，不是顾问"), true)
+}
+
+@Test
+public func testFullAutoDirectiveHasNoHalfAutoClause(): Unit {
+    let inp = AutoPortInput()
+    inp.project = "x"
+    inp.projectDir = "E:/x"
+    inp.scope = "all"
+    let d = buildAutoPortDirective(inp)
+    @Assert(d.contains("全流程"), true)
+    // 全自动不该出现"做完就停"（那是半自动的约束，出现就说明两档混了）
+    @Assert(d.contains("做完就停"), false)
+}
+
+@Test
+public func testEveryScopeHasAGoal(): Unit {
+    // 每个 scope 都要有收尾条件，否则半自动任务书会缺一段（写漏了 AI 会自己发挥）
+    for (s in ["port", "deps", "build", "hap", "sign", "deploy", "verify"]) {
+        let g = autoPortScopeGoal(s)
+        @Assert(g.size > 20, true)
+        @Assert(g.contains("做完"), true)
+    }
+    // 未知 scope：空串（调用方据此退回全自动文案，不编一段假目标）
+    @Assert(autoPortScopeGoal("nope"), "")
+    @Assert(autoPortScopeGoal("all"), "")
+}

@@ -42,8 +42,89 @@ public class AutoPortInput {
     public var minutes: Int64 = AUTOPORT_MAX_MINUTES
     /** 当前落档一句话一行（"扫描分析｜通过｜R=24…"），让 AI 一上手就知道从哪继续 */
     public var stateLines: String = ""
+    /**
+     * 作用域：`all` = 一键迁移（全自动，一路干到 verify）；
+     * 其它 = 半自动（只干那一步，做完停下等人点下一步）——左侧各屏的「🤖 交给 AI」走这个。
+     */
+    public var scope: String = "all"
 
     public init() {}
+}
+
+/** 作用域的中文标题（界面按钮、任务书标题共用一份，别各写各的） */
+public func autoPortScopeTitle(scope: String): String {
+    if (scope == "port") {
+        return "规则改造"
+    }
+    if (scope == "deps") {
+        return "依赖评估"
+    }
+    if (scope == "build") {
+        return "交叉编译"
+    }
+    if (scope == "hap") {
+        return "HAP 装配"
+    }
+    if (scope == "sign") {
+        return "签名体检"
+    }
+    if (scope == "deploy") {
+        return "真机部署"
+    }
+    if (scope == "verify") {
+        return "真机验证"
+    }
+    return "全流程"
+}
+
+/** 是不是全自动（`all` 或缺省），界面据此显示"一路干到验证"还是"只干这一步" */
+public func isFullScope(scope: String): Bool {
+    return scope == "" || scope == "all"
+}
+
+/**
+ * 指定这一步的**收尾条件**（纯函数）。
+ *
+ * 半自动的关键：**做完就停**，不替人决定下一步——否则"只让它改改造"会变成它顺手把
+ * build/hap/deploy 都跑了，人反而失去了"逐步确认"的意义。
+ */
+public func autoPortScopeGoal(scope: String): String {
+    if (scope == "port") {
+        return "- 先读 `.lingqu/scan/<工程>.json` 与 `.lingqu/deps/<工程>.json`，弄清这工程要改什么；\n" +
+            "- 规则引擎能覆盖的先跑 `port --path . --apply`（幂等、留 .bak）；\n" +
+            "- 规则覆盖不到的（wry/tao 差异、平台条件代码、前端 ArkWeb 兼容层）**你改代码**；\n" +
+            "- 改完用 `build --path .` 验证编得过；\n" +
+            "- **做完停下**，报告：改了哪些文件、按哪条依据、哪些留给人决定。"
+    }
+    if (scope == "deps") {
+        return "- 读 `.lingqu/deps/<工程>.json`，把\"需 patch\"和\"不可用\"分开；\n" +
+            "- 能 patch 的直接写进 `Cargo.toml` 的 `[patch.*]`（钉精确版本）；\n" +
+            "- 不可用的给出替代 crate 或平台限制登记建议；\n" +
+            "- **做完停下**，逐条说明理由（人工决策点用 lingqu-decision 块）。"
+    }
+    if (scope == "build") {
+        return "- 跑 `build --path .`，读 JSONL 诊断与 stderr；\n" +
+            "- 改代码/改依赖/改工具链，重跑，直到 `exitCode=0` 且 `gates.passed`；\n" +
+            "- 同一错误最多试 2 种修法；\n" +
+            "- **做完停下**，报告最终 exit 与改动清单。"
+    }
+    if (scope == "hap") {
+        return "- 跑 `hap --path .`，读 `entries`（arm64 库、rawfile 死资源）与 `gates.failures`；\n" +
+            "- 修装配问题（白名单、资源、`lib<模块名>.so`）；\n" +
+            "- **做完停下**，报告 HAP 大小与闸结果。"
+    }
+    if (scope == "sign") {
+        return "- 跑 `sign --path .` 体检，读 `mode`（debug/release）与 UDID 绑定情况；\n" +
+            "- 需要写回 signingConfigs 时先说明理由再 `--apply`（会备份原文件）；\n" +
+            "- **别把 release 态装不上真机当成 bug 去修**；\n" +
+            "- **做完停下**，给出上架前还差什么。"
+    }
+    if (scope == "deploy" || scope == "verify") {
+        return "- 只有真机在线才做；先看 `sign` 落档的签名态；\n" +
+            "- 跑那一步，把 hdc 原文关键行贴出来；\n" +
+            "- **做完停下**，报告装/启/hilog 或功能清单结果。"
+    }
+    return ""
 }
 
 /**
@@ -57,7 +138,14 @@ public class AutoPortInput {
 public func buildAutoPortDirective(inp: AutoPortInput): String {
     let budget = if (inp.budget > 0) { inp.budget } else { AUTOPORT_MAX_ITERATIONS }
     let minutes = if (inp.minutes > 0) { inp.minutes } else { AUTOPORT_MAX_MINUTES }
-    var d = "【灵渠 · AI 自动迁移任务书】\n\n"
+    let full = isFullScope(inp.scope)
+    let title = autoPortScopeTitle(inp.scope)
+    var d = "【灵渠 · AI 自动迁移任务书】"
+    if (full) {
+        d += "（全流程）\n\n"
+    } else {
+        d += "（半自动：只做「${title}」这一步）\n\n"
+    }
     d += "工程：`${inp.project}`　目录：`${inp.projectDir}`（你的工作目录就是这里）\n\n"
     d += "**你是这次迁移的执行者，不是顾问。** 自己读落档、自己改代码、自己重跑工具，"
     d += "直到落档证明迁完；不要输出\"建议你执行…\"然后停下等人。\n"
@@ -93,6 +181,12 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
 
     if (inp.stateLines.size > 0) {
         d += "## 当前落档（灵渠刚读的，别重复造）\n```text\n${inp.stateLines}\n```\n\n"
+    }
+    if (!full) {
+        // 半自动：把范围与收尾条件写清楚——做完就停，不替人决定下一步
+        d += "## 本次范围：**只做「${title}」这一步**\n"
+        d += autoPortScopeGoal(inp.scope) + "\n"
+        d += "**做完就停**：不要顺手把后面的步骤也做了，下一步由人点。\n\n"
     }
     d += "## 真机：" + (if (inp.device) { "在线 —— `deploy` / `verify` 要跑，装不上先看签名态\n" }
         else { "**不在线** —— 跳过 deploy/verify（落档会是\"未跑\"，如实报告即可，别当成失败）\n" }) + "\n"
