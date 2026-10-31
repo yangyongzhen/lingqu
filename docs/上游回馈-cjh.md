@@ -171,4 +171,45 @@ frames = 1, toolCards = 0
 - 若是切换：建议 `POST /api/workspaces/switch` 的响应里带上"会话是否需要重建"的字段，
   或在切换后主动给所有连接推一帧 `session_reset`，让客户端知道要 `new_session`。
 
+---
+
+## 排障进度：bash 会话 `tool_done` 永不返回（已修，MR !11）
+
+**现象（灵渠 0.39.5，`m3u8dl-tauri` 全自动迁移）**：agent 跑
+
+```
+cd /e/test/rust/m3u8dl-tauri && export OHOS_NDK_HOME="…" && "…/main.exe" build --path . 2>&1 | tail -50
+```
+
+带 `timeout=1800`。命令 **27 秒就跑完**（`.lingqu/build/m3u8dl-tauri.json` 已写入 6724 B、
+进程表里 `lingqu-cli` 已退出），但 **`tool_done` 永远不来**，回合挂死；trace 最后一条是 `tool_start`。
+
+**归因过程（第一版结论是错的，留档以警后人）**：一开始认定「`| tail` 把结束标记吞了」，
+并据此改成"含 `|`/`>` 就改走非会话路径"——**问题没解决，还白丢了持久会话的 cwd/env**。
+四个 bash 探针推翻了它（详见 cjh `docs/开发文档与踩坑记录.md` §3.57）：
+
+| 探针（Git Bash 实测） | 结果 |
+|---|---|
+| `{ printf 'a\nb\nc\n' \| tail -2; } 2>&1; echo CODE; echo MARKER` | MARKER 正常到（echo 在管道**外面**，吞不掉） |
+| `{ bash -c 'sleep 6 & echo hi' \| tail -1; }` | **6 秒**才返回（右端等 stdin EOF，左端残留后代握着写端） |
+| 同上换 `> /tmp/out` 重定向 | **0 秒**返回（重定向不卡） |
+| `{ exec 1>/dev/null; echo hi; } 2>&1; echo CODE; echo MARKER` | 只剩 `hi`（命令把 fd1 **永久改道**，这才是"标记被吞"的真形态） |
+
+**cjh 侧已修**（分支 `fix/piped-cmd-nonsession` → MR
+[!11](https://gitcode.com/qq8864/cjh/merge_requests/11)，本地提交 `e7a3134`）：
+
+1. 结束标记与退出码写**独立 fd 3**（`exec 3>&1; { cmd; } 2>&1; echo CODE 1>&3; echo marker 1>&3; exec 1>&3`），
+   命令怎么折腾 fd1 都不影响结束信号；命令后复位 fd1。回归用例 `BashMarkerFdTest`（旧包装必卡到超时）。
+2. 回退「含 `|`/`>` 就分流」，只保留 heredoc 分流（`<<` 会破坏包装终止符）。
+3. 超时**先抓进程快照再杀会话**（`ps -ef` 裁剪后塞进 ToolResult）——快照会随 `tool_done`
+   进灵渠的 `.lingqu/agent/trace.jsonl`，下次不必靠推理猜"谁握着管道"。
+4. PowerShell 非会话分支不再静默丢命令（原实现算了 base64 却没拼进命令）。
+
+**灵渠侧要跟着守的一条纪律**：`| tail` 那一族（右端等 EOF）cjh 治不了，只能靠**给 agent 的口径**——
+长命令写 `<cmd> > build.log 2>&1`（立即返回）再 `read_file` 看日志，别用 `| tail`。
+cjh 已在工具描述与超时提示里写明；灵渠的任务书/技能里也**不要出现 `| tail` 示范**
+（本轮复查：`src/`、`assets/`、`skills/` 均无此写法，保持）。
+
+
+
 
