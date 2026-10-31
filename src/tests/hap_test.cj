@@ -112,22 +112,75 @@ public func testScanHapEntriesEdgeCases(): Unit {
 
 @Test
 public func testHapGate(): Unit {
-    // 干净：装配成功 + 有 module.json + 有 arm64 .so + 无 rawfile
-    @Assert(checkHapGate(true, true, true, 0).passed, true)
+    // 干净：装配成功 + 有 module.json + 有 arm64 .so + 无 rawfile + 期望的 .so 在包里
+    @Assert(checkHapGate(true, true, true, 0, "libgrove_lib.so", true).passed, true)
     // 装配失败
-    let notBuilt = checkHapGate(false, false, false, 0)
+    let notBuilt = checkHapGate(false, false, false, 0, "libgrove_lib.so", false)
     @Assert(notBuilt.passed, false)
     @Assert(notBuilt.failures[0].contains("assembleHap"), true)
     // 缺 module.json
-    let noJson = checkHapGate(true, false, true, 0)
+    let noJson = checkHapGate(true, false, true, 0, "libgrove_lib.so", true)
     @Assert(noJson.passed, false)
     @Assert(noJson.failures[0].contains("module.json"), true)
     // 缺 arm64 .so
-    let noSo = checkHapGate(true, true, false, 0)
+    let noSo = checkHapGate(true, true, false, 0, "libgrove_lib.so", false)
     @Assert(noSo.passed, false)
     @Assert(noSo.failures[0].contains("libs/arm64-v8a"), true)
     // 有 rawfile 死资源
-    let dead = checkHapGate(true, true, true, 3)
+    let dead = checkHapGate(true, true, true, 3, "libgrove_lib.so", true)
     @Assert(dead.passed, false)
     @Assert(dead.failures[0].contains("死资源"), true)
+    // ★ 2026-10-31 真机白屏的复现用例：HAP 里有 arm64 .so，但只有模板的 libentry.so，
+    //   **应用自己的 libgrove_lib.so 没打进去** → 必须报失败（以前这条会放过）
+    let wrongSo = checkHapGate(true, true, true, 0, "libgrove_lib.so", false)
+    @Assert(wrongSo.passed, false)
+    @Assert(wrongSo.failures[0].contains("libgrove_lib.so"), true)
+    // 拿不到 moduleName 时（expectedSo 为空）不硬要求，只保留其它判定
+    @Assert(checkHapGate(true, true, true, 0, "", false).passed, true)
 }
+
+/* ---------- 应用自己的 .so：从 EntryAbility 推导 + 在 HAP 条目里核对 ---------- */
+
+const ENTRY_ABILITY_ETS = """
+import { RustAbility } from '@ohos-rs/ability'
+
+export default class EntryAbility extends RustAbility {
+  // change to dynamic library name
+  public moduleName: string = "grove_lib"
+  public defaultPage: boolean = true;
+  public mode: 'xcomponent' | 'webview' = 'webview'
+}
+"""
+
+@Test
+public func testEntryModuleNameAndSoName(): Unit {
+    // 从真实的 EntryAbility.ets 形状里取 moduleName
+    @Assert(entryModuleNameOf(ENTRY_ABILITY_ETS), "grove_lib")
+    // 单引号 / 带 lib 与 .so 的写法都容错
+    @Assert(entryModuleNameOf("public moduleName: string = 'demo_app'"), "demo_app")
+    @Assert(expectedSoNameOf("grove_lib"), "libgrove_lib.so")
+    @Assert(expectedSoNameOf("libgrove_lib.so"), "libgrove_lib.so")
+    @Assert(expectedSoNameOf(""), "")
+    // 没有 moduleName 的文本 → 空（不要瞎猜）
+    @Assert(entryModuleNameOf("export default class X {}"), "")
+    @Assert(expectedSoNameOf(entryModuleNameOf("no module here")), "")
+}
+
+@Test
+public func testHapHasExpectedSo(): Unit {
+    // 真实形状：模板 stub + 应用 .so
+    let entries = scanHapEntries(zipish([
+        "libs/arm64-v8a/libentry.so",
+        "libs/arm64-v8a/libc++_shared.so",
+        "libs/arm64-v8a/libgrove_lib.so",
+        "module.json"
+    ]))
+    @Assert(hapHasSo(entries, "libgrove_lib.so"), true)
+    @Assert(hapHasSo(entries, "LIBGROVE_LIB.SO"), true)      // 大小写不敏感
+    @Assert(hapHasSo(entries, "libother.so"), false)
+    // 白屏那次的真实情况：只有模板 stub → 找不到应用的 .so
+    let onlyStub = scanHapEntries(zipish(["libs/arm64-v8a/libentry.so", "module.json"]))
+    @Assert(hapHasSo(onlyStub, "libgrove_lib.so"), false)
+    @Assert(hapHasSo(onlyStub, ""), false)
+}
+

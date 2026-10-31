@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.19.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.20.0**（2026-10-31），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -158,6 +158,10 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 42 | `build-profile.json5` 里的 Windows 路径取出来带双反斜杠（`D:\\oh\\...`），`exists()` 永远 false → 误判"签名材料不存在" | JSON/JSON5 字符串里的 `\\` 是**转义**，取值时必须还原（`unescapeJson5`）。而且 json5 允许注释/尾逗号/单引号/无引号键，**严格 JSON 解析器读不了**，按需做轻量"键 → 值"提取即可 |
 | 43 | 往 json5 里注入数组时产出 `]]`（多一个闭合括号 → 文件语法错误） | 文本手术要**理清边界归属**：新 body 自带收尾 `]` 时，原文从原 `]` 的**下一个字符**接（`bytes[(close+1)..]`），从 `close` 接就重复。写完**必须断言括号配平**（`bracketBalance()`）——只测"能解析回来"不够，宽容提取器对 `]]` 照样读得出值 |
 | 44 | 判"两个工程是否同一套签名材料"时拿 `.p7b` 去比 `signingConfigs.storeFile`（那是 `.p12`）→ 永不匹配 | 材料身份按**同 base 不同后缀**判：先 `materialSiblingsOf(p7b)` 换成 `.p12` 再比文件名（`sameMaterialFile` 只比文件名、忽略大小写）。同理**改完配置文件后所有派生值都要按新内容重算**（文件是否存在 / profile 类型 / 含不含 UDID），否则会出现"写回成功却报材料不存在" |
+| 45 | 真机装上了、也启动了，但**界面全白**（`aa dump` 有 `#FOREGROUND`/`#ACTIVE`，hilog 里却没有任何 ArkWeb 活动） | 先查 HAP 里**有没有应用自己的 `.so`**：`EntryAbility.moduleName` 决定 `import("lib<name>.so")`，而 DevEco 模板自带的 `libentry.so`（几 KB 的 `add` 示例桩）让"有 arm64 .so"这种弱判据假通过。`lib<name>.so` 来自 `cargo build --target aarch64-unknown-linux-ohos`，**必须拷进 `gen/ohos/entry/libs/arm64-v8a/`**——hvigorfile 里的 cargo 钩子在 Windows 上已被移除，没人替你拷（`t2h:hap` 0.20.0 起自动做） |
+| 46 | 装配闸只判"有没有 `libs/arm64-v8a/*.so`"→ 白屏 HAP 照样 pass | 存在性校验要**点名**：期望 `<moduleName>` → `lib<name>.so`（`entryModuleNameOf` + `expectedSoNameOf` + `hapHasSo`）。别的闸也别用"至少有一个"这种弱判据 |
+| 47 | 修完 §4-45 仍白屏，但页面 `OnPageEnd httpStatusCode:200` | 比对 `.so` 与 `dist/` 的**时间戳与内嵌资源键**：tauri 把前端编进 `.so`（`index-XXXX.css/js` 明文可见），`dist/` 重建后 `.so` 没重编就是旧前端。`t2h:build` 的 verify 模式（前端指纹闸）会直接报 stale；修法是重编 `.so` 再装配（增量 30 s 级） |
+| 48 | 拿截图证明"界面出来了"，其实拍的是桌面 | `snapshot_display` 拍**整屏**，应用窗口可能被桌面/其它窗口盖住。核对三件事：`uitest dumpLayout` 的前台 bundleName、`hidumper -s WindowManagerService -a '-a'` 里的窗口 bounds、以及与"不启动应用"截图的**逐点差异**（0% 说明拍的是桌面）。**没有视觉时不要拿"进程在跑/日志正常"代替"界面正常"** |
 
 ---
 

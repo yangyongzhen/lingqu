@@ -1557,6 +1557,55 @@ public class HapCommand <: CommandHandler {
             }
         }
 
+        // ---- 装配前：把 cargo 交叉编译出来的 .so 拷进 entry/libs/arm64-v8a ----
+        //
+        // 这一步是 2026-10-31 真机白屏的根因：HAP 里只有 DevEco 模板自带的 libentry.so，
+        // 应用自己的 lib<moduleName>.so 从来没被打进去（样本仓把它写成手工 `cp`，
+        // 而 hvigorfile 里的 cargo 钩子在 Windows 上早被移除了）。
+        // 症状不是"装不上"，而是**装得上、起得来、界面全白**——所以装配链必须自己补这一步。
+        var soCopied = ""
+        var soSource = ""
+        var expectedSo = ""
+        var soNote = ""
+        if (errMsg == "") {
+            // 期望的 .so 名取自 EntryAbility 的 moduleName（真机加载的就是它）
+            let entryAbility = "${ohosDir}/entry/src/main/ets/entryability/EntryAbility.ets"
+            var moduleName = ""
+            if (exists(Path(entryAbility))) {
+                try {
+                    moduleName = entryModuleNameOf(String.fromUtf8(File.readFrom(entryAbility)))
+                } catch (e: Exception) {
+                    let _ = e
+                }
+            }
+            expectedSo = expectedSoNameOf(moduleName)
+            if (expectedSo != "") {
+                let relSo = "${srcDir}/target/aarch64-unknown-linux-ohos/release/${expectedSo}"
+                soSource = hostPath(relSo)
+                if (!exists(Path(soSource))) {
+                    errMsg = "找不到交叉编译产物 ${soSource} —— 先点「交叉编译（OHOS）」（t2h:build）再装配"
+                } else {
+                    let soDir = hostPath("${ohosDir}/entry/libs/arm64-v8a")
+                    try {
+                        if (!exists(Path(soDir))) {
+                            Directory.create(Path(soDir), recursive: true)
+                        }
+                        let dst = "${soDir}/${expectedSo}"
+                        // std.fs 的拷贝是具名参数版本：copy(from, to: ..., overwrite: ...)
+                        copy(soSource, to: dst, overwrite: true)
+                        soCopied = dst
+                        soNote = "${expectedSo} → entry/libs/arm64-v8a"
+                        phaseLog += "[copy-so] ${soSource} → ${dst}\n"
+                    } catch (e: Exception) {
+                        errMsg = "拷贝 .so 失败：${e}"
+                    }
+                }
+            } else {
+                soNote = "EntryAbility.ets 里没找到 moduleName，跳过 .so 装配（闸门也不会硬要求）"
+                phaseLog += "[copy-so] ${soNote}\n"
+            }
+        }
+
         // ---- hvigor assembleHap ----
         var hvigorText = ""
         if (errMsg == "") {
@@ -1597,7 +1646,8 @@ public class HapCommand <: CommandHandler {
         }
 
         let gateReports = ArrayList<GateReport>()
-        gateReports.add(checkHapGate(hv.built, entries.hasModuleJson, entries.hasArm64So, entries.rawfileCount))
+        gateReports.add(checkHapGate(hv.built, entries.hasModuleJson, entries.hasArm64So, entries.rawfileCount,
+            expectedSo, hapHasSo(entries, expectedSo)))
         let gates = mergeGates(gateReports)
 
         var outError = ""
@@ -1627,6 +1677,10 @@ public class HapCommand <: CommandHandler {
             root.put("entries", entries.toJson())
             root.put("gates", gates.toJson())
             root.put("installedDeps", JsonBool(installedDeps))
+            root.put("expectedSo", JsonString(expectedSo))
+            root.put("soCopied", JsonString(soCopied))
+            root.put("soSource", JsonString(soSource))
+            root.put("soNote", JsonString(soNote))
             File.writeTo(outJson, root.toJsonString().toArray())
         } catch (e: Exception) {
             outError = "落档失败：${e}"
@@ -1643,6 +1697,10 @@ public class HapCommand <: CommandHandler {
         res.put("entries", entries.toJson())
         res.put("gates", gates.toJson())
         res.put("installedDeps", JsonBool(installedDeps))
+        res.put("expectedSo", JsonString(expectedSo))
+        res.put("soCopied", JsonString(soCopied))
+        res.put("soSource", JsonString(soSource))
+        res.put("soNote", JsonString(soNote))
         res.put("outJson", JsonString(outJson))
         res.put("outLog", JsonString(outLog))
         var em = errMsg
@@ -1657,7 +1715,7 @@ public class HapCommand <: CommandHandler {
         }
         res.put("error", JsonString(em))
         eprintln("[lingqu][hap] ${safeName} built=${hv.built} errors=${hv.errorCount} " +
-            "rawfile=${entries.rawfileCount} gates=${gates.passed}")
+            "rawfile=${entries.rawfileCount} so=${expectedSo} gates=${gates.passed}")
         return res
     }
 }

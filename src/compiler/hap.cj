@@ -18,8 +18,93 @@ import stdx.encoding.json.*
  *   · 真机 HAP 里**没有 rawfile 目录**（前端被编进 .so），所以 rawfile 出现即为死资源
  */
 
-/** hvigor 输出解析结果 */
-public class HvigorResult {
+/**
+ * 从 `EntryAbility.ets` 文本里取 `public moduleName: string = "grove_lib"` 的值。
+ *
+ * 为什么要它：HAP 里必须出现 **`lib<moduleName>.so`** 才是"应用代码打进去了"。
+ * 只看"有没有 arm64 的 .so"会被 DevEco 模板自带的 `libentry.so`（几 KB 的 `add` 示例桩）
+ * 骗过去——2026-10-31 真机实测就是这么放过一个白屏 HAP 的。
+ */
+public func entryModuleNameOf(etsText: String): String {
+    let key = "moduleName"
+    let kb = key.toArray()
+    let bytes = etsText.toArray()
+    var from: Int64 = 0
+    while (from + kb.size <= bytes.size) {
+        // 手动找 key（String.indexOf 带起点参数在不同版本上不一致，别赌）
+        var hit = true
+        for (k in 0..kb.size) {
+            if (bytes[from + k] != kb[k]) {
+                hit = false
+                break
+            }
+        }
+        if (!hit) {
+            from++
+            continue
+        }
+        var i = from + kb.size
+        while (i < bytes.size && bytes[i] != 61 && bytes[i] != 10 && bytes[i] != 59) {
+            i++
+        }
+        if (i < bytes.size && bytes[i] == 61) {
+            i++
+            while (i < bytes.size && bytes[i] != 34 && bytes[i] != 39 && bytes[i] != 10 && bytes[i] != 59) {
+                i++
+            }
+            if (i < bytes.size && (bytes[i] == 34 || bytes[i] == 39)) {
+                let q = bytes[i]
+                i++
+                let begin = i
+                while (i < bytes.size && bytes[i] != q) {
+                    i++
+                }
+                if (i < bytes.size) {
+                    let v = String.fromUtf8(bytes[begin..i]).trimAscii()
+                    if (v != "") {
+                        return v
+                    }
+                }
+            }
+        }
+        from++
+    }
+    return ""
+}
+
+/** 期望的 .so 文件名：moduleName → `lib<name>.so`（`moduleName` 为空时返回 ""） */
+public func expectedSoNameOf(moduleName: String): String {
+    let m = moduleName.trimAscii()
+    if (m == "") {
+        return ""
+    }
+    // 有人会把 lib/.so 一起写进来，容错处理
+    var base = m
+    if (base.startsWith("lib")) {
+        base = base[3..]
+    }
+    if (base.endsWith(".so")) {
+        base = base[0..(base.size - 3)]
+    }
+    return "lib${base}.so"
+}
+
+/** HAP 里是否包含指定名字的 .so（`libs/arm64-v8a/<name>`，忽略大小写） */
+public func hapHasSo(entries: HapEntries, soName: String): Bool {
+    if (soName == "") {
+        return false
+    }
+    let want = lowerAsciiOf(soName)
+    for (n in entries.arm64Sos) {
+        // 条目名形如 libs/arm64-v8a/libgrove_lib.so，比末段
+        if (lowerAsciiOf(fileNameOf(n)) == want) {
+            return true
+        }
+    }
+    return false
+}
+
+/** hvigor 输出解析结果 */public class HvigorResult {
     public var built: Bool = false
     public var errorCount: Int64 = 0
     public var firstError: String = ""

@@ -5,6 +5,55 @@
 
 ---
 
+## [0.20.0] - 2026-10-31
+
+**主题**：**修真机白屏的两个真缺陷**（T5-3/T5-5 的漏检）—— 用户报"habit-tree 在真机上跑起来但看不到界面"，
+查下去发现是**装配链漏了两步**，而且 0.17.0 的"真机验证成功"结论**过宽**（装了、启动了，但界面是白的）。
+
+### Fixed
+
+- **`t2h:hap` 不把应用自己的 `.so` 打进 HAP**（白屏根因①）。HAP 里只有 DevEco 模板自带的
+  `libentry.so`（6 KB 的 `add` 示例桩）与 `libc++_shared.so`，`libgrove_lib.so`（5.7 MB）**从未进入产物**。
+  样本仓把这步写成手工 `cp target/aarch64-unknown-linux-ohos/release/libgrove_lib.so
+  gen/ohos/entry/libs/arm64-v8a/`，而 `entry/hvigorfile.ts` 里的 cargo 钩子早被移除（Windows 拉不起），
+  所以链路上没人做这件事 → `EntryAbility.moduleName="grove_lib"` 的 `import("libgrove_lib.so")` 失败 →
+  ArkTS 页面空 Column → **白屏**。
+  现在 `t2h:hap` 装配前自动：读 `EntryAbility.ets` 的 `moduleName` → 定位
+  `<src-tauri>/target/aarch64-unknown-linux-ohos/release/lib<name>.so` → 拷进 `entry/libs/arm64-v8a/`
+  （产物缺失时直接报"先跑交叉编译"），并在返回值/落档里带 `expectedSo` / `soCopied` / `soSource`
+- **HAP 闸放过了"没有应用 .so"的包**（白屏根因②的漏检面）。旧闸只判"有没有 `libs/arm64-v8a/*.so`"，
+  被模板的 `libentry.so` 骗过。`checkHapGate` 增加 `expectedSoName` + `hasExpectedSo`：
+  **必须存在 `lib<moduleName>.so`**，否则失败并指向"先交叉编译"
+- **`.so` 里嵌的是旧前端**：修完白屏①后仍然白屏，因为 `libgrove_lib.so` 的时间戳（22:24）
+  早于 `dist/`（22:52）——`.so` 里嵌着旧的 `index-BbUz51cz.css / index-CNGJtM_T.js`，
+  而 `dist/` 是 `index-CBRNBEtE.css / index-Cn-J9RFq.js`。重编 `.so`（增量 33 s）后界面出来。
+  **这正是 T5-2 前端指纹闸存在的理由**（`t2h:build` 的 verify 模式会报 stale），本轮把它跑在了真机链路上
+
+### Added
+
+- `src/compiler/hap.cj`：`entryModuleNameOf`（从 `EntryAbility.ets` 取 `moduleName`）、
+  `expectedSoNameOf`（→ `lib<name>.so`，容错 `lib`/`.so` 写法）、`hapHasSo`（在 HAP 条目里按末段比名，忽略大小写）
+- **4 例新单测**（总 **138**）：闸门新参数、`moduleName` 抽取（单/双引号、无则返回空）、
+  `.so` 名字推导、"只有模板 stub 必须失败"的白屏复现用例
+
+### 证据（真机 HAD-W32 / HarmonyOS 7.0.0.111 / API 26，2026-10-31）
+
+| 步骤 | 结果 |
+|---|---|
+| 修前 HAP 条目 | `libs/arm64-v8a/{libc++_shared.so, libentry.so}`（1.47 MB）——**没有 libgrove_lib.so** |
+| 修前 hilog | ArkTS 起窗口后再无 NAPI/webview 日志；截图中央区 **97.8% 纯白、仅 70 色** |
+| 拷 `.so` + 重装 | HAP 7.25 MB，条目含 `libs/arm64-v8a/libgrove_lib.so`；hilog 出现 `cef` / `chromium` / `gpu` 进程与 `[WebNavigation]` |
+| 页面加载 | `LoadUrlWithHeaders url:tauri://loc…` → `OnPageEnd httpStatusCode:200` → `DOMContentLoaded` → `PageLoadFinished` |
+| 仍白屏 | 截图 350 KB、中央区 97.8% 纯白 → 定位到 `.so` 嵌旧前端（见上） |
+| 重编 `.so` 后 | 截图 173 KB、中央区 **574 色**、主色 `12,15,24`（36.6%）；ArkWeb `gpu`+2×`render` 子进程在跑，无 faultlog |
+
+**未验证（如实）**：本轮抓屏与"仅桌面"截图逐点相同（11310 采样差 1），
+窗口管理器里确实有 `habit_tree0`（bounds `[515,281]-[2605,1675]`），
+但**界面是否真的呈现给人眼，需要人看一眼确认**——我无视觉能力，不能把"进程/日志正常"说成"界面正常"。
+0.17.0 的"真机首验通过"结论按本条收窄：**链路（装/启/签名）成立，界面呈现当时并不成立**。
+
+---
+
 ## [0.19.0] - 2026-11-01
 
 **主题**：**签名配置自动写回**（`t2h:sign` 的 apply 模式）—— 把"体检工具"变成"省事工具"。

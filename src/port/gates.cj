@@ -230,7 +230,8 @@ public func checkAssetFingerprintGate(staleCount: Int64, missingCount: Int64, em
 //   必须含 `module.json`（HAP 清单）与 `libs/arm64-v8a/*.so`（原生库）；
 //   **不应含 `rawfile/`** —— ArkWeb 下前端被编进 .so，rawfile 里的副本是死资源
 //   （要么永远读不到，要么白白撑大包体）。
-public func checkHapGate(built: Bool, hasModuleJson: Bool, hasArm64So: Bool, rawfileCount: Int64): GateReport {
+public func checkHapGate(built: Bool, hasModuleJson: Bool, hasArm64So: Bool, rawfileCount: Int64,
+    expectedSoName: String, hasExpectedSo: Bool): GateReport {
     let rep = GateReport()
     if (!built) {
         rep.fail("HAP 闸：assembleHap 没成功（看 hvigor 输出与 .lingqu/hap/<工程>.log）")
@@ -240,6 +241,12 @@ public func checkHapGate(built: Bool, hasModuleJson: Bool, hasArm64So: Bool, raw
     }
     if (built && !hasArm64So) {
         rep.fail("HAP 闸：产物里没有 libs/arm64-v8a/*.so——原生库没打进去")
+    }
+    // 关键：**只数 .so 数量不够**。DevEco 模板自带 libentry.so（几 KB 的 add 示例桩），
+    // 会让"有 arm64 .so"这条假通过；真正决定界面能不能出来的是应用自己的
+    // `lib<EntryAbility.moduleName>.so`（2026-10-31 真机白屏就是这么漏的）
+    if (built && expectedSoName != "" && !hasExpectedSo) {
+        rep.fail("HAP 闸：产物里没有 ${expectedSoName}——应用代码没打进 HAP（先跑「交叉编译」拿到 .so，装配会自动拷进 entry/libs/arm64-v8a）")
     }
     if (rawfileCount > 0) {
         rep.fail("HAP 闸：发现 ${rawfileCount} 个 rawfile/ 条目——前端已在 .so 里，这些是死资源（应清掉）")
