@@ -5,6 +5,46 @@
 
 ---
 
+## [0.39.12] - 2026-11-02
+
+**主题**：自动签名「路线 A」（AGC 云生成）开工，第一批落地的是**纯函数地层**：
+材料命名规则、口令密文的载荷布局、hex 编解码。都可在本机自证，不联网、不碰云端资产。
+
+### 本轮确证的三个事实
+
+1. **材料命名规则与本机磁盘逐字一致**（这是"复用 DevEco 已有材料"的地基）：
+   `~/.ohos/config/{safeProduct}_{工程目录名}_{base64url(sha256(前向斜杠工程路径)) 去 padding}=.{p12|csr|cer|p7b}`
+   - 实测：`sha256("E:/test/rust/habit-tree/src-tauri/gen/ohos")` → `m7Gxh5QRtg0h6LnDjtArCp3iYObE9iWm8BEssdAfmHM`，
+     与磁盘上的 `default_ohos_m7Gxh5QR….p7b` 完全一致；换成反斜杠路径算出 `EuNnZ1gj…`（反例）→ 印证"hash 必须用前向斜杠"。
+   - 文件名里 hash 与后缀之间那个 **`=` 是字面分隔符**，不是 base64 填充。
+2. **AesGcmKit 载荷布局已钉住**：`[len(4B 大端)=|ct|+16 | IV(12) | ct | tag(16)]` → 小写 hex；
+   `material/{ac,ce,fd/0..2}` 各恰好 1 个文件；固定分量 `31 f3 09 73 d6 af 5b b8 d3 be b1 58 65 83 c0 77`；
+   `rootKey = PBKDF2-HMAC-SHA256(utf8(有损解码(XOR(fd0,fd1,fd2,固定分量))), salt, 10000, 16)`。
+3. **仓颉侧缺 AES-GCM 原语**（重要，影响方案）：
+   - `stdx.crypto.crypto` 只暴露 `OperationMode` / `PaddingMode` / `SecureRandom` / **SM4**（`GCM` 只是 SM4 的模式之一）；
+   - 标准库 `std.crypto.cipher` 只有 `BlockCipher` **接口**（`encrypt`/`decrypt`），没有 AES 实现；
+   - `stdx.crypto.digest` 的 `HMAC` 可用（`HMAC(key) { => SHA256() }` 编译通过），故 PBKDF2 可自写；
+   - `stdx.net.http` 有 `ServerBuilder` / `HttpServer` / `TcpServer` → OAuth loopback 回调服务可行。
+   → 两条可选路：**(a)** 自实现 AES-128 + GCM（约 300 行，可用 .NET `AesGcm` 生成权威测试向量对拍）；
+   **(b)** 复用本机已有一套 p12/cer（连口令密文一起搬），只向 AGC 申请**新包名的 profile** —— 这样完全不碰 AES，更快通到 `signed=true`。
+
+### Added
+
+- `src/compiler/sign.cj`「材料生产」一节（纯函数，全部单测覆盖）：
+  - `b64UrlNoPad()`（自带 base64url 编码；仓库原本只有解码）
+  - `forwardSlashPath()` / `projectPathHash()` / `sanitizeSignName()` /
+    `signingFileBaseName()` / `signingMaterialFileName()`
+  - `toHexLower()` / `fromHexLower()` / `packGcmPayload()` / `unpackGcmPayload()`
+  - 常量：`AES_GCM_IV_LEN` / `AES_GCM_TAG_LEN` / `AES_GCM_KEY_LEN` / `PBKDF2_ITERATIONS` / `SIGN_NAME_MAX_LEN`
+- 6 例新单测（命名 hash 与磁盘一致 / 反斜杠反例 / 文件名那个 `=` / sanitize 边界 / hex 往返 / 载荷布局与异常长度），
+  合计 **296 例**。
+- 文件头注释同步纠正：口令不再只能"从别处搬"，`material/` 本机就有（见路线 A）。
+
+### 说明（未验证的部分）
+
+路线 A 的**联网部分**（OAuth 登录、团队、设备注册、证书、profile 申请与下载）本轮**一行未写**，
+因此"自动签名打通 m3u8dl-tauri"尚未发生；本轮只有离线地层与事实核对。
+`docs/鸿蒙自动签名机制.md` 已有的端点/流程与本轮实现一致，无需改口径。
 ## [0.39.11] - 2026-11-01
 
 **主题**：把「签名不对」从**分钟级的白等**变成**秒级的说清**，并修掉一个让落档整块消失的建目录缺陷。

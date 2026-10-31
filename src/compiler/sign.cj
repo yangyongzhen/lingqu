@@ -1,7 +1,9 @@
 package lingqu.compiler
 
 import std.collection.*
+import std.crypto.digest.*
 import std.fs.*
+import stdx.crypto.digest.*
 import stdx.encoding.json.*
 
 /*
@@ -14,10 +16,14 @@ import stdx.encoding.json.*
  *      （字段：type / bundle-info.bundle-name / debug-info.device-ids）；直接按字节取 JSON 解析即可，
  *      不需要解 ASN.1（也不必像 flutter 那套一样写 DER 解析器）；
  *   ② 本机 UDID 用 `hdc shell bm get --udid` 取；
- *   ③ 两边对上 → 只要工程的 build-profile.json5 里有指向这套材料的 signingConfigs（含 DevEco
- *      加密口令，**我们无法自行合成**，只能从工程/历史/DevEco 自动签名处带过来），就能直装。
+ *   ③ 两边对上 → 只要工程的 build-profile.json5 里有指向这套材料的 signingConfigs，就能直装。
  *
- * 所以本模块做的是「**体检 + 判断 + 给出可执行下一步**」，而不是伪造签名材料。
+ * **0.39.12 起多了一件事**：口令不再只能"从别处搬"——`material/` 目录里的密钥材料本机就有，
+ * 我们能按 AesGcmKit 的算法**自己加密**（见本文件末「材料生产（路线 A）」一节与
+ * `docs/鸿蒙自动签名机制.md` §3.7b）。所以这套文件现在负责两半：
+ *   · 体检与判断（离线，零网络）
+ *   · 材料命名与口令密文（离线，纯函数，可单测）
+ * 真正"上云"的部分（登录 / 证书 / profile）在命令层，靠本节的纯函数收口。
  */
 
 /** 一份 profile 的关键信息（从 .p7b 里嵌的 JSON 解析） */
@@ -1172,3 +1178,298 @@ public func applySigningConfig(text: String, m: SigningMaterial): (String, Strin
     return (step2, "")
 }
 
+// ============================================================
+// 材料生产（路线 A）：命名规则与口令密文的纯函数层
+// ============================================================
+//
+// 依据：`docs/鸿蒙自动签名机制.md` §3.7 + flutter_flutter 提交 e2793de 的
+// `lib/src/ohos/signing/material.dart`（`sanitizeSignName` / `projectPathHash` /
+// `signingFileBaseName` / `signingFilePath`）与 `keymanager.dart`。
+//
+// **为什么要一模一样**：材料文件名是"确定性"的（DevEco / ark-cli / flutter / 我们共用
+// `~/.ohos/config`），hash 算错一位就与 DevEco 已生成的材料对不上号，复用链路直接断掉。
+// 本机实测核对：habit-tree 的工程根（DevEco 眼中的 `gen/ohos` 目录，**前向斜杠**）算出
+// `m7Gxh5QRtg0h6LnDjtArCp3iYObE9iWm8BEssdAfmHM`，与磁盘上的
+// `default_ohos_m7Gxh5QRtg0h6LnDjtArCp3iYObE9iWm8BEssdAfmHM=.p7b` 逐字一致；
+// 换成反斜杠会算出 `EuNnZ1gj…` —— 这就是"两个细节错一个就复不上"的现场。
+
+/** base64url 字母表（`+`→`-`、`/`→`_`），**不带** `=` 填充 */
+func b64UrlChar(v: Int64): Byte {
+    if (v < 26) {
+        return UInt8(65 + v)            // A-Z
+    }
+    if (v < 52) {
+        return UInt8(97 + v - 26)       // a-z
+    }
+    if (v < 62) {
+        return UInt8(48 + v - 52)       // 0-9
+    }
+    if (v == 62) {
+        return UInt8(45)                // '-'
+    }
+    return UInt8(95)                    // '_'
+}
+
+/**
+ * base64url 编码，**去掉 `=` 填充**（DevEco 的 hash 就是这么算的）。
+ *
+ * 不引第三方：仓库里只有 base64 **解码**（`packed_resources.cj`），这里补一个编码，
+ * 顺带把 `+/` → `-_` 的映射做在字母表里（少一次字符串替换，也少一次出错机会）。
+ */
+public func b64UrlNoPad(data: Array<Byte>): String {
+    let out = ArrayList<Byte>()
+    var i: Int64 = 0
+    let n = Int64(data.size)
+    while (i + 2 < n) {
+        let b0 = Int64(data[i])
+        let b1 = Int64(data[i + 1])
+        let b2 = Int64(data[i + 2])
+        out.add(b64UrlChar(b0 >> 2))
+        out.add(b64UrlChar(((b0 & 3) << 4) | (b1 >> 4)))
+        out.add(b64UrlChar(((b1 & 15) << 2) | (b2 >> 6)))
+        out.add(b64UrlChar(b2 & 63))
+        i += 3
+    }
+    let rest = n - i
+    if (rest == 1) {
+        let b0 = Int64(data[i])
+        out.add(b64UrlChar(b0 >> 2))
+        out.add(b64UrlChar((b0 & 3) << 4))
+    } else if (rest == 2) {
+        let b0 = Int64(data[i])
+        let b1 = Int64(data[i + 1])
+        out.add(b64UrlChar(b0 >> 2))
+        out.add(b64UrlChar(((b0 & 3) << 4) | (b1 >> 4)))
+        out.add(b64UrlChar((b1 & 15) << 2))
+    }
+    return String.fromUtf8(out.toArray())
+}
+
+/** 把宿主路径归一成**前向斜杠**（DevEco 的 hash 用前向斜杠；反斜杠算出的是另一个值） */
+public func forwardSlashPath(p: String): String {
+    let bytes = p.toArray()
+    let out = ArrayList<Byte>()
+    for (b in bytes) {
+        if (b == 92) {
+            out.add(UInt8(47))
+        } else {
+            out.add(b)
+        }
+    }
+    return String.fromUtf8(out.toArray())
+}
+
+/**
+ * 工程路径的 hash：`base64url(sha256(前向斜杠路径))`，去 `=` 填充（43 字符）。
+ *
+ * 注意：**`-` 与 `_` 要保留**（base64url 字母表），不要误当"非法文件名字符"清掉。
+ */
+public func projectPathHash(projectRoot: String): String {
+    let text = forwardSlashPath(projectRoot.trimAscii())
+    return b64UrlNoPad(digest(SHA256(), text.toArray()))
+}
+
+/** 文件名片段的最长长度（与 flutter / DevEco 一致） */
+public let SIGN_NAME_MAX_LEN: Int64 = 64
+
+/**
+ * 把 product / 工程目录名净化成安全的文件名片段：
+ * `\ / : * ? " < > | = -` 一律换成 `_`，连续的点换 `_`，超长截断 64，空则回落 `default`。
+ *
+ * `=` 也在非法列表里，这点容易漏：hash 后面那个 `=` 是**我们自己拼上去的字面量**，
+ * 名字里再出现 `=` 就会让"哪段是 hash"变得歧义。
+ */
+public func sanitizeSignName(raw: String): String {
+    let trimmed = raw.trimAscii()
+    if (trimmed == "") {
+        return "default"
+    }
+    let bytes = trimmed.toArray()
+    let out = ArrayList<Byte>()
+    var pendingDot = false
+    for (b in bytes) {
+        if (out.size >= SIGN_NAME_MAX_LEN) {
+            break
+        }
+        var ch = b
+        let illegal = ch == 92 || ch == 47 || ch == 58 || ch == 42 || ch == 63 || ch == 34 ||
+            ch == 60 || ch == 62 || ch == 124 || ch == 61 || ch == 45
+        if (illegal) {
+            ch = UInt8(95)
+        }
+        if (ch == 46) {          // 连续的点合成一个 '_'（与 DevEco / flutter 同款）
+            pendingDot = true
+            continue
+        }
+        if (pendingDot) {
+            out.add(UInt8(95))
+            pendingDot = false
+            if (out.size >= SIGN_NAME_MAX_LEN) {
+                break
+            }
+        }
+        out.add(ch)
+    }
+    if (pendingDot && out.size < SIGN_NAME_MAX_LEN) {
+        out.add(UInt8(95))
+    }
+    if (out.size == 0) {
+        return "default"
+    }
+    return String.fromUtf8(out.toArray())
+}
+
+/** 工程目录名（路径末段；两种分隔符都认） */
+func lastPathSegment(p: String): String {
+    let bytes = p.toArray()
+    var cut: Int64 = -1
+    for (i in 0..bytes.size) {
+        if (bytes[i] == 47 || bytes[i] == 92) {
+            cut = i
+        }
+    }
+    if (cut < 0) {
+        return p
+    }
+    return p[(cut + 1)..p.size]
+}
+
+/** 四个材料文件共用的名字主干：`{product}_{工程目录名}_{hash}`（**不含**末尾的 `=`） */
+public func signingFileBaseName(product: String, projectRoot: String): String {
+    let dirName = lastPathSegment(projectRoot.trimAscii())
+    let safeDir = if (dirName == "") { "default" } else { sanitizeSignName(dirName) }
+    return "${sanitizeSignName(product)}_${safeDir}_${projectPathHash(projectRoot)}"
+}
+
+/**
+ * 一个材料文件的文件名：`{主干}=.{suffix}`。
+ *
+ * **注意那个 `=`**：它是 hash 与后缀之间的字面分隔符，不是 base64 填充
+ * （填充已经在 `projectPathHash` 里去掉了）。错成"带填充的 base64"就与 DevEco 对不上。
+ */
+public func signingMaterialFileName(product: String, projectRoot: String, suffix: String): String {
+    return "${signingFileBaseName(product, projectRoot)}=.${suffix}"
+}
+
+// ------------------------------------------------------------
+// 口令密文的字节层（纯函数；加密原语在下一节）
+// ------------------------------------------------------------
+//
+// AesGcmKit 的载荷布局（与 DevEco / hvigor 的 decipher-util.js 一致）：
+//
+//   [ len(4 字节大端) | IV(12) | ciphertext | tag(16) ]   len = |ciphertext| + 16
+//
+// 写进 build-profile.json5 的是这整段的**小写 hex**。这条布局错一个字节，
+// hvigor 就解不开口令（表现是"签名失败"，而不是"口令错"），所以先把它做成纯函数钉住。
+
+/** 小写 hex 编码 */
+public func toHexLower(data: Array<Byte>): String {
+    let digits = "0123456789abcdef".toArray()
+    let out = ArrayList<Byte>()
+    for (b in data) {
+        let v = Int64(b)
+        out.add(digits[(v >> 4) & 15])
+        out.add(digits[v & 15])
+    }
+    return String.fromUtf8(out.toArray())
+}
+
+/** hex → 字节（`Option`：长度奇数或含非 hex 字符时为 None，调用方按"材料坏了"处理） */
+public func fromHexLower(s: String): Option<Array<Byte>> {
+    let text = s.trimAscii()
+    let bytes = text.toArray()
+    if (bytes.size % 2 != 0 || bytes.size == 0) {
+        return None
+    }
+    let out = ArrayList<Byte>()
+    var i: Int64 = 0
+    while (i < bytes.size) {
+        let hi = hexNibbleOf(bytes[i])
+        let lo = hexNibbleOf(bytes[i + 1])
+        if (hi < 0 || lo < 0) {
+            return None
+        }
+        out.add(UInt8((hi << 4) | lo))
+        i += 2
+    }
+    return Some(out.toArray())
+}
+
+/** 单个 hex 字符的数值（非 hex 给 -1） */
+func hexNibbleOf(b: Byte): Int64 {
+    if (b >= 48 && b <= 57) {
+        return Int64(b - 48)
+    }
+    if (b >= 97 && b <= 102) {
+        return Int64(b - 87)
+    }
+    if (b >= 65 && b <= 70) {
+        return Int64(b - 55)
+    }
+    return -1
+}
+
+/** 口令密文的长度常量（写在这里当"单点真相"，别在各处散着魔数） */
+public let AES_GCM_IV_LEN: Int64 = 12
+public let AES_GCM_TAG_LEN: Int64 = 16
+public let AES_GCM_KEY_LEN: Int64 = 16
+public let PBKDF2_ITERATIONS: Int64 = 10000
+
+/** 一段口令密文的三个组成部分 */
+public class GcmPayload {
+    public var iv: Array<Byte> = []
+    public var ciphertext: Array<Byte> = []
+    public var tag: Array<Byte> = []
+
+    public func toJson(): JsonObject {
+        var o = JsonObject()
+        o.put("ivLen", JsonInt(Int64(this.iv.size)))
+        o.put("ctLen", JsonInt(Int64(this.ciphertext.size)))
+        o.put("tagLen", JsonInt(Int64(this.tag.size)))
+        return o
+    }
+}
+
+/** 按 AesGcmKit 布局打包：`[len(4BE) | IV(12) | ct | tag(16)]`，`len = |ct| + 16` */
+public func packGcmPayload(iv: Array<Byte>, ciphertext: Array<Byte>,
+    tag: Array<Byte>): Option<Array<Byte>> {
+    if (iv.size != AES_GCM_IV_LEN || tag.size != AES_GCM_TAG_LEN) {
+        return None
+    }
+    let bodyLen = Int64(ciphertext.size) + AES_GCM_TAG_LEN
+    let out = ArrayList<Byte>()
+    out.add(UInt8((bodyLen >> 24) & 0xFF))
+    out.add(UInt8((bodyLen >> 16) & 0xFF))
+    out.add(UInt8((bodyLen >> 8) & 0xFF))
+    out.add(UInt8(bodyLen & 0xFF))
+    for (b in iv) {
+        out.add(b)
+    }
+    for (b in ciphertext) {
+        out.add(b)
+    }
+    for (b in tag) {
+        out.add(b)
+    }
+    return Some(out.toArray())
+}
+
+/** 拆包（长度不符 / 太短 / 声明长度与实到不符 → None） */
+public func unpackGcmPayload(raw: Array<Byte>): Option<GcmPayload> {
+    let minLen = 4 + AES_GCM_IV_LEN + AES_GCM_TAG_LEN
+    if (Int64(raw.size) < minLen) {
+        return None
+    }
+    let bodyLen = (Int64(raw[0]) << 24) | (Int64(raw[1]) << 16) | (Int64(raw[2]) << 8) |
+        Int64(raw[3])
+    if (bodyLen < AES_GCM_TAG_LEN || 4 + AES_GCM_IV_LEN + bodyLen > Int64(raw.size)) {
+        return None
+    }
+    let p = GcmPayload()
+    p.iv = raw[4..(4 + AES_GCM_IV_LEN)]
+    let body = raw[(4 + AES_GCM_IV_LEN)..(4 + AES_GCM_IV_LEN + bodyLen)]
+    let ctLen = Int64(body.size) - AES_GCM_TAG_LEN
+    p.ciphertext = body[0..ctLen]
+    p.tag = body[ctLen..body.size]
+    return Some(p)
+}

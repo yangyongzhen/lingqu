@@ -568,3 +568,140 @@ public func testPreflightPassesWhenBundleMatches(): Unit {
     @Assert(q.block, false)
     @Assert(q.reason.contains("bundleName"), true)
 }
+
+// ============================================================
+// 0.39.12（路线 A）：材料命名规则（纯函数，钉死"与 DevEco 同名"）
+// ============================================================
+//
+// 这几条是整条自动签名链的地基：`~/.ohos/config` 是 DevEco / ark-cli / flutter / 我们
+// **共用**的目录，文件名必须逐字一致，否则"复用已有材料"这条路直接断。
+// 期望常量不是编的：本机 `~/.ohos/config/default_ohos_m7Gxh5QRtg0h6LnDjtArCp3iYObE9iWm8BEssdAfmHM=.p7b`
+// 就在磁盘上，对应的工程根是 habit-tree 的 gen/ohos 目录。
+
+const HABIT_TREE_OHOS = "E:/test/rust/habit-tree/src-tauri/gen/ohos"
+const HABIT_TREE_HASH = "m7Gxh5QRtg0h6LnDjtArCp3iYObE9iWm8BEssdAfmHM"
+
+@Test
+public func testB64UrlNoPad(): Unit {
+    // 标准 base64 对照：hello → aGVsbG8=（去填充 → aGVsbG8）
+    @Assert(b64UrlNoPad("hello".toArray()), "aGVsbG8")
+    // 字节 0xfb 0xff：标准表算出 "+/8="，url 表必须是 "-_8"
+    @Assert(b64UrlNoPad([0xFB, 0xFF]), "-_8")
+    // 空输入
+    @Assert(b64UrlNoPad(Array<Byte>()), "")
+    // 三字节整组的边界（不产生填充）
+    @Assert(b64UrlNoPad("abc".toArray()), "YWJj")
+}
+
+@Test
+public func testProjectPathHashUsesForwardSlash(): Unit {
+    // 照抄 flutter material.dart 的 projectPathHash：base64url(sha256(前向斜杠路径)) 去 '='
+    @Assert(projectPathHash(HABIT_TREE_OHOS), HABIT_TREE_HASH)
+    @Assert(projectPathHash(HABIT_TREE_HASH).size, 43)
+    // 反斜杠必须换算成前向斜杠后再算（本机实测：直接拿反斜杠算会得到另一个 hash）
+    let (fwd, back) = (forwardSlashPath("E:\\test\\x"), forwardSlashPath("E:/test/x"))
+    @Assert(fwd, back)
+    @Assert(projectPathHash("E:\\test\\x"), projectPathHash("E:/test/x"))
+}
+
+@Test
+public func testSigningMaterialFileNameMatchesDevEco(): Unit {
+    // 主干 + 末尾字面 '=' → 与磁盘上的真实文件名逐字一致
+    @Assert(signingFileBaseName("default", HABIT_TREE_OHOS), "default_ohos_${HABIT_TREE_HASH}")
+    @Assert(signingMaterialFileName("default", HABIT_TREE_OHOS, "p7b"),
+        "default_ohos_${HABIT_TREE_HASH}=.p7b")
+    @Assert(signingMaterialFileName("default", HABIT_TREE_OHOS, "p12"),
+        "default_ohos_${HABIT_TREE_HASH}=.p12")
+    // 工程目录名取自路径末段（反斜杠路径同样成立）
+    @Assert(signingFileBaseName("default", "E:\\test\\rust\\habit-tree\\src-tauri\\gen\\ohos"),
+        "default_ohos_${HABIT_TREE_HASH}")
+}
+
+@Test
+public func testSanitizeSignName(): Unit {
+    // 非法字符（含 '=' 与 '-'）→ '_'；点串 → 单个 '_'；空 → default
+    @Assert(sanitizeSignName("default"), "default")
+    @Assert(sanitizeSignName(""), "default")
+    @Assert(sanitizeSignName("  "), "default")
+    @Assert(sanitizeSignName("a=b"), "a_b")
+    @Assert(sanitizeSignName("a/b\\c"), "a_b_c")
+    @Assert(sanitizeSignName("a..b"), "a_b")
+    @Assert(sanitizeSignName("a."), "a_")
+    @Assert(sanitizeSignName(".a"), "_a")
+    // 超长截断到 64
+    let buf = ArrayList<Byte>()
+    for (_ in 0..100) {
+        buf.add(UInt8(120))   // 'x' —— 仓颉的 String 没有 repeat，别按别的语言写
+    }
+    let long = String.fromUtf8(buf.toArray())
+    @Assert(sanitizeSignName(long).size, SIGN_NAME_MAX_LEN)
+    // hash 里的 '-' 与 '_' 属于 base64url 字母表，**不能**被净化掉（它们不进 sanitize）
+    @Assert(projectPathHash("E:/test/x").size, 43)
+}
+
+// ------------------------------------------------------------
+// 0.39.12：口令密文的字节层（AesGcmKit 载荷布局）
+// ------------------------------------------------------------
+
+@Test
+public func testHexRoundTrip(): Unit {
+    @Assert(toHexLower([0x00, 0x0F, 0xA5, 0xFF]), "000fa5ff")
+    @Assert(toHexLower(Array<Byte>()), "")
+    match (fromHexLower("000fa5ff")) {
+        case Some(b) => @Assert(b.size, 4)
+        case None => @Assert(true, false)
+    }
+    match (fromHexLower("000FA5FF")) {
+        case Some(b) => @Assert(toHexLower(b), "000fa5ff")
+        case None => @Assert(true, false)
+    }
+    // 奇数长度 / 非 hex / 空 → None（按"材料坏了"处理，不猜）
+    @Assert(fromHexLower("abc").isNone(), true)
+    @Assert(fromHexLower("zz").isNone(), true)
+    @Assert(fromHexLower("").isNone(), true)
+}
+
+@Test
+public func testGcmPayloadLayout(): Unit {
+    // len 字段 = |ct| + 16（tag 计入 len），IV 12、tag 16
+    let iv = Array<Byte>(12, repeat: 0x11)
+    let ct = Array<Byte>(4, repeat: 0x22)
+    let tag = Array<Byte>(16, repeat: 0x33)
+    match (packGcmPayload(iv, ct, tag)) {
+        case Some(raw) =>
+            @Assert(raw.size, 4 + 12 + 4 + 16)
+            // 大端 len = 4 + 16 = 20
+            @Assert(raw[3], 20)
+            @Assert(raw[0], 0)
+            match (unpackGcmPayload(raw)) {
+                case Some(p) =>
+                    @Assert(p.iv.size, 12)
+                    @Assert(p.ciphertext.size, 4)
+                    @Assert(p.tag.size, 16)
+                    @Assert(p.ciphertext[0], 0x22)
+                    @Assert(p.tag[0], 0x33)
+                case None => @Assert(true, false)
+            }
+        case None => @Assert(true, false)
+    }
+    // IV / tag 长度不对 → 拒绝打包（不写半成品）
+    @Assert(packGcmPayload(Array<Byte>(11, repeat: 0), ct, tag).isNone(), true)
+    @Assert(packGcmPayload(iv, ct, Array<Byte>(15, repeat: 0)).isNone(), true)
+    // 拆包：太短 / 声明长度超出实到 都返回 None
+    @Assert(unpackGcmPayload(Array<Byte>(10, repeat: 0)).isNone(), true)
+    let bad = Array<Byte>(4 + 12 + 16, repeat: 0)
+    bad[3] = 0xFF     // 声明 len=255，实到只有 16
+    @Assert(unpackGcmPayload(bad).isNone(), true)
+    // 空密文是合法的（len 恰为 tag 长）
+    let emptyCt = Array<Byte>(0, repeat: 0)
+    match (packGcmPayload(iv, emptyCt, tag)) {
+        case Some(raw2) =>
+            match (unpackGcmPayload(raw2)) {
+                case Some(p2) =>
+                    @Assert(p2.ciphertext.size, 0)
+                    @Assert(p2.tag.size, 16)
+                case None => @Assert(true, false)
+            }
+        case None => @Assert(true, false)
+    }
+}
