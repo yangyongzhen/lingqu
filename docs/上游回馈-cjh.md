@@ -196,14 +196,23 @@ cd /e/test/rust/m3u8dl-tauri && export OHOS_NDK_HOME="…" && "…/main.exe" bui
 | `{ exec 1>/dev/null; echo hi; } 2>&1; echo CODE; echo MARKER` | 只剩 `hi`（命令把 fd1 **永久改道**，这才是"标记被吞"的真形态） |
 
 **cjh 侧已修**（分支 `fix/piped-cmd-nonsession` → MR
-[!11](https://gitcode.com/qq8864/cjh/merge_requests/11)，本地提交 `e7a3134`）：
+[!11](https://gitcode.com/qq8864/cjh/merge_requests/11)，提交 `e7a3134` + `95f9b02`）：
 
 1. 结束标记与退出码写**独立 fd 3**（`exec 3>&1; { cmd; } 2>&1; echo CODE 1>&3; echo marker 1>&3; exec 1>&3`），
    命令怎么折腾 fd1 都不影响结束信号；命令后复位 fd1。回归用例 `BashMarkerFdTest`（旧包装必卡到超时）。
-2. 回退「含 `|`/`>` 就分流」，只保留 heredoc 分流（`<<` 会破坏包装终止符）。
+2. 回退「含 `|`/`>` 就分流」，只保留 heredoc 分流。**随后 heredoc 也回归会话了**：
+   真因是包装把收尾 `}` 与终止符挤在一行，`}` 挪到独占一行即可（探针实证），
+   `needsFreshShell` 整段删除 —— 现在**没有任何命令会因为写法被踢出会话**，cwd/env 无例外。
 3. 超时**先抓进程快照再杀会话**（`ps -ef` 裁剪后塞进 ToolResult）——快照会随 `tool_done`
    进灵渠的 `.lingqu/agent/trace.jsonl`，下次不必靠推理猜"谁握着管道"。
-4. PowerShell 非会话分支不再静默丢命令（原实现算了 base64 却没拼进命令）。
+4. **会话 shell 的 PATH 补齐**（`src/tools/shell_path.cj`）：cjh 用绝对路径找到 Git Bash，
+   但它的 `/usr/bin` 未必在继承的 PATH 上 —— 缺了 agent 跑 `cat`/`sed`/`grep` 全是
+   `command not found`（127）。现在每条命令前幂等追加 `<git>/bin`、`<git>/usr/bin`、
+   `<git>/mingw64/bin`（追加不覆盖）。
+5. PowerShell 非会话分支不再静默丢命令（原实现算了 base64 却没拼进命令）。
+
+> 第 4 条对灵渠的意义：如果目标机器上 Git 没进 PATH（很常见），以前 agent 的每次
+> `cat`/`sed` 都会失败并被当成"模型写错命令"，现在这一整类假故障消失。
 
 **灵渠侧要跟着守的一条纪律**：`| tail` 那一族（右端等 EOF）cjh 治不了，只能靠**给 agent 的口径**——
 长命令写 `<cmd> > build.log 2>&1`（立即返回）再 `read_file` 看日志，别用 `| tail`。
