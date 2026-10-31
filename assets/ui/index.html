@@ -504,6 +504,25 @@ body.ai-hidden .ai-show{display:block}
             <div class="sethint" id="skillNote">技能 = `~/.cjh/skills/t2h-ohos-port.md`（frontmatter + 正文，正文会被拼进 cjh 的 system prompt）。装之前 AI 助手不知道鸿蒙移植的坑、签名配方与工具链差异——只能靠模型自己的通用知识。</div>
             <div class="mono small" id="skillPath" style="margin-top:4px"></div>
           </div>
+
+          <div class="card" style="margin-top:12px" id="agentCard">
+            <div class="card-h">
+              <h3>工程上下文（AGENTS.md）</h3>
+              <span class="right">
+                <button class="btn" id="btnAgentStatus" title="查目标工程里有没有受管区块、cjh 当前工作区">查状态</button>
+                <button class="btn primary" id="btnAgentInstall" title="把工具/落档/口径写进工程的 AGENTS.md 区块，并把 cjh 工作区切到该工程">装上下文</button>
+                <button class="btn" id="btnAgentRemove" title="只删灵渠写的那块，用户原有内容保留">移除区块</button>
+              </span>
+            </div>
+            <div class="acts-row" style="margin:0 0 6px">
+              <input id="agentPath" class="mono" placeholder="目标 Tauri 工程路径（或置 LINGQU_AGENT_PATH / LINGQU_SCAN_PATH）" style="flex:1 1 260px;min-width:200px">
+            </div>
+            <div class="legend" style="margin:0 0 6px">
+              <span>受管区块：<b id="agentBlock">—</b></span>
+              <span>cjh 工作区：<b id="agentWorkspace" class="mono">—</b></span>
+            </div>
+            <div class="sethint" id="agentNote">cjh 会从工作目录逐级向上找 `AGENTS.md` 并注入 system prompt——所以「装上下文」= 往工程写一块受管区块 + 把 cjh 的 workspace 切到该工程（否则它的 bash 还蹲在灵渠目录）。区块幂等、可移除，用户原有内容原样保留。</div>
+          </div>
         </div>
       </section>
 
@@ -2327,6 +2346,11 @@ withBridge(function(tauri){
       // AI 迁移技能探针：LINGQU_SKILL=install|status 时跑一次（装完会问 cjh /api/skills）
       if (d && d.skillAction) {
         runSkill(String(d.skillAction));
+      }
+      // 工程上下文探针：LINGQU_AGENT=install|status|remove（配合 LINGQU_AGENT_PATH）
+      if (d && d.agentAction) {
+        if (d.agentPath) { $('agentPath').value = String(d.agentPath); }
+        runAgent(String(d.agentAction));
       }
       // 指定初始屏（LINGQU_UI_SCREEN=build 之类）：给「截某屏的版面证据」一个可复现入口，
       // 不必靠人手动点左栏（无视觉环境也能落到 ui-report 的 activeScreen 上）
@@ -4467,6 +4491,64 @@ withBridge(function(tauri){
   $('btnSkillStatus').addEventListener('click', function(){ runSkill('status'); });
   $('btnSkillInstall').addEventListener('click', function(){ runSkill('install'); });
 
+  /* ===== AI 工程上下文（2026-11-01，AI 接入第 2 步）=====
+   * 两步：往目标工程写 AGENTS.md 受管区块（cjh 自动注入）+ 把 cjh workspace 切过去
+   * （否则 agent 的 bash 还在灵渠目录，知识再全也落不到工程上）。 */
+  var AGENT = { hasBlock: false, path: '', switched: false, workspace: '', error: '' };
+
+  function renderAgent(r){
+    r = r || {};
+    AGENT = {
+      hasBlock: r.hasBlock === true,
+      path: String(r.path || ''),
+      switched: r.switched === true,
+      workspace: String(r.cjhWorkspace || ''),
+      error: String(r.error || '')
+    };
+    $('agentBlock').textContent = AGENT.hasBlock ? '已装（幂等）' : '未装';
+    $('agentBlock').style.color = AGENT.hasBlock ? 'var(--ok)' : 'var(--warn)';
+    $('agentWorkspace').textContent = AGENT.workspace || '（cjh 未就绪）';
+    $('agentWorkspace').style.color = AGENT.workspace ? '' : 'var(--warn)';
+    var note = $('agentNote');
+    if (AGENT.error) {
+      note.style.color = 'var(--err)';
+      note.textContent = '出错了：' + AGENT.error;
+    } else {
+      note.style.color = '';
+      note.textContent = (r.action === 'remove'
+          ? '已移除灵渠写的那块（用户原有内容保留）。'
+          : (r.action === 'install'
+            ? ('已写入 ' + AGENT.path + (AGENT.switched ? '，并把 cjh 工作区切到该工程' : '（cjh 未就绪，工作区未切换）'))
+            : ('区块：' + (AGENT.hasBlock ? '已装' : '未装') + '；文件：' + (AGENT.path || '—'))))
+        + '　注意：cjh 的 system prompt 在会话开始时装配——装完上下文建议新建一次会话（右栏 ＋）让它生效。';
+    }
+    reportUi('agent-' + (AGENT.hasBlock ? 'on' : 'off'));
+  }
+
+  function agentPathValue(){
+    var p = ($('agentPath') && $('agentPath').value ? $('agentPath').value : '').trim();
+    if (p) { return p; }
+    // 回落到 ② 屏的工程路径（常在那里填过）
+    return ($('scanPath') && $('scanPath').value ? $('scanPath').value : '').trim();
+  }
+
+  function runAgent(action){
+    var b = [$('btnAgentStatus'), $('btnAgentInstall'), $('btnAgentRemove')];
+    b.forEach(function(x){ x.disabled = true; });
+    $('agentNote').style.color = 'var(--warn)';
+    $('agentNote').textContent = action === 'install' ? '写入 AGENTS.md 区块并切 cjh 工作区…' : '处理中…';
+    invoke('t2h:agent_context', { action: action || 'status', path: agentPathValue() }).then(function(r){
+      renderAgent(r || {});
+    }).catch(function(e){
+      $('agentNote').style.color = 'var(--err)';
+      $('agentNote').textContent = '出错了：' + (e && e.message ? e.message : e);
+      reportUi('agent-error');
+    }).then(function(){ b.forEach(function(x){ x.disabled = false; }); });
+  }
+  $('btnAgentStatus').addEventListener('click', function(){ runAgent('status'); });
+  $('btnAgentInstall').addEventListener('click', function(){ runAgent('install'); });
+  $('btnAgentRemove').addEventListener('click', function(){ runAgent('remove'); });
+
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -4558,6 +4640,12 @@ withBridge(function(tauri){
       skillCjhCount: (typeof SKILL.cjhCount === "number") ? SKILL.cjhCount : 0,
       skillSource: SKILL.source || "",
       skillNote: SKILL.note || "",
+      // 工程上下文（AGENTS.md 受管区块 + cjh workspace）
+      agentHasBlock: AGENT.hasBlock === true,
+      agentPath: AGENT.path || "",
+      agentSwitched: AGENT.switched === true,
+      agentWorkspace: AGENT.workspace || "",
+      agentError: AGENT.error || "",
       scanR: (window.__scan && window.__scan.R) || 0,
       scanD: (window.__scan && window.__scan.D) || 0,
       scanH: (window.__scan && window.__scan.H) || 0,

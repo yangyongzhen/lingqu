@@ -5,6 +5,60 @@
 
 ---
 
+## [0.33.0] - 2026-11-01
+
+**主题**：**AI 接入第 2 步 —— 工程上下文**：让 agent 的 bash/文件工具真正落到用户的工程上，
+并把「工具链 + 落档位置 + 口径」写进工程的 `AGENTS.md`（cjh 会自动注入 system prompt）。
+
+### Added
+
+- **命令 `t2h:agent_context`**（三处联动齐全）：`status` / `install` / `remove`
+  - `install`：往目标工程写 `AGENTS.md` **受管区块** + `POST /api/workspaces/switch`
+    把 cjh 的 workspace 切到该工程（cjh 会 chdir **并重置持久 bash 会话**）
+  - `remove`：只删灵渠那块，用户原有内容保留；文件因此变空时直接删文件
+- `src/agent_context.cj`：
+  - 纯函数：`agentContextPathOf` / `agentContextBody`（落档清单 + 工具清单 + 五条口径）/
+    `hasAgentBlock` / `injectAgentBlock`（**幂等**）/ `removeAgentBlock`（**可撤销**）
+  - IO：`cjhSwitchWorkspace`（POST 切工作区）/ `cjhCurrentWorkspace`（GET 回读）
+- ① 屏「工程上下文（AGENTS.md）」卡：受管区块状态 / cjh 工作区 / 「查状态」「装上下文」「移除区块」
+- `ui_report` 新增 `agentHasBlock/agentPath/agentSwitched/agentWorkspace/agentError`；
+  探针 `LINGQU_AGENT=install|status|remove` + `LINGQU_AGENT_PATH`
+
+### 为什么这样做（用户拍板）
+
+| 方案 | 取舍 |
+|---|---|
+| 只写 AGENTS.md 不切 workspace | ❌ 只做一半：agent 的 bash 还在灵渠目录，知识再全也落不到工程上 |
+| 只切 workspace 不写内容 | ❌ agent 不知道有哪些工具、落档在哪、口径是什么 |
+| **切 workspace + 受管区块 AGENTS.md** | ✅ 本轮采纳：cjh 原生机制（AGENTS.md 自动注入 + workspace chdir） |
+| 改 cjh 全局 `systemPrompt` | ⏸ 仅作兜底：全局单值、切换工程要重写、别的客户端用不到 |
+
+### 证据（本机 Windows x64，2026-11-01，临时工程 `.lingqu/tmp-agent/demo-app`）
+
+```
+造一个"用户已有自己的 AGENTS.md"的工程（4 行用户内容）：
+LINGQU_AGENT=install LINGQU_AGENT_PATH=<tmp> →
+  ui_report：agentHasBlock=true agentSwitched=true
+             agentWorkspace=E:\...\.lingqu\tmp-agent\demo-app agentError="" errorCount=0
+  AGENTS.md：用户原有 4 行**原样保留**，其后追加
+             <!-- lingqu:begin … --> 区块 + 落档表 + 工具清单 + 五条口径 <!-- lingqu:end -->
+LINGQU_AGENT=remove →
+  ui_report：agentHasBlock=false errorCount=0
+  AGENTS.md 回到用户原来那 4 行（灵渠区块整段消失）
+```
+
+> `agentSwitched=true` 来自 cjh 的 `POST /api/workspaces/switch` 回执；`agentWorkspace` 是紧接着
+> `GET /api/workspaces` 回读的最近工作区——**不是"我们以为切了"**。
+
+### 未做（如实）
+
+- 装完上下文后 **cjh 的 system prompt 不会自动刷新**（它在会话开始时装配）——界面提示"新建一次会话"；
+  真正自动刷新需要 cjh 侧支持，属上游改造
+- 没做"按工程自动切 workspace"（目前要用户点一下）；③ 的工具 CLI 化之后再串成一条链
+- ③（`t2h:*` CLI 化）与 ④（一键执行闭环）未开工
+
+---
+
 ## [0.32.0] - 2026-11-01
 
 **主题**：**AI 接入第 1 步 —— 把 `t2h-ohos-port` 技能真正装进 cjh**。

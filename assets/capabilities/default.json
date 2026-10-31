@@ -20,6 +20,7 @@
     "t2h:report",
     "t2h:batch",
     "t2h:skill",
+    "t2h:agent_context",
     "t2h:cjh_status",
     "t2h:cjh_deploy",
     "t2h:cjh_start",

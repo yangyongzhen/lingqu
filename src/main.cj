@@ -182,6 +182,9 @@ public class EnvCommand <: CommandHandler {
         res.put("batchSamples", JsonString(envOr("LINGQU_BATCH_SAMPLES", "")))
         // 置 LINGQU_SKILL=install 就在启动时装一次迁移技能（status 只查状态；秒级）
         res.put("skillAction", JsonString(envOr("LINGQU_SKILL", "")))
+        // 置 LINGQU_AGENT=install|status|remove 就在启动时装工程上下文（写 AGENTS.md 区块 + 切 workspace）
+        res.put("agentAction", JsonString(envOr("LINGQU_AGENT", "")))
+        res.put("agentPath", JsonString(envOr("LINGQU_AGENT_PATH", "")))
         return res
     }
 }
@@ -1069,6 +1072,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("skillCjhCount", JsonInt(argInt(args, "skillCjhCount", 0)))
         o.put("skillSource", JsonString(argStr(args, "skillSource", "")))
         o.put("skillNote", JsonString(argStr(args, "skillNote", "")))
+        // 工程上下文（AGENTS.md 受管区块 + cjh workspace）
+        o.put("agentHasBlock", JsonBool(argBool(args, "agentHasBlock", false)))
+        o.put("agentPath", JsonString(argStr(args, "agentPath", "")))
+        o.put("agentSwitched", JsonBool(argBool(args, "agentSwitched", false)))
+        o.put("agentWorkspace", JsonString(argStr(args, "agentWorkspace", "")))
+        o.put("agentError", JsonString(argStr(args, "agentError", "")))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
@@ -2943,6 +2952,107 @@ public class SkillCommand <: CommandHandler {
 }
 
 /**
+ * t2h:agent_context —— 给 agent 装"工程上下文"（AI 接入计划第 2 步）。
+ *
+ * 两步（用户拍板的方案）：
+ *   ① 底座：切 cjh 的 workspace 到这个工程（`POST /api/workspaces/switch`，cjh 会 chdir +
+ *      重置持久 bash 会话）——不切的话 agent 的工具还蹲在灵渠目录，知识再全也落不到工程上；
+ *   ② 内容：往工程的 `AGENTS.md` 写**受管区块**（cjh 从 cwd 逐级向上找 AGENTS.md 并注入）。
+ *      幂等、保留用户原有内容、可移除。
+ *
+ * action：status（默认）/ install / remove
+ */
+public class AgentContextCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_AGENT_PATH", "")
+        }
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        let action = argStr(args, "action", "status")
+        var projName = "unknown"
+        if (path.size > 0) {
+            projName = sanitizeFileName(projectNameOf(path))
+        }
+        let projDir = if (path.size > 0) { hostPath(path) } else { "" }
+        let target = agentContextPathOf(projDir)
+
+        var existed = readTextOrEmpty(target)
+        var wrote = false
+        var backup = ""
+        var error = ""
+        var switched = false
+        if (action == "install") {
+            if (projDir == "" || !exists(Path(projDir))) {
+                error = "要传工程路径（path），或置 LINGQU_AGENT_PATH——工程目录不存在就写不了上下文"
+            } else {
+                let body = agentContextBody(projName, projDir)
+                let merged = injectAgentBlock(existed, body)
+                try {
+                    // 覆盖前留 .bak（用户原有内容万一被误改，能救回来）
+                    if (existed != "" && !exists(Path(target + ".lingqu.bak"))) {
+                        backup = target + ".lingqu.bak"
+                        File.writeTo(backup, existed.toArray())
+                    }
+                    File.writeTo(target, merged.toArray())
+                    wrote = true
+                    existed = merged
+                } catch (e: Exception) {
+                    error = "写 ${target} 失败：${e}"
+                }
+                // 切 workspace（cjh 没在跑也不算安装失败，但要如实回投）
+                switched = cjhSwitchWorkspace(cjhPort(), projDir)
+            }
+        } else if (action == "remove") {
+            if (projDir == "" || !exists(Path(projDir))) {
+                error = "要传工程路径（path）"
+            } else if (!hasAgentBlock(existed)) {
+                error = ""
+            } else {
+                let merged = removeAgentBlock(existed)
+                try {
+                    if (merged.trimAscii() == "") {
+                        // 用户原本没有 AGENTS.md：删掉文件，别留一个空文件占地方
+                        if (exists(Path(target))) {
+                            removeIfExists(target)
+                        }
+                    } else {
+                        File.writeTo(target, merged.toArray())
+                    }
+                    existed = merged
+                    wrote = true
+                } catch (e: Exception) {
+                    error = "移除 ${target} 里的区块失败：${e}"
+                }
+            }
+        }
+
+        let hasBlock = hasAgentBlock(existed)
+        let current = cjhCurrentWorkspace(cjhPort())
+
+        var res = JsonObject()
+        res.put("ok", JsonBool(error == ""))
+        res.put("action", JsonString(action))
+        res.put("project", JsonString(projName))
+        res.put("projDir", JsonString(projDir))
+        res.put("path", JsonString(target))
+        res.put("hasBlock", JsonBool(hasBlock))
+        res.put("wrote", JsonBool(wrote))
+        res.put("backup", JsonString(backup))
+        res.put("switched", JsonBool(switched))
+        res.put("cjhWorkspace", JsonString(current))
+        res.put("error", JsonString(error))
+        eprintln("[lingqu][agent] action=${action} proj=${projName} hasBlock=${hasBlock} " +
+            "wrote=${wrote} switched=${switched} cjhWorkspace=${current}")
+        return res
+    }
+}
+
+/**
  * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。
  *
  * 把 0.17.0 手工跑通的那条链做成命令：`hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog。
@@ -3416,6 +3526,7 @@ public func build(): AppSpec {
         app.register("t2h:report", ReportCommand())
         app.register("t2h:batch", BatchCommand())
         app.register("t2h:skill", SkillCommand())
+        app.register("t2h:agent_context", AgentContextCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）
