@@ -1261,6 +1261,8 @@ public class UiReportCommand <: CommandHandler {
         o.put("aiPortVerdict", JsonString(argStr(args, "aiPortVerdict", "")))
         o.put("aiPortDirective", JsonInt(argInt(args, "aiPortDirective", 0)))
         o.put("aiPortCli", JsonString(argStr(args, "aiPortCli", "")))
+        // 行为轨迹行数（0.39.0）
+        o.put("agentTraceLines", JsonInt(argInt(args, "agentTraceLines", 0)))
         // WS 发送可观测（0.37.0）：发送失败数 / 最后一次失败原因 / 收到的帧类型计数
         o.put("wsSendFail", JsonInt(argInt(args, "wsSendFail", 0)))
         o.put("wsLastSendErr", JsonString(argStr(args, "wsLastSendErr", "")))
@@ -3908,6 +3910,44 @@ public class AutoPortStopCommand <: CommandHandler {
 }
 
 /**
+ * t2h:agent_trace —— 记一条 agent 行为轨迹（0.39.0）。
+ *
+ *   {path, kind, name, detail} → 追加一行到 `<工程>/.lingqu/agent/trace.jsonl`
+ *
+ * 为什么要我们自己记：cjh 的 web 会话**只在销毁时落盘**，跑完的回合在 `~/.cjh/sessions/`
+ * 里仍只有 system 消息（实测 158 B）——"AI 改了什么、跑了哪些命令"没有留痕。
+ * 页面已经收到 `tool_start`/`tool_result` 帧，落到**工程的** `.lingqu/agent/` 里，
+ * 和 scan/build 落档同源，agent 自己也能读它自检（ADR D-015：我们是记录员）。
+ *
+ * 只追加、不读改写；写失败进 outError，不抛。
+ */
+public class AgentTraceCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        let kind = argStr(args, "kind", "note")
+        let name = argStr(args, "name", "")
+        let detail = argStr(args, "detail", "")
+        let line = agentTraceLine(nowText(), kind, name, detail)
+        let err = appendAgentTrace(path, line)
+        var res = JsonObject()
+        res.put("ok", JsonBool(err.size == 0))
+        res.put("file", JsonString(tracePathOf(path)))
+        res.put("kind", JsonString(kind))
+        res.put("lines", JsonInt(agentTraceLines(path)))
+        res.put("outError", JsonString(err))
+        if (err.size > 0) {
+            eprintln("[lingqu][trace] ${err}")
+        }
+        return res
+    }
+}
+
+/**
  * t2h:cli_run —— 把 AI 建议的命令**一键执行**（AI 接入第 4 步）。
  *
  * 安全边界在 `cliRunAllowed`（纯函数 + 单测）：只读/幂等可回滚的才放开；
@@ -4487,6 +4527,8 @@ public func build(): AppSpec {
         app.register("t2h:autoport_start", AutoPortStartCommand())
         app.register("t2h:autoport_status", AutoPortStatusCommand())
         app.register("t2h:autoport_stop", AutoPortStopCommand())
+        // agent 行为轨迹（0.39.0）：AI 对工程做了什么，落 <工程>/.lingqu/agent/trace.jsonl
+        app.register("t2h:agent_trace", AgentTraceCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

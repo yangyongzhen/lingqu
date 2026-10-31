@@ -30,6 +30,7 @@
     "t2h:autoport_start",
     "t2h:autoport_status",
     "t2h:autoport_stop",
+    "t2h:agent_trace",
     "t2h:cjh_status",
     "t2h:cjh_deploy",
     "t2h:cjh_start",

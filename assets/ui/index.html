@@ -2849,6 +2849,15 @@ withBridge(function(tauri){
     return ($('buildPath') && $('buildPath').value ? $('buildPath').value : '').trim();
   }
 
+  /** 记一条 agent 行为轨迹到 <工程>/.lingqu/agent/trace.jsonl（失败不打断主流程） */
+  function tracePost(kind, name, detail){
+    var p = (window.__probePath || migratePathValue() || '');
+    if (!p) { return; }
+    invoke('t2h:agent_trace', { path: p, kind: kind, name: name, detail: String(detail || '') }).then(function(r){
+      if (r && typeof r.lines === 'number') { AIP.traceLines = r.lines; }
+    }).catch(function(){});
+  }
+
   function addSystemNote(text){
     return insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
       '<div class="small muted">' + esc(text) + '</div></div></div>'));
@@ -3595,6 +3604,17 @@ withBridge(function(tauri){
     // 帧类型计数：排障时"cjh 到底回了什么"只认这个（别靠猜）
     if (!CJ.frameTypes) { CJ.frameTypes = {}; }
     CJ.frameTypes[t] = (CJ.frameTypes[t] || 0) + 1;
+    // 行为轨迹（0.39.0）：把「AI 对这个工程做了什么」落成证据。
+    // cjh 的会话只在销毁时落盘，跑完的回合在 ~/.cjh/sessions 里还是空的 —— 所以由我们记。
+    try {
+      if (t === 'tool_start') {
+        tracePost('tool', String(m.tool || m.name || ''), JSON.stringify(m.args || {}));
+      } else if (t === 'tool_result') {
+        tracePost('tool_done', String(m.tool || m.name || ''), String(m.result || m.content || m.error || ''));
+      } else if (t === 'done') {
+        tracePost('turn_done', '', JSON.stringify(m.summary || {}));
+      }
+    } catch (e) { /* 轨迹不影响主流程 */ }
     takeSession(m);
 
     if (t === 'delta') {
@@ -5478,6 +5498,8 @@ withBridge(function(tauri){
       aiPortVerdict: AIP.verdict || '',
       aiPortDirective: (typeof AIP.directiveChars === 'number') ? AIP.directiveChars : 0,
       aiPortCli: AIP.cliPath || '',
+      // 行为轨迹行数（0.39.0：AI 对工程做了什么，落 <工程>/.lingqu/agent/trace.jsonl）
+      agentTraceLines: (typeof AIP.traceLines === 'number') ? AIP.traceLines : 0,
       // WS 发送可观测（0.37.0 的教训：发送失败以前是静默的，会把"没发出去"误判成"cjh 没回"）
       wsSendFail: (typeof CJ.sendFail === 'number') ? CJ.sendFail : 0,
       wsLastSendErr: CJ.lastSendErr || '',
