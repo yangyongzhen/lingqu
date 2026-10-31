@@ -55,6 +55,20 @@ cjh 已加 `web.keep_running_on_disconnect`（默认 false 保持老行为；开
 （备份在 `%TEMP%\cjh_settings_backup.json`）。灵渠侧下一步要做的：`t2h:autoport_start` 时
 把这条设置自动写进去，别让用户手改。
 
+### 验证：开关打开后重跑，回合**扛住了 13 次断连**
+
+    [00:08:53] 客户端断开，本轮继续执行（web.keep_running_on_disconnect=true）   ← cjh 新逻辑
+    [00:11:01] build 落档 exitCode=0
+    [00:13:03] Agent.run 正常结束: 41 rounds, 49 tools, 328028ms               ← 跑完并收尾
+
+    ui_report：wsReconnects=13  aiPortStalled=false  abortSource=""  toolCards=33
+    落档：scan ✓ / deps ✓ / build **ok=true exitCode=0** / hap 落档 ok=false / sign 落档 ok=false
+
+对比上一轮（不加开关、只加写容错）：同样是重连，那次 `Agent.run 被用户中断（24 轮后）` 直接作废；
+这次 49 次工具调用跑完整轮、`build` 拿到 `exitCode=0`，hap 与 sign 也真的被执行到
+（各自 `ok=false`，原因待查：hap 是 `hvigor BUILD FAILED`、sign 是 debug 态且探测不到签名材料）。
+
+
 
   阈值一改就假红——现在按 `AUTOPORT_STALL_POLLS + 5` 推、按常量断言。
 
