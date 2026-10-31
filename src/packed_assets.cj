@@ -17,3 +17,11 @@ public let PACKED_UI_B64: String = ""
 
 /** `assets/capabilities/` 下各 json 的 base64，多份用英文逗号拼接（空 = 从磁盘读目录） */
 public let PACKED_CAPS_B64: String = ""
+
+/**
+ * `skills/t2h-ohos-port/SKILL.md` 的 base64（空 = 从磁盘读仓库里那份）。
+ *
+ * 单文件产物里没有 `skills/` 目录，靠这一份内嵌正文让「安装迁移技能」仍然可用
+ * （内嵌副本只含正文、不含 `references` 下的 md 文件；要带参考文档就置 LINGQU_SKILL_SRC 指向仓库重装）。
+ */
+public let PACKED_SKILL_B64: String = ""

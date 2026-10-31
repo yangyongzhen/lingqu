@@ -19,6 +19,7 @@
     "t2h:resume",
     "t2h:report",
     "t2h:batch",
+    "t2h:skill",
     "t2h:cjh_status",
     "t2h:cjh_deploy",
     "t2h:cjh_start",

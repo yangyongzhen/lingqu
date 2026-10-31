@@ -486,6 +486,24 @@ body.ai-hidden .ai-show{display:block}
             <div class="card-h"><h3>工具链体检</h3><span class="right" id="envTime">—</span></div>
             <div id="envList"><div class="muted small">正在检查…</div></div>
           </div>
+
+          <div class="card" style="margin-top:12px" id="skillCard">
+            <div class="card-h">
+              <h3>AI 迁移技能</h3>
+              <span class="right">
+                <button class="btn" id="btnSkillStatus" title="查技能安装状态与 cjh 是否已加载">查状态</button>
+                <button class="btn primary" id="btnSkillInstall" title="把 skills/t2h-ohos-port 装进 ~/.cjh/skills 并让 cjh 立刻可用">安装技能</button>
+              </span>
+            </div>
+            <div class="legend" style="margin:0 0 6px">
+              <span>安装状态：<b id="skillState">—</b></span>
+              <span>cjh 已加载：<b id="skillSeen">—</b></span>
+              <span>参考文档：<b id="skillRefs">—</b></span>
+              <span>来源：<b id="skillSource">—</b></span>
+            </div>
+            <div class="sethint" id="skillNote">技能 = `~/.cjh/skills/t2h-ohos-port.md`（frontmatter + 正文，正文会被拼进 cjh 的 system prompt）。装之前 AI 助手不知道鸿蒙移植的坑、签名配方与工具链差异——只能靠模型自己的通用知识。</div>
+            <div class="mono small" id="skillPath" style="margin-top:4px"></div>
+          </div>
         </div>
       </section>
 
@@ -2305,6 +2323,10 @@ withBridge(function(tauri){
       if (d && d.batchSamples) {
         $('batchSamples').value = String(d.batchSamples);
         runBatch();
+      }
+      // AI 迁移技能探针：LINGQU_SKILL=install|status 时跑一次（装完会问 cjh /api/skills）
+      if (d && d.skillAction) {
+        runSkill(String(d.skillAction));
       }
       // 指定初始屏（LINGQU_UI_SCREEN=build 之类）：给「截某屏的版面证据」一个可复现入口，
       // 不必靠人手动点左栏（无视觉环境也能落到 ui-report 的 activeScreen 上）
@@ -4385,6 +4407,66 @@ withBridge(function(tauri){
 
   $('btnBatch').addEventListener('click', runBatch);
 
+  /* ===== AI 迁移技能（2026-11-01，AI 接入第 1 步）=====
+   * cjh 的技能是 ~/.cjh/skills/<name>.md，正文拼进 system prompt。
+   * 装之前 AI 不知道鸿蒙移植的坑/签名/工具链；装完并且 cjh 真的加载了，才算接上。 */
+  var SKILL = { state: '', target: '', refs: 0, source: '', cjhSeen: false,
+                cjhCount: 0, note: '', res: null };
+
+  function renderSkill(r){
+    r = r || {};
+    SKILL = {
+      state: String(r.state || ''),
+      target: String(r.targetPath || ''),
+      refs: (typeof r.refCount === 'number') ? r.refCount : 0,
+      source: String(r.sourceKind || ''),
+      cjhSeen: r.cjhSeen === true,
+      cjhCount: (typeof r.cjhSkills === 'number') ? r.cjhSkills : 0,
+      note: String(r.note || ''),
+      res: r
+    };
+    var stateText = SKILL.state === 'installed' ? '已安装'
+      : (SKILL.state === 'outdated' ? '需更新（内容与来源不一致）'
+      : (SKILL.state === 'missing' ? '未安装' : '未知'));
+    $('skillState').textContent = stateText;
+    $('skillState').style.color = SKILL.state === 'installed' ? 'var(--ok)'
+      : (SKILL.state === 'outdated' ? 'var(--warn)' : 'var(--err)');
+    // cjh 没在跑时不能说"没加载"——那只是没验过
+    $('skillSeen').textContent = SKILL.cjhSeen ? '是' : (SKILL.cjhCount === 0 ? '未验证（cjh 未就绪）' : '否');
+    $('skillSeen').style.color = SKILL.cjhSeen ? 'var(--ok)' : 'var(--warn)';
+    $('skillRefs').textContent = SKILL.refs > 0 ? (SKILL.refs + ' 份') : '0 份（仅正文）';
+    $('skillRefs').style.color = SKILL.refs > 0 ? '' : 'var(--warn)';
+    $('skillSource').textContent = SKILL.source === 'repo' ? '仓库'
+      : (SKILL.source === 'env' ? 'LINGQU_SKILL_SRC' : (SKILL.source === 'embedded' ? '内嵌副本' : '—'));
+    $('skillPath').textContent = SKILL.target ? ('技能文件：' + SKILL.target) : '';
+    var note = $('skillNote');
+    if (r.error) {
+      note.style.color = 'var(--err)';
+      note.textContent = '技能安装失败：' + String(r.error);
+    } else {
+      note.style.color = '';
+      note.textContent = [String(r.enableNote || ''), SKILL.note].filter(function(x){ return !!x; }).join('　')
+        || '技能 = ~/.cjh/skills/t2h-ohos-port.md；装好并且 cjh 已加载后，AI 助手才会真正"懂"鸿蒙移植。';
+    }
+    reportUi('skill-' + (SKILL.state || 'unknown'));
+  }
+
+  function runSkill(action){
+    var b1 = $('btnSkillStatus'), b2 = $('btnSkillInstall');
+    b1.disabled = true; b2.disabled = true;
+    $('skillNote').style.color = 'var(--warn)';
+    $('skillNote').textContent = action === 'install' ? '安装中（写 ~/.cjh/skills 并问 cjh 是否已加载）…' : '查询中…';
+    invoke('t2h:skill', { action: action || 'status' }).then(function(r){
+      renderSkill(r || {});
+    }).catch(function(e){
+      $('skillNote').style.color = 'var(--err)';
+      $('skillNote').textContent = '出错了：' + (e && e.message ? e.message : e);
+      reportUi('skill-error');
+    }).then(function(){ b1.disabled = false; b2.disabled = false; });
+  }
+  $('btnSkillStatus').addEventListener('click', function(){ runSkill('status'); });
+  $('btnSkillInstall').addEventListener('click', function(){ runSkill('install'); });
+
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -4468,6 +4550,14 @@ withBridge(function(tauri){
         });
         return n;
       })(),
+      // AI 迁移技能（2026-11-01）：装没装 / cjh 看没看见 / references 份数
+      skillState: SKILL.state || "",
+      skillPath: SKILL.target || "",
+      skillRefs: (typeof SKILL.refs === "number") ? SKILL.refs : 0,
+      skillCjhSeen: SKILL.cjhSeen === true,
+      skillCjhCount: (typeof SKILL.cjhCount === "number") ? SKILL.cjhCount : 0,
+      skillSource: SKILL.source || "",
+      skillNote: SKILL.note || "",
       scanR: (window.__scan && window.__scan.R) || 0,
       scanD: (window.__scan && window.__scan.D) || 0,
       scanH: (window.__scan && window.__scan.H) || 0,

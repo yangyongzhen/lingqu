@@ -180,6 +180,8 @@ public class EnvCommand <: CommandHandler {
         res.put("reportPath", JsonString(envOr("LINGQU_REPORT_PATH", "")))
         // 置 LINGQU_BATCH_SAMPLES（`路径1|路径2`）就在启动时出一次 5 样本矩阵（T7-3，纯读盘、秒级）
         res.put("batchSamples", JsonString(envOr("LINGQU_BATCH_SAMPLES", "")))
+        // 置 LINGQU_SKILL=install 就在启动时装一次迁移技能（status 只查状态；秒级）
+        res.put("skillAction", JsonString(envOr("LINGQU_SKILL", "")))
         return res
     }
 }
@@ -1059,6 +1061,14 @@ public class UiReportCommand <: CommandHandler {
         o.put("aiFlatLeft", JsonInt(argInt(args, "aiFlatLeft", -1)))
         o.put("aiAvatars", JsonInt(argInt(args, "aiAvatars", 0)))
         o.put("aiAvatarsShown", JsonInt(argInt(args, "aiAvatarsShown", 0)))
+        // AI 迁移技能（2026-11-01）：装没装 / cjh 看没看见 / references 份数
+        o.put("skillState", JsonString(argStr(args, "skillState", "")))
+        o.put("skillPath", JsonString(argStr(args, "skillPath", "")))
+        o.put("skillRefs", JsonInt(argInt(args, "skillRefs", 0)))
+        o.put("skillCjhSeen", JsonBool(argBool(args, "skillCjhSeen", false)))
+        o.put("skillCjhCount", JsonInt(argInt(args, "skillCjhCount", 0)))
+        o.put("skillSource", JsonString(argStr(args, "skillSource", "")))
+        o.put("skillNote", JsonString(argStr(args, "skillNote", "")))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
@@ -2852,6 +2862,87 @@ func writeBatchMatrix(matrix: BatchMatrix, summary: BatchSummary, outDir: String
 }
 
 /**
+ * t2h:skill —— 把 `t2h-ohos-port` 技能装进 cjh（AI 接入计划第 1 步）。
+ *
+ * 背景：cjh 的技能是 `~/.cjh/skills/<name>.md`（frontmatter + 正文），正文会被拼进
+ * system prompt。本仓 `skills/t2h-ohos-port/` 一直只是躺在仓库里，cjh 从未见过，
+ * 所以 AI 助手对鸿蒙移植的坑/签名/工具链一无所知。这条命令负责"装进去 + 验证它真的看见了"。
+ *
+ * action：
+ *   status（默认）—— 查安装状态（missing/installed/outdated）+ 白名单语义 + references 份数
+ *   install       —— 安装（备份旧文件、链接改写为绝对路径、拷 references），装完问 cjh `/api/skills`
+ */
+public class SkillCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        let action = argStr(args, "action", "status")
+        let home = userHomeDir()
+        let settings = cjhSettingsPathOf(home)
+        let whitelist = readEnabledSkills(settings)
+        let enableNote = skillEnableNoteOf(whitelist)
+        let target = skillTargetPathOf(home)
+        let srcDir = skillSourceDir()
+
+        var installNote = ""
+        var backupPath = ""
+        var error = ""
+        var sourceKind = if (srcDir != "") { "repo" } else { "embedded" }
+        if (action == "install") {
+            let r = installSkill(home)
+            installNote = r.note
+            backupPath = r.backupPath
+            error = r.error
+            if (r.sourceKind != "") {
+                sourceKind = r.sourceKind
+            }
+        }
+
+        // 状态（install 之后重新算，别用装之前的缓存值）。
+        // 来源哈希**必须**用"应该装上去的那份正文"（含链接改写）算——拿原始 SKILL.md 去比
+        // 会永远报 outdated（0.32.0 第一版踩过）
+        let installedHash = skillHashOfFile(target)
+        let finalBody = skillFinalBodyOf(home)
+        let sourceHash = if (finalBody != "") { skillHashOfBytes(finalBody.toArray()) } else { "" }
+        let state = skillStateOf(installedHash != "", installedHash, sourceHash)
+        let refs = skillRefFiles(skillRefDirOf(home))
+        // 问 cjh：真看见了才算生效（没在跑就如实说未验证）
+        let seen = cjhSkillNames(cjhPort())
+        var seenIt = false
+        for (n in seen) {
+            if (n == SKILL_NAME) {
+                seenIt = true
+            }
+        }
+
+        var res = JsonObject()
+        res.put("ok", JsonBool(error == ""))
+        res.put("action", JsonString(action))
+        res.put("state", JsonString(state))
+        res.put("targetPath", JsonString(target))
+        res.put("refDir", JsonString(skillRefDirOf(home)))
+        res.put("refCount", JsonInt(Int64(refs.size)))
+        res.put("sourceDir", JsonString(srcDir))
+        res.put("sourceKind", JsonString(sourceKind))
+        res.put("enableNote", JsonString(enableNote))
+        res.put("whitelistCount", JsonInt(Int64(whitelist.size)))
+        res.put("backupPath", JsonString(backupPath))
+        res.put("note", JsonString(installNote))
+        res.put("error", JsonString(error))
+        res.put("cjhSkills", JsonInt(Int64(seen.size)))
+        res.put("cjhSeen", JsonBool(seenIt))
+        var names = JsonArray()
+        for (n in seen) {
+            names.add(JsonString(n))
+        }
+        res.put("cjhSkillNames", names)
+        eprintln("[lingqu][skill] action=${action} state=${state} refs=${refs.size} " +
+            "cjhSeen=${seenIt} source=${sourceKind}")
+        return res
+    }
+}
+
+/**
  * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。
  *
  * 把 0.17.0 手工跑通的那条链做成命令：`hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog。
@@ -3324,6 +3415,7 @@ public func build(): AppSpec {
         app.register("t2h:resume", ResumeCommand())
         app.register("t2h:report", ReportCommand())
         app.register("t2h:batch", BatchCommand())
+        app.register("t2h:skill", SkillCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

@@ -5,6 +5,66 @@
 
 ---
 
+## [0.32.0] - 2026-11-01
+
+**主题**：**AI 接入第 1 步 —— 把 `t2h-ohos-port` 技能真正装进 cjh**。
+在此之前 `skills/t2h-ohos-port/` 只是躺在仓库里，cjh 从未见过它：AI 助手对鸿蒙移植的坑、
+签名配方、工具链差异一无所知（只能靠模型自己的通用知识）。
+
+### Added
+
+- **命令 `t2h:skill`**（三处联动齐全，五个动作里本轮做两个）：
+  - `status`：安装状态（missing / installed / outdated，按**内容 SHA256**判，不看时间戳）
+    + `enabled_skills` 白名单语义 + references 份数 + **问 cjh `GET /api/skills` 是否真的加载了**
+  - `install`：把 SKILL.md 写到 `~/.cjh/skills/t2h-ohos-port.md`，references 拷到
+    `~/.cjh/skills/.t2h-ohos-port/references/`；覆盖前留 `.bak`；幂等
+- `src/skill_install.cj`（`lingqu` 包）：
+  - 纯函数：`cjhSkillsDirOf/skillTargetPathOf/skillRefDirOf`（路径约定）、
+    `rewriteSkillLinks`（把 `references/x.md` 改成**绝对路径**——agent 的 cwd 是用户工程，
+    相对路径必然读不到）、`skillStateOf`（三态）、`skillEnableNoteOf`（白名单语义，
+    **空=全部启用，不要乱加白名单**——加了会把别的技能关掉）、`skillSourceCandidates`（向上找仓库）
+  - 有 IO：`skillSourceDir`（`LINGQU_SKILL_SRC` → `LINGQU_HOME/skills` → cwd 上溯 6 层）、
+    `skillFinalBodyOf`（**安装与期望哈希共用同一条生成路径**）、`installSkill`、`cjhSkillNames`
+- ① 屏「AI 迁移技能」卡：安装状态 / cjh 已加载 / references 份数 / 来源 + 「查状态」「安装技能」
+- `ui_report` 新增 `skillState/skillPath/skillRefs/skillCjhSeen/skillCjhCount/skillSource/skillNote`；
+  探针 `LINGQU_SKILL=install|status`
+- `src/packed_assets.cj` 增 `PACKED_SKILL_B64` 存根（单文件产物里没有 `skills/` 目录时用内嵌正文）
+
+### 口径
+
+| 判据 | 怎么判 | 为什么 |
+|---|---|---|
+| 装了没 | 目标文件存在 + **内容哈希**比对来源 | 时间戳会被 checkout/复制骗过 |
+| 生效没 | **问 cjh `/api/skills` 里有没有它** | 装到磁盘 ≠ cjh 加载了（frontmatter 坏了/白名单关了都不可见） |
+| 白名单 | 空 = 全部启用；非空才提示"要不要加进去" | 乱加一项会把 cjh 自带的仓颉知识技能一起关掉 |
+
+### 证据（本机 Windows x64，2026-11-01）
+
+```
+装前：~/.cjh/skills 不存在
+LINGQU_SKILL=install →
+  ~/.cjh/skills/t2h-ohos-port.md                       5829 B
+  ~/.cjh/skills/.t2h-ohos-port/references/{arkweb-shims,cargo-patches,pitfalls,signing,toolchain}.md
+                                                      4668 / 5184 / 5467 / 9652 / 3267 B
+  ui_report：skillState=installed skillRefs=5 skillSource=repo
+             skillCjhSeen=true skillCjhCount=1 errorCount=0
+技能里的相对链接已改写为绝对路径：
+  [signing.md](C:\Users\yang\.cjh\skills\.t2h-ohos-port\references/signing.md)
+```
+
+> `skillCjhSeen=true` 是本轮最关键的证据：cjh 自己的 `/api/skills` 列出了这个技能，
+> 说明它**已经进入 system prompt 的注入范围**，不是"文件在那儿"而已。
+
+### 未做（如实）
+
+- 单文件产物里目前只能装**内嵌正文**（`PACKED_SKILL_B64` 存根还没被打包脚本填充，下一轮补）；
+  references 要 `LINGQU_SKILL_SRC` 指到仓库才拷得到
+- 「一键移除/卸载技能」没做；白名单写入（`POST /api/settings`）没做——当前机器 `enabled_skills`
+  为空（= 全部启用），不需要写配置，需要时再补
+- ① 之后的 ②③④ 见 `docs/进度记录.md` 的 AI 接入计划
+
+---
+
 ## [0.31.0] - 2026-11-01
 
 **主题**：**代码块语法高亮 + AI 回复平铺展开**。0.30.0 把 Markdown 渲染补上了；
