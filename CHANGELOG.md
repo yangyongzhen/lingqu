@@ -37,6 +37,32 @@
 - 用例改成常量驱动：`testStatePushSigKeepsWindow` 原先硬编码"推 12 条、留 6 条"，
   阈值一改就假红——现在按 `AUTOPORT_STALL_POLLS + 5` 推、按常量断言。
 
+### 追加（同一轮补做）：`autoport_start` 自动打开「断连不打断」
+
+上一条把责任推给了"用户手工配 settings.json"——这不对，**配置不该由人记**。现在
+`t2h:autoport_start` 在准备现场时自动调用 `ensureCjhKeepRunning(userHomeDir())`：
+
+- 新增 `src/cjh_settings.cj`：`ensureKeepRunningOnDisconnect(json)` 对 settings JSON 做
+  **定点修补**（不整体重排、不动用户注释与字段顺序），幂等；没有 `web` 段时原样返回、不乱写。
+- 结果回投 `keepRunningOnDisconnect` 字段（`already` / `written` / `no-settings` / `no-home` /
+  `error:…`），排障时一眼看出到底改没改。
+- 测试 `src/tests/cjh_settings_test.cj`：注入 / 幂等 / false→true / 无 web 段不动 / 空输入 /
+  home 缺失不抛。`cjpm test` 267 例全 PASS。
+
+**诊断（hap/sign 的 `ok=false`，同一个根因）**：hap 不是装配失败 —— 落档里
+`hapBytes=8151230`、`hasArm64So=true`、两个 so 都在（`libentry.so` + `libm3u8dl_tauri_lib.so`）；
+失败在 `default@SignHap`：
+
+    hvigor ERROR 00303107 Configuration Error
+    Invalid storeFile value. Make sure it is not null or empty.
+    The file must be included in 'C:\Users\yang\.ohos\config\default_ohos_cqJPvSnvtx…'
+
+工程 `build-profile.json5` 的 `signingConfigs` 指向 `default_ohos_cqJPvSnvtx…{cer,p7b,p12}`，
+而 `~/.ohos/config` 里现存的材料是另外几套（`sign` 落档 `candidateCount=4`，探测到
+`default_ohos-probe_…p7b` / `default_ohos_m7Gxh5…p7b` 等）——**写回时选中的那套文件不存在**。
+所以 hap 与 sign 是同一件事：签名材料选错/未写回，跟装配、跟 agent 都无关。下一步按
+`skills/t2h-ohos-port/references/signing.md` 的配方，改成"只挑现存且在 `~/.ohos/config` 内、
+profile 含本机 UDID（`B8861DAE…`）的那套"再写回，并重跑 `t2h:hap` 验证。
 ### 追加：这一轮把「整轮被打断」的**真凶**找到了（cjh 侧已修）
 
 复跑时观察到 `Agent.interrupt` 出现但 `abortSource=""`（两处 UI abort 入口都没被点），

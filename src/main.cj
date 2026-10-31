@@ -3752,6 +3752,10 @@ public class AutoPortStartCommand <: CommandHandler {
         }
 
         // ---- ③ 任务书 ----
+        // 先把 cjh 的「断连不打断本轮」打开：AI 自动迁移是无人值守长任务，
+        // 页面重连一次就把整轮 40+ 次工具调用作废，代价太大（0.39.7 实测）。
+        // 这条配置不该让用户手改，启动时补上；结果回投给界面便于断言。
+        let keepRunning = ensureCjhKeepRunning(userHomeDir())
         let inp = AutoPortInput()
         inp.project = name
         inp.projectDir = path
@@ -3799,6 +3803,7 @@ public class AutoPortStartCommand <: CommandHandler {
         res2.put("cliPath", JsonString(cliPath))
         res2.put("directive", JsonString(directive))
         res2.put("directiveChars", JsonInt(Int64(directive.size)))
+        res2.put("keepRunningOnDisconnect", JsonString(keepRunning))
         res2.put("directivePath", JsonString(directivePath))
         res2.put("directiveError", JsonString(directiveErr))
         // 真正要发出去的是这条短消息（任务书靠 agent 自己 read）
