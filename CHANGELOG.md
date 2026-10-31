@@ -5,6 +5,38 @@
 
 ---
 
+## [0.39.8] - 2026-11-01
+
+**主题**：**断点板跟着工程走**。`tasks.json` 原先写在灵渠应用目录、跨工程共用，
+于是打开 B 工程时顶部还显示 A 工程的进度——和「8 个路径框各填一遍」是同一个毛病：
+**同一件事实存了两份权威**。现在板子落在 `<工程>/.lingqu/tasks.json`，工程自包含。
+
+### 实跑证据（Windows x64，`lingqu-cli resume --path <工程>`，五道闸全绿 / 275 例）
+
+    habit-tree   → "out": "E:\\test\\rust\\habit-tree\\.lingqu\\tasks.json"     done=7/8 next=deploy
+    m3u8dl-tauri → "out": "E:\\test\\rust\\m3u8dl-tauri\\.lingqu\\tasks.json"   done=4/8 next=hap
+    habit-tree 板子 SHA256 在跑 m3u8dl-tauri 前后**不变**（两工程互不覆盖）
+
+### Changed
+
+- `src/task_feed.cj`：`taskBoardPath()` → **`taskBoardPathFor(projectPath)`**（单点定义，内部走
+  `lqPathOf`）+ `legacyTaskBoardPath()` 保留旧应用级位置；`saveTaskBoard(board, projectPath)`
+  改工程级写盘，目录改为 **`recursive: true`** 创建（换成工程级路径后不建目录会直接写失败）。
+- **读侧双查**（迁移期不丢证据）：读板一律 `resolveLqPath(projPath, "tasks.json")` —— 工程优先、
+  CWD 兜底，旧板子照旧读得到（AGENTS §4-33 的纪律：产出方与消费方同批改）。
+- 消费方同批切换：`ResumeCommand`（读板 + `out` 回投 + 写回落 `path`，没给就沿用板子里记的工程）、
+  `ReportCommand`（读板取工程名）、`report_feed.cj` 的证据清单（记实际用的那个路径）。
+- 文案三处对齐事实：`agent_context.cj` 的注入说明（原写"在灵渠应用目录、跨工程共用"）、
+  界面「刷新断点」的 tooltip、`agent_ctx_path_test.cj` 的断言。
+
+### Added
+
+- `src/tests/task_board_path_test.cj`（4 例）：板子跟工程走 / 无工程回落旧位置 /
+  双读工程优先 / 双读回落不抛。**断言不断死分隔符**（`cjhPathSep()` 在 Windows 上是 `\`），
+  且明确允许「工程与 CWD 都没有板子 → 回落旧板子」这条合法路径（测试 CWD 是仓库根，
+  本来就躺着一块应用级旧板子，这个分支没法稳定构造成"两处都没有"）。
+- ADR **D-016**：断点板跟工程走（写入位置 = 工程，读侧双查兜底，迁移完成后可删兜底）。
+
 ## [0.39.7] - 2026-11-01
 
 **主题**：把"假停滞"彻底修掉（0.39.6 只修了一半），并拿到第一次**完整链路**实跑证据：

@@ -67,7 +67,7 @@ public func agentContextBodyWith(projName: String, projDir: String, cliPath: Str
     text += "| `.lingqu/report/${projName}.md` | 三段式迁移报告 |\n"
     text += "| `.lingqu/migrate/${projName}.md` | 上一次一键迁移的结果卡 |\n"
     text += "| `.lingqu/<步骤>/${projName}.log` | 该步骤的原始日志（build/hap/sign/deploy/verify 有） |\n\n"
-    text += "（8 步断点板 `.lingqu/tasks.json` 在**灵渠应用目录**，跨工程共用；用 `resume` 命令读它即可。）\n\n"
+    text += "（8 步断点板 `.lingqu/tasks.json` 也**在本工程根**，跟着工程走；用 `resume` 命令读它即可。）\n\n"
     text += "### 工具（在工程根直接跑；界面上的按钮是同一份实现）\n\n"
     if (cliPath.size > 0) {
         text += "入口（绝对路径，路径有空格就整条加双引号）：`${cliPath}`\n\n"

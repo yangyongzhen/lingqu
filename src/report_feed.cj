@@ -156,7 +156,7 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
 
     // ⑤ 证据与产物
     facts.evidenceCount = countEvidenceFiles(projName)
-    facts.artifacts.add(("断点板（8 步状态）", taskBoardPath()))
+    facts.artifacts.add(("断点板（8 步状态）", resolveLqPath(projPath, "tasks.json")))
     addArtifactIfExists(facts.artifacts, "扫描画像", ".lingqu/scan/${projName}.json")
     addArtifactIfExists(facts.artifacts, "依赖矩阵", ".lingqu/deps/${projName}.json")
     addArtifactIfExists(facts.artifacts, "人工决策", ".lingqu/port/${projName}/decisions.json")

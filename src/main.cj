@@ -2577,7 +2577,7 @@ public class ResumeCommand <: CommandHandler {
         if (projName != "") {
             board = collectTaskBoard(projName, path, now)
         } else {
-            match (readJsonOrNone(taskBoardPath())) {
+            match (readJsonOrNone(resolveLqPath(path, "tasks.json"))) {
                 case Some(root) =>
                     board = parseTaskBoardValue(root)
                     // 板子里有工程名就按它重新观测（"接着上次继续"不需要再填一次路径）
@@ -2618,9 +2618,11 @@ public class ResumeCommand <: CommandHandler {
             err = "不认识的 action：${action}（status|mark|redo|reset|session）"
         }
 
+        // 板子跟着工程走：有 path 用它，没给就沿用板子里记的工程路径（"接着上次继续"）
+        let writePath = if (path.size > 0) { path } else { board.path }
         var outError = ""
         if (err == "") {
-            outError = saveTaskBoard(board)
+            outError = saveTaskBoard(board, writePath)
         }
 
         let p = taskProgress(board)
@@ -2634,7 +2636,7 @@ public class ResumeCommand <: CommandHandler {
         res.put("action", JsonString(action))
         res.put("project", JsonString(board.project))
         res.put("path", JsonString(board.path))
-        res.put("out", JsonString(taskBoardPath()))
+        res.put("out", JsonString(taskBoardPathFor(writePath)))
         res.put("next", JsonString(next))
         res.put("nextTitle", JsonString(if (next == "") { "" } else { taskStepTitle(next) }))
         res.put("done", JsonInt(p.done))
@@ -2694,7 +2696,7 @@ public class ReportCommand <: CommandHandler {
             projName = sanitizeFileName(projectNameOf(path))
         } else {
             // 没给路径：沿用断点板里的工程名，省得为了出报告再填一遍
-            match (readJsonOrNone(taskBoardPath())) {
+            match (readJsonOrNone(resolveLqPath(path, "tasks.json"))) {
                 case Some(root) => projName = parseTaskBoardValue(root).project
                 case None => ()
             }

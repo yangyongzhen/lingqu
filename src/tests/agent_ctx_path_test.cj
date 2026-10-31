@@ -20,8 +20,9 @@ public func testAgentContextBodySaysProjectRoot(): Unit {
     @Assert(b.contains(".lingqu/port/habit-tree/decisions.json"), true)
     @Assert(b.contains(".lingqu/migrate/habit-tree.md"), true)
     @Assert(b.contains(".lingqu/<步骤>/habit-tree.log"), true)
-    // 断点板在老位置，必须说明白（否则 agent 会去工程里找 tasks.json）
-    @Assert(b.contains("灵渠应用目录") && b.contains("tasks.json"), true)
+    // 断点板 0.39.8 起也跟着工程走（同一份 `.lingqu/`），文案必须与事实一致
+    @Assert(b.contains("tasks.json"), true)
+    @Assert(b.contains("也**在本工程根**"), true)
 }
 
 @Test

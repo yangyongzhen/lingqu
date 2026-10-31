@@ -13,9 +13,25 @@ import stdx.encoding.json.*
  *   · 观测只读不写工程文件，也不跑任何子进程——断点续迁不该有副作用
  */
 
-/** 落档文件的统一位置（单点定义：产出方与消费方共用，见 AGENTS §4-33 的教训） */
-public func taskBoardPath(): String {
-    return ".lingqu/tasks.json"
+/**
+ * 断点板位置（单点定义）：**跟着工程走** —— `<工程>/.lingqu/tasks.json`。
+ *
+ * 0.39.8 之前板子在**灵渠应用目录**（相对 CWD 的 `.lingqu/tasks.json`），跨工程共用：
+ * 打开 B 工程时顶部还显示 A 工程的进度 —— 和"8 个路径框各填一遍"是同一个毛病：
+ * 同一件事实存了两份权威。现在板子归工程自包含，换机器/换会话都能自证。
+ *
+ * `projectPath` 为空 → 退回旧路径（CLI 或没有工程上下文的调用方仍然可用）。
+ *
+ * **读侧别直接拼**：一律用 `resolveLqPath(projPath, "tasks.json")`（工程优先、CWD 兜底），
+ * 否则切换后旧板子会突然读不到 —— AGENTS §4-33 的教训（改落档路径必须产出方与消费方同批改）。
+ */
+public func taskBoardPathFor(projectPath: String): String {
+    return lqPathOf(projectPath, "tasks.json")
+}
+
+/** 旧位置（应用级，只在没有工程路径时出现；迁移期读侧靠 resolveLqPath 兜底） */
+public func legacyTaskBoardPath(): String {
+    return lqPathOf("", "tasks.json")
 }
 
 /** 一步的落档观测结果 */
@@ -220,7 +236,8 @@ func fillObservation(obs: StepObservation, stepId: String, root: JsonValue): Uni
  */
 public func collectTaskBoard(projName: String, projPath: String, now: String): TaskBoard {
     var board = newTaskBoard()
-    match (readJsonOrNone(taskBoardPath())) {
+    // 工程优先、CWD 兜底：迁移期旧板子（应用目录）照样读得到
+    match (readJsonOrNone(resolveLqPath(projPath, "tasks.json"))) {
         case Some(root) => board = parseTaskBoardValue(root)
         case None => board = newTaskBoard()
     }
@@ -251,12 +268,19 @@ public func collectTaskBoard(projName: String, projPath: String, now: String): T
     return board
 }
 
-/** 落盘（命令层调用）：写前把旧文件留一份 `.bak`，断点记录本身就是证据，别让它被一次写坏 */
-public func saveTaskBoard(board: TaskBoard): String {
-    let p = taskBoardPath()
+/**
+ * 落盘（命令层调用）：写前把旧文件留一份 `.bak`，断点记录本身就是证据，别让它被一次写坏。
+ *
+ * 写位置由 `projectPath` 决定（工程级）；工程路径为空时退回旧的应用级位置。
+ * 目录不存在会**递归创建**——0.39.7 之前这里只 `Directory.create(".lingqu")`，
+ * 换成工程级路径后不建目录会直接写失败。
+ */
+public func saveTaskBoard(board: TaskBoard, projectPath: String): String {
+    let p = taskBoardPathFor(projectPath)
+    let dir = lqDirOf(projectPath)
     try {
-        if (!exists(Path(".lingqu"))) {
-            Directory.create(Path(".lingqu"))
+        if (!exists(Path(dir))) {
+            Directory.create(Path(dir), recursive: true)
         }
         if (exists(Path(p))) {
             File.writeTo("${p}.bak", File.readFrom(p))
