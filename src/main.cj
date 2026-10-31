@@ -1267,6 +1267,8 @@ public class UiReportCommand <: CommandHandler {
         o.put("wsSendFail", JsonInt(argInt(args, "wsSendFail", 0)))
         o.put("wsLastSendErr", JsonString(argStr(args, "wsLastSendErr", "")))
         o.put("wsFrameTypes", JsonString(argStr(args, "wsFrameTypes", "")))
+        // 断线重连次数（0.39.5）：重连不设上限后，用它断言"页面真的在重连"
+        o.put("wsReconnects", JsonInt(argInt(args, "wsReconnects", 0)))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))

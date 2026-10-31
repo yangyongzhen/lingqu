@@ -3552,9 +3552,16 @@ withBridge(function(tauri){
   }
 
   function scheduleReconnect() {
-    if (CJ.timer || CJ.retry >= 12) return;
+    // 重连**不设次数上限**，只给退避封顶 5s：引擎比应用起得慢、或换了引擎实例（开发期重建 cjh）
+    // 都属正常，以前 `CJ.retry >= 12` 就永久放弃 → 页面停在「连接已断开」，得手动点部署才回来。
+    if (CJ.timer) return;
     CJ.retry += 1;
-    CJ.timer = setTimeout(function(){ CJ.timer = null; wsConnect(); }, Math.min(800 * CJ.retry, 5000));
+    CJ.reconnects = (CJ.reconnects || 0);
+    CJ.timer = setTimeout(function(){
+      CJ.timer = null;
+      CJ.reconnects += 1;
+      wsConnect();
+    }, Math.min(800 * Math.min(CJ.retry, 6), 5000));
   }
 
   function wsConnect() {
@@ -5504,6 +5511,7 @@ withBridge(function(tauri){
       wsSendFail: (typeof CJ.sendFail === 'number') ? CJ.sendFail : 0,
       wsLastSendErr: CJ.lastSendErr || '',
       // 收到过的帧类型计数（"cjh 到底回了什么"的唯一证据；history_messages 说明是会话类帧）
+      wsReconnects: (typeof CJ.reconnects === 'number') ? CJ.reconnects : 0,
       wsFrameTypes: (function(){
         var m = CJ.frameTypes || {};
         var parts = [];
