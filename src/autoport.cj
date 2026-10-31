@@ -215,6 +215,18 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "- 真机装不上先看 `.lingqu/sign/<工程>.json` 的签名态：release 态装不上（9568322）是正常的，别去修；\n"
     d += "- 不确定就先用 `git stash` 或用我们 `.lingqu` 里的备份兜底，再重试。\n\n"
 
+    d += "## 交叉编译的硬前置（缺了必然失败）\n"
+    d += "- 交叉编译依赖工程里的 `src-tauri/.cargo/config.toml` 两段：\n"
+    d += "  ① `[target.aarch64-unknown-linux-ohos]` 的 linker / ar / rustflags；\n"
+    d += "  ② **`[env]` 段的 `CC_aarch64_unknown_linux_ohos` / `AR_…` / `CFLAGS_…`** —— "
+    d += "ring、openssl 这类**含 C 代码**的依赖靠它找到 NDK clang。\n"
+    d += "- 缺 ② 的症状：`cc-rs: command did not execute successfully: \"cc\" … "
+    d += "--target=aarch64-unknown-linux-ohos`（0.39.7 实测：`ring` 的 curve25519.c 编译失败，build 落档 exitCode=101）。\n"
+    d += "- 看到这条错**先查 `.cargo/config.toml` 的 `[env]` 段**，不要改 Rust 源码；"
+    d += "`t2h:port` 的 R2-PORT-008 在缺段时会给出要追加的片段。\n"
+    d += "- 回滚改造时别只回滚 `Cargo.toml`：`.cargo/config.toml` 与 `rust-toolchain.toml` 是交叉编译的地基，"
+    d += "把它们回滚掉等于把 build 打回失败态。\n\n"
+
     d += "## 预算与收尾\n"
     d += "- 最多 ${budget} 轮工具调用、约 ${minutes} 分钟；到上限就收尾，别硬撑；\n"
     d += "- **每完成一步用一行报进度**：`[步骤] 通过/未过 ｜ 一句话`；\n"
@@ -254,6 +266,20 @@ public func isStalled(history: ArrayList<String>, window: Int64): Bool {
 
 /** 快照签名：把 8 步的 (步骤, 在不在, 过没过, 摘要) 压成一行，用于停滞比较 */
 public func autoportSnapshot(rows: ArrayList<MigrateRow>): String {
+    return autoportSnapshotWith(rows, -1)
+}
+
+/**
+ * 快照签名 + **agent 活动量**（0.39.8）
+ *
+ * 为什么必须带上 agent 活动：0.39.7 端到端实测，agent 正在跑分钟级交叉编译时落档当然不动，
+ * 连续 6 次轮询就被判「AI 好像在绕圈」——它其实在干活（那轮 trace 有 24 次工具调用）。
+ * 假停滞会诱导人去按中止，等于把正在干活的代理打断。
+ *
+ * @param traceLines 会话跟踪文件（`<工程>/.lingqu/agent/trace.jsonl`）的行数；
+ *                   传负数表示"取不到"，此时退化成只看落档（老行为）。
+ */
+public func autoportSnapshotWith(rows: ArrayList<MigrateRow>, traceLines: Int64): String {
     var s = ""
     for (r in rows) {
         var state = "none"
@@ -268,6 +294,9 @@ public func autoportSnapshot(rows: ArrayList<MigrateRow>): String {
             s += "|"
         }
         s += "${r.step}:${state}:${r.note}"
+    }
+    if (traceLines >= 0) {
+        s += "|agent:${traceLines}"
     }
     return s
 }

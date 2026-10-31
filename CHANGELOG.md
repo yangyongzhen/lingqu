@@ -5,6 +5,63 @@
 
 ---
 
+## [0.39.6] - 2026-11-01
+
+**主题**：端到端实跑暴露的两个"能打死整轮"的问题各修一处——停滞判定并入 agent 活动、
+abort 留痕；交叉编译的 C 依赖环境不再"半配好就当已配好"。
+
+### 实跑证据（Windows x64，`LINGQU_UI_PROBE=ai-full`，m3u8dl-tauri，cjh 分支构建 + `CJH_BASH_TIMEOUT=600`）
+
+    ui_report：wsState=connected  wsSendFail=0  cjhBin=<分支产物>  toolCards=24  agentTraceLines=48
+    wsFrameTypes：delta:91  tool_start:24  tool_result:23  history_messages:1
+    落档：scan 5.8 KB / deps 175 KB / port（5 条规则 applied）/ build（6.3 KB + 298 KB jsonl + 4.7 KB log）
+
+- **好的一面（上一轮 cjh 修复生效）**：agent 的长命令变成
+  `"…main.exe" build --path . > /tmp/build.log 2>&1; echo "EXIT:$?"; tail -40 /tmp/build.log`
+  —— **不再 `| tail`**；24 次工具调用无一次卡满超时；事后会话 shell 空闲、无残留子进程。
+- **坏的一面（本轮修）**：① 页面重连两次后 cjh 往旧 WS 写帧抛 10053，**整轮 run 当场结束**，
+  那条 build 的 `tool_result` 永久丢失（cjh 侧已修，MR !11 `840dc85`）；
+  ② 分钟级交叉编译期间落档当然不动，连续 6 次轮询被判「AI 好像在绕圈」——假停滞。
+  该轮 `Agent.interrupt` 有记录但**没有** `autoport-stop` 标签，说明按的是对话面板那个 abort；
+  现在两处 abort 都会标来源。
+
+### Added
+
+- `t2h:ui_report` 新增 `abortSource` / `abortAt`：停止按钮 → `stop-button`、对话面板「中止」→ `chat-abort`，
+  不再出现"cjh 收到 interrupt 却查不到谁按的"。
+- `autoportSnapshotWith(rows, traceLines)`：停滞签名并入 agent 活动量
+  （`<工程>/.lingqu/agent/trace.jsonl` 行数）；`autoportSnapshot` 保留，等价于 `traceLines=-1`。
+- `cargoEnvOnlyToml(sdkNative)`：只补 `[env]` 段的片段，用于工程已有 `.cargo/config.toml`
+  但缺 C 依赖环境的场景（不覆盖既有 linker 配置）。
+
+### Changed
+
+- 任务书新增「交叉编译的硬前置」：`.cargo/config.toml` 的 `[target…]` **和** `[env]` 两段都要在；
+  缺 `[env]` 的症状是 `cc-rs: … "cc" … --target=aarch64-unknown-linux-ohos`（`ring` 的 curve25519.c
+  实测失败，build 落档 `exitCode=101`）；看到这条错先查 `[env]`，别改 Rust 源码；
+  回滚改造别只回滚 `Cargo.toml`。
+
+### Fixed
+
+- **R2-PORT-008 幂等判据误判"已配好"**：原判据只看文件里有没有 `aarch64-unknown-linux-ohos`。
+  m3u8dl-tauri 的 `.cargo/config.toml` 有 target 段却**没有 `[env]`**，于是被判"跳过"，
+  而 `ring` 这类含 C 代码的依赖只能退回宿主 `cc` → 交叉编译必然失败。现在要求
+  target 段 + `CC_aarch64_unknown_linux_ohos` 都在才算跳过；半配好降成 **guide**
+  （`applied=false` / `needsHuman=true` / `after` 给出应追加的片段），既不动用户文件也不假装完成。
+- 版本三处对齐：`cjpm.toml` / `cj-tauri.toml` 0.39.3 → **0.39.6**（此前已落后代码两个小版本）。
+
+---
+
+## [0.39.5] - 2026-11-01
+
+### Fixed
+
+- 页面断线**重连不设次数上限**（backoff 封顶 5s）：换引擎实例 / 引擎重启后，页面不再永久停在
+  「连接已断开——回复可能不完整」。
+- `t2h:ui_report` 新增 `wsReconnects`，用来断言"页面真的在重连"。
+
+---
+
 ## [0.39.4] - 2026-11-01
 
 **主题**：cjh 第 4 个 PR（bash `timeout` 参数）合入后复跑全自动 —— **AI 第一次把没迁过的样本编译到 exit=0**。

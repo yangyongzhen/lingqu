@@ -2651,7 +2651,10 @@ withBridge(function(tauri){
   var CJ = {
     port: 0, up: false, connecting: false, retry: 0, timer: null, session: '',
     frames: 0, toolCards: 0, approvals: 0, lastType: '', lastError: '',
-    acc: '', curBubble: null, flushTimer: null, curApproval: null
+    acc: '', curBubble: null, flushTimer: null, curApproval: null,
+    // 中止来源留痕（0.39.8）：0.39.7 端到端跑出现「agent 被 interrupt 但不知谁按的」，
+    // 现在每处 abort 都标来源，随 ui_report 回投，别再靠猜（是哪个入口按的）
+    abortSource: '', abortAt: 0
   };
 
   function wsUrl() { return 'ws://127.0.0.1:' + (CJ.port || 8765) + '/ws'; }
@@ -3201,7 +3204,7 @@ withBridge(function(tauri){
       invoke('t2h:migrate_cancel').then(function(){});
       invoke('t2h:autoport_stop').then(function(){});
       stopMigratePolling();
-      try { wsSend({ type: 'abort' }); } catch (e) {}
+      try { CJ.abortSource = 'stop-button'; CJ.abortAt = Date.now(); wsSend({ type: 'abort' }); } catch (e) {}
       AIP.active = false;
       if ($('migrateNote')) { $('migrateNote').textContent = '已请求停止。'; }
       reportUi('autoport-stop');
@@ -3687,7 +3690,13 @@ withBridge(function(tauri){
     addMsg('ai', '新会话已开始。');
     renderWsState();
   };
-  $('aiAbort').onclick = function(){ wsSend({ type: 'abort' }); };
+  $('aiAbort').onclick = function(){
+    // 这里的 abort 不发 t2h:autoport_stop，所以不会有 autoport-stop 标签 ——
+    // 0.39.7 端到端现场就是"cjh 收到 interrupt 却查不到谁按的"，现在标来源
+    CJ.abortSource = 'chat-abort';
+    CJ.abortAt = Date.now();
+    wsSend({ type: 'abort' });
+  };
 
   // 事件挂载（capabilities 已放行 ws:frame / ws:state）
   tauri.listen('ws:frame', function(p){
@@ -5512,6 +5521,8 @@ withBridge(function(tauri){
       wsLastSendErr: CJ.lastSendErr || '',
       // 收到过的帧类型计数（"cjh 到底回了什么"的唯一证据；history_messages 说明是会话类帧）
       wsReconnects: (typeof CJ.reconnects === 'number') ? CJ.reconnects : 0,
+      abortSource: String(CJ.abortSource || ''),
+      abortAt: Number(CJ.abortAt || 0),
       wsFrameTypes: (function(){
         var m = CJ.frameTypes || {};
         var parts = [];

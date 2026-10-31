@@ -122,6 +122,60 @@ public func testSnapshotChangesWhenStepChanges(): Unit {
 }
 
 @Test
+public func testSnapshotWithAgentActivityBreaksTie(): Unit {
+    // 0.39.8：落档一动不动但 agent 在干活（trace 在长）时，**不许**判成绕圈。
+    // 0.39.7 端到端实测：分钟级交叉编译期间落档自然不变，连续 6 次轮询就报
+    // 「AI 好像在绕圈」，把正在干活的代理判死。
+    let rows = ArrayList<MigrateRow>()
+    rows.add(mkAutoRow("scan", true, true, "R=24"))
+    rows.add(mkAutoRow("build", false, false, ""))
+    // 老快照（只落档）→ 三次一样 = 卡住
+    let old = autoportSnapshot(rows)
+    @Assert(isStalled(threeOf(old), 3), true)
+    // 带 agent 活动量：trace 在长 → 签名跟着变 → 不算卡住
+    let h = ArrayList<String>()
+    h.add(autoportSnapshotWith(rows, 10))
+    h.add(autoportSnapshotWith(rows, 12))
+    h.add(autoportSnapshotWith(rows, 15))
+    @Assert(isStalled(h, 3), false)
+    // 取不到 trace（负数）→ 退化成只看落档
+    @Assert(autoportSnapshotWith(rows, -1), old)
+    // trace 也不动了 = 真的没动静 → 仍判卡住
+    let flat = ArrayList<String>()
+    flat.add(autoportSnapshotWith(rows, 20))
+    flat.add(autoportSnapshotWith(rows, 20))
+    flat.add(autoportSnapshotWith(rows, 20))
+    @Assert(isStalled(flat, 3), true)
+}
+
+@Test
+public func testDirectiveHasCrossCompilePrerequisites(): Unit {
+    // 0.39.7 实测：m3u8dl-tauri 的 .cargo/config.toml 有 target 段但缺 [env]，
+    // ring 的 cc-rs 退回宿主 cc → build 落档 exitCode=101。任务书必须把这条写成硬前置。
+    let inp = AutoPortInput()
+    inp.project = "lingqu-probe-app"
+    inp.projectDir = "/tmp/lingqu-probe-app"
+    inp.cliPath = "/opt/lingqu-cli"
+    inp.budget = 40
+    inp.minutes = 40
+    let d = buildAutoPortDirective(inp)
+    @Assert(d.contains("CC_aarch64_unknown_linux_ohos"), true)
+    @Assert(d.contains("cc-rs"), true)
+    @Assert(d.contains(".cargo/config.toml"), true)
+    // 回滚纪律也要写上（只回滚 Cargo.toml 会把 build 打回失败态）
+    @Assert(d.contains("别只回滚"), true)
+}
+
+/** 造一份"三次相同"的历史，给停滞判定用 */
+func threeOf(sig: String): ArrayList<String> {
+    let h = ArrayList<String>()
+    h.add(sig)
+    h.add(sig)
+    h.add(sig)
+    return h
+}
+
+@Test
 public func testAutoportVerdictStates(): Unit {
     let empty = ArrayList<MigrateRow>()
     @Assert(autoportVerdict(empty, false, false), "还没开始")

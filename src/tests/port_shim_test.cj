@@ -61,6 +61,64 @@ public func testToolchainOutcomesIdempotentFlag(): Unit {
 }
 
 @Test
+public func testCargoEnvOnlyTomlShape(): Unit {
+    // R2-PORT-008 缺段时给"只补 [env]"的片段：不能整份覆盖用户既有的 linker 配置
+    let s = cargoEnvOnlyToml("/opt/sdk/native")
+    @Assert(s.contains("[env]"), true)
+    @Assert(s.contains("CC_aarch64_unknown_linux_ohos = \"/opt/sdk/native/llvm/bin/clang\""), true)
+    @Assert(s.contains("AR_aarch64_unknown_linux_ohos"), true)
+    @Assert(s.contains("--sysroot=/opt/sdk/native/sysroot"), true)
+    // 片段里不该再出现 target 段（那是既有文件已经有的）
+    @Assert(s.contains("[target.aarch64-unknown-linux-ohos]"), false)
+}
+
+@Test
+public func testToolchain008GuideWhenEnvMissing(): Unit {
+    // 0.39.7 实测：m3u8dl-tauri 的 .cargo/config.toml 有 target 段、缺 [env] →
+    // ring 的 cc-rs 退回宿主 cc，报 `cc-rs: … "cc" … --target=aarch64-unknown-linux-ohos`。
+    // 这种"半配好"必须降成 guide（不写盘、不覆盖），而不是当成已配好跳过。
+    let dir = "/tmp/lingqu-ccenv-probe"
+    let cargoDir = "${dir}/.cargo"
+    try {
+        if (!exists(Path(cargoDir))) {
+            Directory.create(Path(cargoDir), recursive: true)
+        }
+        File.writeTo("${cargoDir}/config.toml",
+            "[target.aarch64-unknown-linux-ohos]\nlinker = \".\\\\ohos-clang.cmd\"\n".toArray())
+    } catch (e: Exception) {
+        return // /tmp 不可写则跳过，不造假
+    }
+    let outs = toolchainOutcomes(dir, "/opt/sdk/native", false)
+    let o8 = outs[1]
+    @Assert(o8.id, "R2-PORT-008")
+    @Assert(o8.applied, false)          // 不覆盖用户文件
+    @Assert(o8.tier, T_GUIDE)
+    @Assert(o8.needsHuman, true)        // 计一次人工介入（A3 口径）
+    @Assert(o8.note.contains("缺 [env]"), true)
+    @Assert(o8.after.contains("CC_aarch64_unknown_linux_ohos"), true)
+}
+
+@Test
+public func testToolchain008SkipsWhenEnvPresent(): Unit {
+    // 正常路径：target 段 + [env] 都在 → 跳过，不误报人工介入
+    let dir = "/tmp/lingqu-ccenv-probe2"
+    let cargoDir = "${dir}/.cargo"
+    try {
+        if (!exists(Path(cargoDir))) {
+            Directory.create(Path(cargoDir), recursive: true)
+        }
+        File.writeTo("${cargoDir}/config.toml", cargoConfigToml("/opt/sdk/native").toArray())
+    } catch (e: Exception) {
+        return
+    }
+    let outs = toolchainOutcomes(dir, "/opt/sdk/native", false)
+    let o8 = outs[1]
+    @Assert(o8.applied, false)
+    @Assert(o8.needsHuman, false)
+    @Assert(o8.note.contains("跳过"), true)
+}
+
+@Test
 public func testCountersAutoAndGuide(): Unit {
     // T4-8 分档计数（0.13.1 语义）：auto = 规则机械完成；guide = **需要人拍板**（needsHuman），
     // 与 applied（动没动手）分开——008/010 那种"不写坏文件但必须人来填"的项以前被漏计

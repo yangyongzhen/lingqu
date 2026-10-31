@@ -1269,6 +1269,10 @@ public class UiReportCommand <: CommandHandler {
         o.put("wsFrameTypes", JsonString(argStr(args, "wsFrameTypes", "")))
         // 断线重连次数（0.39.5）：重连不设上限后，用它断言"页面真的在重连"
         o.put("wsReconnects", JsonInt(argInt(args, "wsReconnects", 0)))
+        // 中止来源（0.39.8）：0.39.7 端到端跑出现"cjh 收到 interrupt 但查不到谁按的"，
+        // 现在两处 abort 入口（停止按钮 / 对话面板中止）都标来源，随报告留痕
+        o.put("abortSource", JsonString(argStr(args, "abortSource", "")))
+        o.put("abortAt", JsonInt(argInt(args, "abortAt", 0)))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
@@ -3859,7 +3863,9 @@ public class AutoPortStatusCommand <: CommandHandler {
             }
             rows.add(row)
         }
-        let sig = autoportSnapshot(rows)
+        // 停滞判定要带上 agent 活动量：分钟级交叉编译期间落档当然不动，
+        // 只看落档会把"正在干活"误判成"在绕圈"（0.39.7 实测踩到）
+        let sig = autoportSnapshotWith(rows, agentTraceLines(path))
         var stalled = false
         var polls: Int64 = 0
         synchronized(gAutoPortLock) {

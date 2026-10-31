@@ -58,6 +58,19 @@ public func cargoConfigToml(sdkNative: String): String {
     return s
 }
 
+/** 只含 `[env]` 段的片段：给"已有 .cargo/config.toml 但缺 C 依赖环境"的工程追加用 */
+public func cargoEnvOnlyToml(sdkNative: String): String {
+    var s = ""
+    s += "\n# === lingqu: R2-PORT-008（补齐 C 依赖交叉编译环境）===\n"
+    s += "# 缺这段时 ring / openssl 这类 C 依赖的 cc-rs 会退回宿主 `cc`，报\n"
+    s += "# `cc-rs: command did not execute successfully: \"cc\" … --target=aarch64-unknown-linux-ohos`。\n"
+    s += "[env]\n"
+    s += "CC_aarch64_unknown_linux_ohos = \"${sdkNative}/llvm/bin/clang\"\n"
+    s += "AR_aarch64_unknown_linux_ohos = \"${sdkNative}/llvm/bin/llvm-ar\"\n"
+    s += "CFLAGS_aarch64_unknown_linux_ohos = \"-target aarch64-linux-ohos --sysroot=${sdkNative}/sysroot -D__MUSL__\"\n"
+    return s
+}
+
 /**
  * T4-3 编排：检查两个工具链文件是否已存在，缺则给出要写的内容。
  * 只生成 outcome（含 fullContent），写盘由命令层统一做（ dry-run 不动文件）。
@@ -83,11 +96,23 @@ public func toolchainOutcomes(srcTauriDir: String, sdkNative: String, hostIsWind
     let ccContent = cargoConfigToml(sdkNative)
     var o8 = RuleOutcome("R2-PORT-008", false, "", "", ccContent)
     o8.tier = T_AUTO
-    if (fileContains(ccPath, "aarch64-unknown-linux-ohos")) {
-        o8.note = ".cargo/config.toml 已配置 OHOS target——跳过"
+    if (fileContains(ccPath, "[env]") && fileContains(ccPath, "CC_aarch64_unknown_linux_ohos")) {
+        o8.note = ".cargo/config.toml 已配 OHOS target + [env] C 依赖环境——跳过"
+    } else if (fileContains(ccPath, "aarch64-unknown-linux-ohos")) {
+        // 0.39.8 实测教训：只判"文件里出现过 aarch64-unknown-linux-ohos"会误判成已配好。
+        // m3u8dl-tauri 的 config.toml 有 target 段却**没有 [env] 段** → ring 的 cc-rs
+        // 退回宿主 `cc` → `cc-rs: command did not execute successfully: "cc" …
+        // --target=aarch64-unknown-linux-ohos`，交叉编译必然失败。
+        // 既不覆盖用户既有的 linker 配置，也不假装已配好：降成 guide，
+        // 把缺的那段作为方案交给人/agent 追加（applied=false ⇒ 命令层不写盘）。
+        o8.tier = T_GUIDE
+        o8.needsHuman = true
+        o8.after = cargoEnvOnlyToml(sdkNative)
+        o8.note = ".cargo/config.toml 有 OHOS target 段但缺 [env] 的 CC_/AR_/CFLAGS_" +
+            "——C 依赖（ring/openssl 等）会用宿主 cc 编译而失败；把 after 段追加进去（不覆盖现有 linker 配置）"
     } else {
         o8.applied = true
-        o8.note = "生成 .cargo/config.toml（NDK clang 链接器 + sysroot rustflags）"
+        o8.note = "生成 .cargo/config.toml（NDK clang 链接器 + sysroot rustflags + [env] C 依赖环境）"
     }
     out.add(o8)
 

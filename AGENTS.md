@@ -221,6 +221,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 68 | 一键迁移这类"分钟级 + 多步"的命令写成同步 handler → 整个 IPC 命令面被堵死，页面连进度、点「停止」都发不出去 | 长任务一律**起后台线程 + 状态放内存**，命令只返回"已启动"，进度用另一条只读命令轮询（本项目 900ms）。见 `t2h:migrate` / `t2h:migrate_status`；`wait` 只给命令行用 |
 | 69 | 改了 `src/` 却只重建业务包 → `run-dev.sh` 起的还是旧行为（"改了没生效"） | `run-dev.sh` 跑的是 **`targets/desktop`** 的产物；业务包改了必须 `cd targets/desktop && cjpm build`（或直接跑 `scripts/test.sh` 的第 ④ 闸）。0.37.0 的绝对路径修复因此白跑了一轮实机探针 |
 | 70 | 交给 agent 的工具有了，但它「跑不动」：任务书里写相对路径 `cli\target\release\bin\main.exe` | agent 的 bash **cwd = 目标工程**（`workspaces/switch` 之后），相对路径全部失效。凡是要给 agent 用的路径一律**绝对**（`getWorkingDirectory()` 拼），而且要先把工程上下文/工作区切好**再**发任务书 |
+| 71 | agent 的 bash 里 `cat`/`sed`/`grep` 全报 `command not found`（exit 127），**看起来像模型把命令写错了**，于是它反复换写法重试、白烧轮次 | cjh 用**绝对路径**找到 Git Bash，但 `<git>/usr/bin`（coreutils）不在继承来的 PATH 上 —— 目标机器 Git 没进 PATH 时必然如此（`cjpm test` 里也撞到过：会话 PATH 一个 MSYS 目录都没有）。cjh 0.39.7 起 `shellPathFix()` 幂等追加 `<git>/bin`/`<git>/usr/bin`/`<git>/mingw64/bin`（**追加不覆盖**）。**排查口诀：`command -v cat`（内建）先探一下，再怀疑代码**；写测试也别把"外部命令存不存在"和"被测行为对不对"搅在一起 |
 
 ---
 
