@@ -407,7 +407,7 @@ public class DecisionsCommand <: CommandHandler {
         if (name.size == 0) {
             name = "project"
         }
-        let dir = ".lingqu/port/${sanitizeFileName(name)}"
+        let dir = lqDirOf(path) + cjhPathSep() + "port" + cjhPathSep() + "${sanitizeFileName(name)}"
         let file = "${dir}/decisions.json"
         let action = argStr(args, "action", "list")
 
@@ -463,7 +463,7 @@ public class DecisionsCommand <: CommandHandler {
             root.put("project", JsonString(name))
             root.put("items", newItems)
             try {
-                ensurePortDirs()
+                ensurePortDirs(lqDirOf(path) + cjhPathSep() + "port")
                 if (!exists(Path(dir))) {
                     Directory.create(Path(dir))
                 }
@@ -833,8 +833,8 @@ public class PortCommand <: CommandHandler {
         if (apply) {
             // 逐文件备份 + 落盘：Cargo.toml / rust-toolchain.toml / .cargo/config.toml / lib.rs / index.html
             try {
-                ensurePortDirs()
-                backupPath = ".lingqu/port/${safeName}"
+                ensurePortDirs(lqDirOf(path) + cjhPathSep() + "port")
+                backupPath = lqDirOf(path) + cjhPathSep() + "port" + cjhPathSep() + "${safeName}"
                 // 每个工程的备份目录要**自己建**：ensurePortDirs 只建到 `.lingqu/port`。
                 // 0.36.0 一键迁移实跑暴露了这个洞——只有先记过人工决策（DecisionsCommand 会建
                 // `<safeName>/`）才恰好能备份；新工程第一次 apply 会直接抛
@@ -919,8 +919,8 @@ public class PortCommand <: CommandHandler {
         } else if (result.appliedCount() > 0) {
             // dry-run 也落一份预览：UI 的 diff 预览与实测对照都要用（可断言、可复核）
             try {
-                ensurePortDirs()
-                File.writeTo(".lingqu/port/${safeName}-Cargo.toml.preview", result.afterText.toArray())
+                ensurePortDirs(lqDirOf(path) + cjhPathSep() + "port")
+                File.writeTo(lqDirOf(path) + cjhPathSep() + "port" + cjhPathSep() + "${safeName}-Cargo.toml.preview", result.afterText.toArray())
             } catch (e: Exception) {
                 eprintln("[lingqu][port] 预览落档失败：${e}")
             }
@@ -941,13 +941,14 @@ public class PortCommand <: CommandHandler {
     }
 }
 
-func ensurePortDirs(): Unit {
-    if (!exists(Path(".lingqu"))) {
-        Directory.create(Path(".lingqu"))
-    }
-    if (!exists(Path(".lingqu/port"))) {
-        Directory.create(Path(".lingqu/port"))
-    }
+/**
+ * 保证落档目录存在（0.38.0：跟着工程走，由调用方给工程根下的目录）。
+ *
+ * 以前是硬编码 `.lingqu/port`——只对 CWD 有效，agent 在工程里就看不见；
+ * 现在统一按传入的目录建，拼法由 `lqDirOf/lqPathOf` 决定（见 src/workdir.cj）。
+ */
+func ensurePortDirs(dir: String): Unit {
+    ensureDirOf(dir)
 }
 
 /** 备份单文件（目标存在才备；备份路径是 .lingqu/port 下的绝对工程外位置） */
@@ -1120,15 +1121,11 @@ public class DepsCommand <: CommandHandler {
         var wrote = false
         var outErr = ""
         if (errText.size == 0) {
-            let outDir = ".lingqu/deps"
-            let outFile = "${outDir}/${name}.json"
+            // 落档跟着工程走（0.38.0）
+            let outDir = lqDirOf(path) + cjhPathSep() + "deps"
+            let outFile = outDir + cjhPathSep() + name + ".json"
             try {
-                if (!exists(Path(".lingqu"))) {
-                    Directory.create(Path(".lingqu"))
-                }
-                if (!exists(Path(outDir))) {
-                    Directory.create(Path(outDir))
-                }
+                ensureDirOf(outDir)
                 File.writeTo(outFile, deps.toJsonString().toArray())
                 wrote = true
                 eprintln("[lingqu][deps] ${name}: 落档 ${outFile}")
@@ -1142,7 +1139,7 @@ public class DepsCommand <: CommandHandler {
 
         res.put("ok", JsonBool(errText.size == 0))
         res.put("project", JsonString(name))
-        res.put("out", JsonString(if (wrote) { ".lingqu/deps/${name}.json" } else { "" }))
+        res.put("out", JsonString(if (wrote) { lqPathOf(path, "deps/${name}.json") } else { "" }))
         res.put("outError", JsonString(outErr))
         res.put("error", JsonString(errText))
         res.put("deps", deps)
@@ -1410,6 +1407,7 @@ public class UiReportCommand <: CommandHandler {
         //     0.13.1 修正：以前把 pretty JSON 直接追加进 .log，7 条快照占了 259 行，
         //     而注释与文档都写"每次一行"——按行 grep 的断言全失效。这里压成单行。
         let dir = ".lingqu"
+        // 注意：**故意留在应用目录**——这是"界面自检"的证据，不属于任何被迁移工程（0.38.0）
         let snap = ".lingqu/ui-report.json"
         let logf = ".lingqu/ui-report.log"
         let oneline = text.replace("\n", " ").replace("\r", " ")
@@ -1560,15 +1558,12 @@ public class BuildCommand <: CommandHandler {
         var outJsonl = ""
         let safeName = sanitizeFileName(projectNameOf(path))
         try {
-            if (!exists(Path(".lingqu"))) {
-                Directory.create(Path(".lingqu"))
-            }
-            if (!exists(Path(".lingqu/build"))) {
-                Directory.create(Path(".lingqu/build"))
-            }
-            outJsonl = ".lingqu/build/${safeName}.jsonl"
-            outLog = ".lingqu/build/${safeName}.log"
-            outJson = ".lingqu/build/${safeName}.json"
+            // 落档跟着工程走（0.38.0）
+            let bDir = lqDirOf(path) + cjhPathSep() + "build"
+            ensureDirOf(bDir)
+            outJsonl = bDir + cjhPathSep() + safeName + ".jsonl"
+            outLog = bDir + cjhPathSep() + safeName + ".log"
+            outJson = bDir + cjhPathSep() + safeName + ".json"
             File.writeTo(outJsonl, stdoutText.toArray())
             File.writeTo(outLog, (combined).toArray())
             var root = JsonObject()
@@ -1747,7 +1742,8 @@ func jsonStringFieldOf(text: String, key: String): String {
 
 /** 上一次落档的 errorCount（做回归闸基线）；没有落档返回 -1 */
 func lastBuildErrorCountOf(projectDir: String): Int64 {
-    let f = ".lingqu/build/${sanitizeFileName(projectNameOf(projectDir))}.json"
+    // 读侧双查（工程优先、CWD 兜底）：迁移期旧落档仍能当基线
+    let f = resolveLqPath(projectDir, "build/${sanitizeFileName(projectNameOf(projectDir))}.json")
     if (!exists(Path(f))) {
         return -1
     }
@@ -1965,14 +1961,11 @@ public class HapCommand <: CommandHandler {
         var outLog = ""
         let safeName = sanitizeFileName(projectNameOf(path))
         try {
-            if (!exists(Path(".lingqu/hap"))) {
-                if (!exists(Path(".lingqu"))) {
-                    Directory.create(Path(".lingqu"))
-                }
-                Directory.create(Path(".lingqu/hap"))
-            }
-            outJson = ".lingqu/hap/${safeName}.json"
-            outLog = ".lingqu/hap/${safeName}.log"
+            // 落档跟着工程走（0.38.0）
+            let hDir = lqDirOf(path) + cjhPathSep() + "hap"
+            ensureDirOf(hDir)
+            outJson = hDir + cjhPathSep() + safeName + ".json"
+            outLog = hDir + cjhPathSep() + safeName + ".log"
             File.writeTo(outLog, (phaseLog + hvigorText).toArray())
             var root = JsonObject()
             root.put("schema", JsonString("lingqu/hap/v1"))
@@ -2216,13 +2209,9 @@ public class SignCommand <: CommandHandler {
                             if (err != "") {
                                 applyError = err
                             } else {
-                                if (!exists(Path(".lingqu/sign"))) {
-                                    if (!exists(Path(".lingqu"))) {
-                                        Directory.create(Path(".lingqu"))
-                                    }
-                                    Directory.create(Path(".lingqu/sign"))
-                                }
-                                backupPath = ".lingqu/sign/${projName}.build-profile.json5.bak"
+                                let sgDir = lqDirOf(path) + cjhPathSep() + "sign"
+                                ensureDirOf(sgDir)
+                                backupPath = sgDir + cjhPathSep() + "${projName}.build-profile.json5.bak"
                                 File.writeTo(backupPath, origin.toArray())
                                 File.writeTo(buildProfile, newText.toArray())
                                 applyText = newText
@@ -2298,14 +2287,10 @@ public class SignCommand <: CommandHandler {
                 "skipped=${applySkipped} error=${applyError}\n"
         }
         try {
-            if (!exists(Path(".lingqu/sign"))) {
-                if (!exists(Path(".lingqu"))) {
-                    Directory.create(Path(".lingqu"))
-                }
-                Directory.create(Path(".lingqu/sign"))
-            }
-            outJson = ".lingqu/sign/${projName}.json"
-            outLog = ".lingqu/sign/${projName}.log"
+            let sgDir = lqDirOf(path) + cjhPathSep() + "sign"
+            ensureDirOf(sgDir)
+            outJson = sgDir + cjhPathSep() + "${projName}.json"
+            outLog = sgDir + cjhPathSep() + "${projName}.log"
             File.writeTo(outLog, logText.toArray())
             var root = JsonObject()
             root.put("schema", JsonString("lingqu/sign/v1"))
@@ -2481,15 +2466,11 @@ public class VerifyCommand <: CommandHandler {
         var outHtml = ""
         var outEvidence = ""
         try {
-            if (!exists(Path(".lingqu/verify"))) {
-                if (!exists(Path(".lingqu"))) {
-                    Directory.create(Path(".lingqu"))
-                }
-                Directory.create(Path(".lingqu/verify"))
-            }
-            outJson = ".lingqu/verify/${projName}.json"
-            outMd = ".lingqu/verify/${projName}.md"
-            outHtml = ".lingqu/verify/${projName}.html"
+            let vDir = lqDirOf(path) + cjhPathSep() + "verify"
+            ensureDirOf(vDir)
+            outJson = vDir + cjhPathSep() + "${projName}.json"
+            outMd = vDir + cjhPathSep() + "${projName}.md"
+            outHtml = vDir + cjhPathSep() + "${projName}.html"
             File.writeTo(outMd, md.toArray())
             File.writeTo(outHtml, html.toArray())
             var root = JsonObject()
@@ -2506,7 +2487,7 @@ public class VerifyCommand <: CommandHandler {
             File.writeTo(outJson, root.toJsonString().toArray())
             // 采证日志单独落一份，便于核对"截图为什么没采到"
             if (ev.log != "") {
-                outEvidence = ".lingqu/verify/${projName}.evidence.log"
+                outEvidence = lqDirOf(path) + cjhPathSep() + "verify" + cjhPathSep() + "${projName}.evidence.log"
                 File.writeTo(outEvidence, ev.log.toArray())
             }
         } catch (e: Exception) {
@@ -2709,7 +2690,7 @@ public class ReportCommand <: CommandHandler {
         }
         var outDir = argStr(args, "outDir", "")
         if (outDir.size == 0) {
-            outDir = ".lingqu/report"
+            outDir = lqDirOf(path) + cjhPathSep() + "report"
         }
         let base = reportFileBase(projName)
         let now = nowText()
@@ -3280,9 +3261,9 @@ func migrateHasDevice(): Bool {
     }
 }
 
-/** 签名态（读 `.lingqu/sign/<工程>.json` 的 mode.mode；没有落档/没这一段回空串） */
-func signModeOf(projName: String): String {
-    match (readJsonOrNone(".lingqu/sign/${projName}.json")) {
+/** 签名态（读 `sign/<工程>.json` 的 mode.mode；没有落档/没这一段回空串） */
+func signModeOf(projName: String, projectPath: String): String {
+    match (readJsonOrNone(resolveLqPath(projectPath, "sign/${projName}.json"))) {
         case Some(root) => return jsonStrField(objFieldOf(root, "mode"), "mode")
         case None => return ""
     }
@@ -3419,7 +3400,7 @@ func runMigrateChain(path: String, applyPort: Bool): Unit {
         }
         let cmdOk = migrateRunStep(step, path, applyPort)
         if (step == "sign") {
-            releaseMode = signModeOf(proj)
+            releaseMode = signModeOf(proj, path)
         }
         let obs = observeTaskStepAt(proj, step, path)
         row.ran = obs.exists
@@ -3484,11 +3465,11 @@ func runMigrateChain(path: String, applyPort: Bool): Unit {
         snap = gMigrate.snapshot()
     }
     // 结果卡落 `.lingqu/migrate/<工程>.md`：重开机/换会话后也能翻出"上次一键跑到了哪"
-    let resultPath = ".lingqu/migrate/${proj}.md"
+    let resultPath = lqDirOf(path) + cjhPathSep() + "migrate" + cjhPathSep() + "${proj}.md"
     var resultErr = ""
     try {
         // 注意：这里要给的是**目录**，不是文件路径——ensureDirOf 会把每一段都当目录建
-        ensureDirOf(".lingqu/migrate")
+        ensureDirOf(lqDirOf(path) + cjhPathSep() + "migrate")
         File.writeTo(resultPath, migrateResultMarkdown(snap, if (outMd.size > 0) { outMd } else { "报告未生成" }).toArray())
     } catch (e: Exception) {
         resultErr = "写结果卡失败：${e}"
@@ -4182,14 +4163,10 @@ public class DeployCommand <: CommandHandler {
             logText += line + "\n"
         }
         try {
-            if (!exists(Path(".lingqu/deploy"))) {
-                if (!exists(Path(".lingqu"))) {
-                    Directory.create(Path(".lingqu"))
-                }
-                Directory.create(Path(".lingqu/deploy"))
-            }
-            outJson = ".lingqu/deploy/${projName}.json"
-            outLog = ".lingqu/deploy/${projName}.log"
+            let dDir = lqDirOf(path) + cjhPathSep() + "deploy"
+            ensureDirOf(dDir)
+            outJson = dDir + cjhPathSep() + "${projName}.json"
+            outLog = dDir + cjhPathSep() + "${projName}.log"
             File.writeTo(outLog, logText.toArray())
             var root = JsonObject()
             root.put("schema", JsonString("lingqu/deploy/v1"))

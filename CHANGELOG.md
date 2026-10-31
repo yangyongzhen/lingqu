@@ -5,6 +5,35 @@
 
 ---
 
+## [0.38.1] - 2026-11-01
+
+**主题**：**落档跟着工程走 —— 全部写入者迁完**（12 个产出者里 11 个在工程内，2 个按设计留在应用目录）。
+
+### Changed（写侧全量迁移，每个命令一次 `cjpm test`）
+
+| 命令 | 落档新位置 | 备注 |
+|---|---|---|
+| `t2h:scan`（0.38.0） | `<工程>/.lingqu/scan/<工程>.json` | — |
+| `t2h:deps` | `<工程>/.lingqu/deps/<工程>.json` | — |
+| `t2h:build` | `<工程>/.lingqu/build/<工程>.{json,jsonl,log}` | 读侧（回归闸基线 `lastBuildErrorCountOf`）改走 `resolveLqPath` |
+| `t2h:hap` | `<工程>/.lingqu/hap/<工程>.{json,log}` | — |
+| `t2h:sign` | `<工程>/.lingqu/sign/<工程>.{json,log}` + `signingConfigs` 备份 | 读侧 `signModeOf(proj, path)` 也跟着带工程路径 |
+| `t2h:verify` | `<工程>/.lingqu/verify/<工程>.{json,md,html,evidence.log}` | — |
+| `t2h:deploy` | `<工程>/.lingqu/deploy/<工程>.{json,log}` | — |
+| `t2h:report` | `<工程>/.lingqu/report/<工程>.{md,html,json}` | — |
+| `t2h:migrate`（结果卡） | `<工程>/.lingqu/migrate/<工程>.md` | — |
+| `t2h:port`（备份/预览/决策） | `<工程>/.lingqu/port/<工程>/…` | `ensurePortDirs()` 改成 `ensurePortDirs(dir)`：不再硬编码 `.lingqu/port` |
+| `t2h:resume`（`tasks.json`） | **仍在应用目录** | 断点板是"跨工程的工具状态"，不属于单个工程（待讨论，见下） |
+| `t2h:batch`（矩阵） / `ui_report` | **仍在应用目录（有意）** | 矩阵是多样本的工具体产物；`ui-report` 是界面自检证据，与被迁移工程无关。两处代码里已加注释，避免后人"顺手改掉" |
+
+### 未做（诚实标注）
+
+- `t2h:resume` 的 `.lingqu/tasks.json` 仍写在应用目录：它是**跨工程**的断点状态（一个板记 8 步 + 会话 id）。
+  要不要按工程拆成 `<工程>/.lingqu/tasks.json`，需要先定"用户在界面切换工程时断点板怎么表现"，
+  这是产品决定，不在这轮硬改。
+- AGENTS.md 文案（"落在本工程的 `.lingqu/` 下"）**现在才变成真的**，但还没写准确路径 → 下一步。
+- `resolveLqPath` 的 CWD 兜底仍保留（旧落档还能读）；全部验证完再删。
+
 ## [0.38.0] - 2026-11-01
 
 **主题**：**落档跟着工程走（第 1~2 步：底座 + 第一个命令）** —— 让 agent 与界面看**同一份**落档。
