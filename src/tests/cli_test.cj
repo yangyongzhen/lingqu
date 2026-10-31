@@ -71,6 +71,61 @@ public func testCommandWhitelist(): Unit {
     @Assert(usage.contains("退出码"), true)
 }
 
+/* ---------- ④ 一键执行：安全边界（纯函数） ---------- */
+
+@Test
+public func testCliRunAllowedReadOnly(): Unit {
+    let empty = JsonObject()
+    // 只读/幂等可回滚的放开
+    for (c in ["scan", "deps", "resume", "report", "verify", "env", "diagnose", "batch", "build"]) {
+        let (ok, _) = cliRunAllowed(c, empty)
+        @Assert(ok, true)
+    }
+    // sign 体检允许，但 --apply（改用户工程）必须拒
+    let (sigOk, _) = cliRunAllowed("sign", empty)
+    @Assert(sigOk, true)
+    let apply = JsonObject()
+    apply.put("apply", JsonBool(true))
+    let (sigApplyOk, why) = cliRunAllowed("sign", apply)
+    @Assert(sigApplyOk, false)
+    @Assert(why.contains("写回签名配置"), true)
+}
+
+@Test
+public func testCliRunAllowedBlocksRisky(): Unit {
+    let empty = JsonObject()
+    // 动真机 / 改工程 / 耗时长：一律拒，并且要告诉人"去哪点"
+    let cases = [("deploy", "安装并启动"), ("port", "预览改造"), ("revert", "回滚"), ("hap", "装配 HAP"),
+                 ("decisions", "人工决策")]
+    for (pair in cases) {
+        let (ok, why) = cliRunAllowed(pair[0], empty)
+        @Assert(ok == false, true)
+        @Assert(why.contains(pair[1]), true)
+    }
+    // 不认识的命令也拒（别把未知命令当只读放过去）
+    let (ok, _) = cliRunAllowed("rm_rf", empty)
+    @Assert(ok, false)
+}
+
+@Test
+public func testCliSuggestParse(): Unit {
+    // 从 AI 回复里抽建议命令：列表符号、行内码、重复行都要处理
+    let text = "建议这样跑：\n- `lingqu-cli resume --path .`\n* lingqu-cli scan --path .\n"
+        + "lingqu-cli resume --path .\n其它文字不含命令\n"
+    let sug = cliSuggestParse(text)
+    @Assert(sug.size, 2)     // resume 与 scan 各一条（重复的 resume 去重）
+    @Assert(sug[0].contains("resume"), true)
+    @Assert(sug[1].contains("scan"), true)
+    // 拆 argv：去掉 lingqu-cli 本身
+    let argv = cliSuggestArgv("lingqu-cli build --path . --verifyOnly")
+    @Assert(argv.size, 4)
+    @Assert(argv[0], "build")
+    @Assert(cliArgvCommand(argv.toArray()), "build")
+    // 空文本 / 没有命令 → 空表（别造出空建议按钮）
+    @Assert(cliSuggestParse("").size, 0)
+    @Assert(cliSuggestParse("这里只有普通文字").size, 0)
+}
+
 /* ---------- 测试内小工具 ---------- */
 
 func assertHasKey(o: JsonObject, key: String): Unit {

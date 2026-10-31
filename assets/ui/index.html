@@ -350,6 +350,18 @@ body.ai-hidden .dock{display:none}
 .bubble .md-cur{display:inline-block;width:6px;height:13px;margin-left:2px;
   background:var(--acc);opacity:.75;animation:mdblink 1s steps(2) infinite;vertical-align:-2px}
 @keyframes mdblink{50%{opacity:0}}
+
+/* ④ AI 建议命令（一键执行）：一排小按钮 + 结果卡（含 JSON 预览与"让 AI 分析"） */
+.cli-sug{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.cli-sug-label{font-size:11px;color:var(--dim)}
+.cli-sug .btn{padding:2px 9px;font-size:11px}
+.cli-result{margin-top:8px;padding:7px 10px;border-radius:8px;font-size:11.5px;line-height:1.65;
+  border:1px solid var(--line);background:var(--panel2)}
+.cli-result.ok{border-color:rgba(126,226,168,.45);background:var(--oksoft)}
+.cli-result.err{border-color:rgba(255,123,114,.45);background:var(--errsoft)}
+.cli-result.warn{border-color:rgba(255,184,107,.45);background:var(--warnsoft)}
+.cli-result .cli-json{margin-top:4px;max-height:96px;overflow:auto;word-break:break-all;color:var(--dim)}
+.cli-result .cli-ask{margin-top:6px;padding:2px 9px;font-size:11px}
 .tool{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
 .tool .th{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:11.5px;border-bottom:1px solid var(--line)}
 .tool .th .nm{font-family:var(--mono);font-weight:600;color:var(--acc)}
@@ -2596,6 +2608,125 @@ withBridge(function(tauri){
       '<div class="small muted">' + esc(note) + '</div></div></div>')); }
     CJ.curBubble = null;
     CJ.acc = '';
+    // ④ 一键执行：回复里若有 `lingqu-cli …` 建议，就在气泡下方挂一排可点按钮
+    attachCliSuggestions();
+  }
+
+  /* ===== ④ AI 建议命令的一键执行（2026-11-01，AI 接入第 4 步）=====
+   * 从回复里抽出 `lingqu-cli <cmd> --k v` 片段 → 渲染成按钮 → 点一下走 t2h:cli_run。
+   * 安全边界在后端（cliRunAllowed 白名单）：会动真机/会改工程的命令在前端就标成"需人工确认"，
+   * 点了只提示"去哪里点"，不会真跑——**误点一个按钮不该能把用户的工程改坏**。 */
+  var CLI = { items: [], lastCmd: '', lastExit: -1, lastOk: false, ran: 0, blocked: 0 };
+
+  function cliSuggestParseInPage(text){
+    var out = [], seen = {};
+    String(text || '').split('\n').forEach(function(line){
+      var t = line.trim();
+      while (t.indexOf('- ') === 0 || t.indexOf('* ') === 0 || t.indexOf('`') === 0) {
+        t = t.charAt(0) === '`' ? t.slice(1) : t.slice(2);
+        t = t.trim();
+      }
+      if (t.indexOf('lingqu-cli ') !== 0) { return; }
+      var tick = t.indexOf('`');
+      if (tick > 0) { t = t.slice(0, tick); }
+      t = t.trim();
+      if (t.length <= 'lingqu-cli '.length) { return; }
+      if (seen[t]) { return; }
+      seen[t] = 1;
+      out.push(t);
+    });
+    return out;
+  }
+
+  // 把 `lingqu-cli scan --path .` 拆成 {cmd, flags}
+  function cliSuggestParseArgs(sugg){
+    var parts = sugg.split(/\s+/).filter(function(x){ return x && x !== 'lingqu-cli'; });
+    var cmd = '', flags = {};
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (p.indexOf('--') === 0) {
+        var kv = p.slice(2).split('=');
+        var k = kv[0];
+        var v = kv.length > 1 ? kv.slice(1).join('=') : true;
+        if (v === true && i + 1 < parts.length && parts[i + 1].indexOf('--') !== 0) {
+          v = parts[i + 1]; i += 1;
+        }
+        flags[k] = v;
+      } else if (!cmd) { cmd = p; }
+    }
+    return { cmd: cmd, flags: flags };
+  }
+
+  function attachCliSuggestions(){
+    if (!CJ.curBubble && !CJ.lastReply) { return; }
+    var text = CJ.lastReply || '';
+    var sug = cliSuggestParseInPage(text);
+    CLI.items = sug;
+    if (!sug.length) { return; }
+    // 挂在最后一条 assistant 气泡下面（没有气泡就不挂，别把建议丢到别处）
+    var bubbles = chatBox().querySelectorAll('.msg:not(.me) .bubble');
+    if (!bubbles.length) { return; }
+    var host = bubbles[bubbles.length - 1];
+    if (host.querySelector('.cli-sug')) { return; }   // 已挂过（防止重复 finishTurn 时叠两排）
+    var box = document.createElement('div');
+    box.className = 'cli-sug';
+    box.innerHTML = '<span class="cli-sug-label">可执行（AI 建议）：</span>';
+    sug.forEach(function(s){
+      var b = document.createElement('button');
+      b.className = 'btn cli-run';
+      b.textContent = '▶ ' + s.replace('lingqu-cli ', '');
+      b.title = '点一下就跑：' + s;
+      b.onclick = function(){ runCliSuggestion(s); };
+      box.appendChild(b);
+    });
+    host.appendChild(box);
+  }
+
+  function runCliSuggestion(sugg){
+    var parsed = cliSuggestParseArgs(sugg);
+    var note = document.createElement('div');
+    note.className = 'cli-result';
+    note.textContent = '执行中：lingqu-cli ' + parsed.cmd + ' …';
+    var host = chatBox().querySelector('.msg:not(.me) .bubble:last-of-type');
+    if (host) { host.appendChild(note); }
+    invoke('t2h:cli_run', { cmd: parsed.cmd, flags: parsed.flags }).then(function(r){
+      r = r || {};
+      CLI.ran += 1;
+      CLI.lastCmd = String(r.cmd || parsed.cmd);
+      CLI.lastExit = (typeof r.exitCode === 'number') ? r.exitCode : -1;
+      CLI.lastOk = r.ok === true;
+      if (r.allowed === false) {
+        CLI.blocked += 1;
+        note.className = 'cli-result warn';
+        note.textContent = '⚠ 这条命令要在界面里点：' + String(r.reason || '');
+      } else {
+        var res = r.result || {};
+        var summary = '';
+        if (typeof res.hint === 'string') { summary = res.hint; }
+        else if (typeof res.out === 'string') { summary = '落档：' + res.out; }
+        else if (typeof res.state === 'string') { summary = '状态：' + res.state; }
+        else { summary = 'exit=' + CLI.lastExit; }
+        note.className = 'cli-result ' + (CLI.lastOk ? 'ok' : 'err');
+        note.innerHTML = '<b>lingqu-cli ' + esc(CLI.lastCmd) + '</b> · exit=' + CLI.lastExit + '　' + esc(summary)
+          + '<div class="cli-json mono small">' + esc(JSON.stringify(res).slice(0, 400)) + '</div>';
+        // 把结果也塞给 AI：点「让 AI 分析」才发，避免悄悄多花一次模型调用
+        var ask = document.createElement('button');
+        ask.className = 'btn cli-ask';
+        ask.textContent = '让 AI 分析结果';
+        ask.onclick = function(){
+          $('aiInput').value = '我刚执行了 `lingqu-cli ' + CLI.lastCmd + '`，结果如下（JSON）：\n'
+            + JSON.stringify(res).slice(0, 3000) + '\n请解读：这一步算通过吗？下一步该做什么？';
+          sendChat();
+        };
+        note.appendChild(ask);
+      }
+      atBottom();
+      reportUi('cli-run');
+    }).catch(function(e){
+      note.className = 'cli-result err';
+      note.textContent = '执行失败：' + (e && e.message ? e.message : e);
+      reportUi('cli-run-error');
+    });
   }
 
   /* 代码块「复制」：事件委托绑在聊天容器上——气泡是动态重绘的，逐块绑会在下次 flush 后失效。
@@ -4640,6 +4771,19 @@ withBridge(function(tauri){
       skillCjhCount: (typeof SKILL.cjhCount === "number") ? SKILL.cjhCount : 0,
       skillSource: SKILL.source || "",
       skillNote: SKILL.note || "",
+      // ④ 一键执行：建议条数 / 最后执行的命令与退出码 / 被安全边界拦下的次数
+      cliSuggest: (CLI.items || []).length,
+      cliSuggestRows: (function(){
+        return document.querySelectorAll('#aiChat .cli-sug .cli-run').length;
+      })(),
+      cliLastCmd: CLI.lastCmd || "",
+      cliLastExit: (typeof CLI.lastExit === "number") ? CLI.lastExit : -1,
+      cliLastOk: CLI.lastOk === true,
+      cliRan: (typeof CLI.ran === "number") ? CLI.ran : 0,
+      cliBlocked: (typeof CLI.blocked === "number") ? CLI.blocked : 0,
+      cliResultCards: (function(){
+        return document.querySelectorAll('#aiChat .cli-result').length;
+      })(),
       // 工程上下文（AGENTS.md 受管区块 + cjh workspace）
       agentHasBlock: AGENT.hasBlock === true,
       agentPath: AGENT.path || "",
@@ -4840,6 +4984,21 @@ withBridge(function(tauri){
     }, 2000);
     setTimeout(function(){ showSettings(false); applyAiHidden(true); }, 3200);
     setTimeout(function(){ applyAiHidden(false); }, 4200);
+    // ④ 一键执行自检（不依赖模型输出，确定性地造一条带建议的回复再点它）：
+    //   造气泡 → 挂建议按钮 → 点第一个 → 断言结果卡出现、退出码与 ui_report 字段
+    if (mode === 'cli' || mode === 'cli-block') {
+      setTimeout(function(){
+        // cli-block 用一条**会被安全边界拦下**的命令（deploy 会动真机），验证"拒不执行 + 指路"
+        var sugg = (mode === 'cli-block')
+          ? 'lingqu-cli deploy --path E:/test/rust/habit-tree'
+          : 'lingqu-cli resume --path E:/test/rust/habit-tree';
+        addMsg('ai', renderMd('建议：\n\n- `' + sugg + '`\n'));
+        CJ.lastReply = sugg;
+        attachCliSuggestions();
+        var btn = chatBox().querySelector('.cli-sug .cli-run');
+        if (btn) { btn.click(); }
+      }, 5200);
+    }
     // 审批自检：出现审批卡就**自动点「拒绝」**（模拟人工决策），
     // 既验证卡片渲染，也验证 approval_response 回执链路真的把回合推下去了。
     setTimeout(function(){

@@ -1078,6 +1078,15 @@ public class UiReportCommand <: CommandHandler {
         o.put("agentSwitched", JsonBool(argBool(args, "agentSwitched", false)))
         o.put("agentWorkspace", JsonString(argStr(args, "agentWorkspace", "")))
         o.put("agentError", JsonString(argStr(args, "agentError", "")))
+        // ④ 一键执行（2026-11-01）：建议条数 / 最后执行的命令与退出码 / 被拦下次数
+        o.put("cliSuggest", JsonInt(argInt(args, "cliSuggest", 0)))
+        o.put("cliSuggestRows", JsonInt(argInt(args, "cliSuggestRows", 0)))
+        o.put("cliLastCmd", JsonString(argStr(args, "cliLastCmd", "")))
+        o.put("cliLastExit", JsonInt(argInt(args, "cliLastExit", -1)))
+        o.put("cliLastOk", JsonBool(argBool(args, "cliLastOk", false)))
+        o.put("cliRan", JsonInt(argInt(args, "cliRan", 0)))
+        o.put("cliBlocked", JsonInt(argInt(args, "cliBlocked", 0)))
+        o.put("cliResultCards", JsonInt(argInt(args, "cliResultCards", 0)))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
         o.put("scanH", JsonInt(argInt(args, "scanH", 0)))
@@ -3053,8 +3062,93 @@ public class AgentContextCommand <: CommandHandler {
 }
 
 /**
- * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。
+ * t2h:cli_run —— 把 AI 建议的命令**一键执行**（AI 接入第 4 步）。
  *
+ * 安全边界在 `cliRunAllowed`（纯函数 + 单测）：只读/幂等可回滚的才放开；
+ * 会动真机（deploy）、会改用户工程（port/revert）、耗时且有产物（hap）、
+ * 会改签名配置（sign --apply）的一律拒绝，并告诉人"该去哪个界面点"。
+ *
+ * 参数：{cmd, flags?}（flags 是 JsonObject，原样转成 `--键 值`）
+ * 返回：{ok, cmd, allowed, reason, exitCode, result:{…}}
+ */
+public class CliRunCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        let cmd = argStr(args, "cmd", "")
+        var flags = JsonObject()
+        match (args.get("flags")) {
+            case Some(v) =>
+                match (v.kind()) {
+                    case JsonKind.JsObject => flags = v.asObject()
+                    case _ => ()
+                }
+            case None => ()
+        }
+        let (allowed, reason) = cliRunAllowed(cmd, flags)
+
+        var res = JsonObject()
+        res.put("cmd", JsonString(cmd))
+        res.put("allowed", JsonBool(allowed))
+        res.put("reason", JsonString(reason))
+        if (!allowed) {
+            res.put("ok", JsonBool(false))
+            res.put("exitCode", JsonInt(-2))
+            res.put("result", JsonObject())
+            eprintln("[lingqu][cli_run] 拒绝 ${cmd}：${reason}")
+            return res
+        }
+        if (!cliCommandSupported(cmd)) {
+            res.put("ok", JsonBool(false))
+            res.put("exitCode", JsonInt(-3))
+            res.put("reason", JsonString("CLI 里没有这个命令：${cmd}"))
+            res.put("result", JsonObject())
+            return res
+        }
+
+        // 组装 argv：`cmd --k v …`（布尔 false 的开关不带，省得命令行里出现 --x=false）
+        let argv = ArrayList<String>()
+        argv.add(cmd)
+        for ((k, v) in flags.getFields()) {
+            match (v.kind()) {
+                case JsonKind.JsBool =>
+                    if (v.asBool().getValue()) {
+                        argv.add("--" + k)
+                    }
+                case JsonKind.JsString =>
+                    let s = v.asString().getValue()
+                    if (s != "") {
+                        argv.add("--" + k)
+                        argv.add(s)
+                    }
+                case JsonKind.JsInt =>
+                    argv.add("--" + k)
+                    argv.add(v.asInt().getValue().toString())
+                case _ => ()
+            }
+        }
+        let run = dispatchCli(argv.toArray())
+        var inner: JsonValue = JsonObject()
+        if (run.json != "") {
+            try {
+                inner = JsonValue.fromStr(run.json)
+            } catch (e: Exception) {
+                let _ = e
+            }
+        }
+        res.put("ok", JsonBool(run.exitCode == 0 && run.error == ""))
+        res.put("exitCode", JsonInt(run.exitCode))
+        res.put("result", inner)
+        if (run.error != "") {
+            res.put("error", JsonString(run.error))
+        }
+        eprintln("[lingqu][cli_run] ${cmd} exit=${run.exitCode} allowed=${allowed}")
+        return res
+    }
+}
+
+/**
+ * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。 *
  * 把 0.17.0 手工跑通的那条链做成命令：`hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog。
  * 两条纪律来自真机实测，别改成"看起来更顺"的写法：
  *   · **hdc 失败时退出码仍是 0**（AGENTS §4-40）——成败只看输出文本，交给 deploy.cj 的解析层
@@ -3527,6 +3621,7 @@ public func build(): AppSpec {
         app.register("t2h:batch", BatchCommand())
         app.register("t2h:skill", SkillCommand())
         app.register("t2h:agent_context", AgentContextCommand())
+        app.register("t2h:cli_run", CliRunCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

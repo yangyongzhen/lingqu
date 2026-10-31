@@ -233,6 +233,154 @@ public func dispatchCli(argv: Array<String>): CliResult {
     return r
 }
 
+/**
+ * ④ 一键执行的安全边界（纯函数）：哪些命令**允许从对话里一键跑**。
+ *
+ * 原则：**只读或幂等可回滚**的放开；会动真机、会改用户工程、会长时间占用机器的，一律要人点界面。
+ * 这不是技术限制，是安全设计——AI 建议的命令点一下就执行，出错代价必须可控。
+ */
+public func cliRunAllowed(cmd: String, args: JsonObject): (Bool, String) {
+    let readOnly = ["scan", "deps", "resume", "report", "verify", "env", "diagnose", "batch"]
+    for (c in readOnly) {
+        if (c == cmd) {
+            return (true, "")
+        }
+    }
+    if (cmd == "build") {
+        // 编译耗时以分钟计，但从对话里跑一次是常见需求；只读模式（verifyOnly）更安全
+        return (true, "")
+    }
+    if (cmd == "sign") {
+        // 体检是只读；--apply 会改工程的 build-profile.json5 → 必须人点界面
+        if (cliFlagOn(args, "apply")) {
+            return (false, "sign --apply 会改工程的 build-profile.json5，请在 ⑤ 屏点「写回签名配置」")
+        }
+        return (true, "")
+    }
+    if (cmd == "skill" || cmd == "agent_context") {
+        let action = cliStrOf(args, "action")
+        if (action == "install" || action == "remove") {
+            // 写 ~/.cjh 与工程 AGENTS.md：允许（幂等且可移除），但要留下说明
+            let written = if (cmd == "skill") { "~/.cjh/skills" } else { "工程 AGENTS.md 的受管区块" }
+            return (true, "会写 ${written}")
+        }
+        return (true, "")
+    }
+    if (cmd == "hap") {
+        return (false, "装配 HAP 耗时以分钟计且有产物，请在 ⑤ 屏点「装配 HAP」")
+    }
+    if (cmd == "port") {
+        return (false, "规则改造会改用户工程源码，请在 ④ 屏「预览改造」→「应用」")
+    }
+    if (cmd == "revert") {
+        return (false, "回滚会覆盖工作区文件，请在 ④ 屏点「回滚」")
+    }
+    if (cmd == "deploy") {
+        return (false, "真机部署会安装并启动应用，请在 ⑥ 屏点「安装并启动」")
+    }
+    if (cmd == "decisions") {
+        return (false, "人工决策要留痕到落档，请在 ④ 屏操作")
+    }
+    return (false, "不开放的命令：${cmd}")
+}
+
+/** 参数里某个布尔开关是否开着（`true` 或非空字符串都算开） */
+func cliFlagOn(args: JsonObject, key: String): Bool {
+    match (args.get(key)) {
+        case Some(v) =>
+            match (v.kind()) {
+                case JsonKind.JsBool => return v.asBool().getValue()
+                case JsonKind.JsString => return v.asString().getValue() != ""
+                case JsonKind.JsInt => return v.asInt().getValue() != 0
+                case _ => return false
+            }
+        case None => return false
+    }
+}
+
+/** 参数里的字符串值（没有给空串） */
+func cliStrOf(args: JsonObject, key: String): String {
+    match (args.get(key)) {
+        case Some(v) =>
+            match (v.kind()) {
+                case JsonKind.JsString => return v.asString().getValue()
+                case _ => return ""
+            }
+        case None => return ""
+    }
+}
+
+/**
+ * 纯函数：从 AI 回复里**抽出它建议的命令**（`lingqu-cli <cmd> --k v …`）。
+ *
+ * 只认以 `lingqu-cli` 开头的片段——不猜"它可能是想说某个命令"。抽出来的是**命令名 + 原始参数串**，
+ * 参数解析交给 `argvToJsonWithValues`（同一条解析实现，避免两套口径）。
+ * 去重按整行，防止模型把同一条命令写两遍。
+ */
+public func cliSuggestParse(text: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let seen = ArrayList<String>()
+    for (line in text.split("\n")) {
+        var t = line.trimAscii()
+        // 去掉 markdown 列表符号与行内码反引号
+        while (t.startsWith("- ") || t.startsWith("* ") || t.startsWith("`")) {
+            if (t.startsWith("`")) {
+                t = t[1..t.size]
+            } else {
+                t = t[2..t.size]
+            }
+        }
+        let idx = t.indexOf("lingqu-cli ")
+        if (idx != 0) {
+            continue
+        }
+        // 截到行内码结束或行尾
+        var cand = t
+        let endTick = cand.indexOf("`")
+        match (endTick) {
+            case Some(i) => cand = cand[0..i]
+            case None => ()
+        }
+        cand = cand.trimAscii()
+        if (cand.size <= "lingqu-cli ".size) {
+            continue
+        }
+        var dup = false
+        for (s in seen) {
+            if (s == cand) {
+                dup = true
+            }
+        }
+        if (dup) {
+            continue
+        }
+        seen.add(cand)
+        out.add(cand)
+    }
+    return out
+}
+
+/** 把一条建议（`lingqu-cli scan --path .`）拆成 argv（去掉 `lingqu-cli` 本身） */
+public func cliSuggestArgv(suggestion: String): Array<String> {
+    let out = ArrayList<String>()
+    for (part in suggestion.split(" ")) {
+        let p = part.trimAscii()
+        if (p != "" && p != "lingqu-cli") {
+            out.add(p)
+        }
+    }
+    return out.toArray()
+}
+
+/** 纯函数：从上一步 argv 里取命令名（第一个非 `--` 元素） */
+public func cliArgvCommand(argv: Array<String>): String {
+    for (a in argv) {
+        if (!a.startsWith("--")) {
+            return a
+        }
+    }
+    return ""
+}
 /** 命令名 → handler（新增命令时两处一起加：这里 + `main.build()` 的 register） */
 func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcContext): JsonValue {
     if (cmd == "scan") {

@@ -5,6 +5,49 @@
 
 ---
 
+## [0.35.0] - 2026-11-01
+
+**主题**：**AI 接入第 4 步 —— 一键执行 + 结果回填**：AI 回复里出现的 `lingqu-cli …` 建议
+直接变成可点按钮；点一下真跑，结果卡回填对话，还能一键「让 AI 分析结果」。**闭环成立**。
+
+### Added
+
+- **命令 `t2h:cli_run`**（三处联动齐全）：`{cmd, flags}` → 组装 argv → 复用 `dispatchCli`
+  （与 CLI/界面**同一份实现**）→ 回 `{ok, allowed, reason, exitCode, result}`
+- **安全边界 `cliRunAllowed`（纯函数 + 单测）**——误点一个按钮不该能把工程改坏：
+
+  | 放开（只读/幂等可回滚） | 拒绝（并告诉人该去哪个界面点） |
+  |---|---|
+  | `scan` `deps` `resume` `report` `verify` `env` `diagnose` `batch` `build` | `deploy`（动真机）→ ⑥ 屏「安装并启动」 |
+  | `sign`（体检）| `sign --apply`（改用户工程）→ ⑤ 屏「写回签名配置」 |
+  | `skill` / `agent_context`（status/install，幂等且可移除） | `port`（改源码）→ ④ 屏；`revert` → ④ 屏；`hap`（耗时+产物）→ ⑤ 屏；`decisions` → ④ 屏 |
+
+- 前端：`cliSuggestParseInPage` 从回复里抽建议（列表符号/行内码/去重）→ 挂一排「▶ 命令」按钮
+  → 点击后结果卡（退出码 + 摘要 + JSON 预览 + **「让 AI 分析结果」**按钮，点它才发消息，
+  不悄悄多花一次模型调用）
+- `ui_report` 新增 `cliSuggest/cliSuggestRows/cliLastCmd/cliLastExit/cliLastOk/cliRan/cliBlocked/cliResultCards`
+- 探针 `LINGQU_UI_PROBE=cli`（点一次允许的命令）与 `cli-block`（点一条会被拦下的命令）
+
+### 证据（本机 Windows x64，2026-11-01）
+
+```
+① 允许路径 LINGQU_UI_PROBE=cli（确定性注入一条 `lingqu-cli resume --path …` 建议再点它）：
+   ui_report：cliSuggest=1 cliSuggestRows=1 cliLastCmd=resume cliLastExit=0 cliLastOk=true
+              cliRan=1 cliBlocked=0 cliResultCards=1 errorCount=0
+② 拦截路径 LINGQU_UI_PROBE=cli-block（注入 `lingqu-cli deploy --path …` 再点）：
+   ui_report：cliLastCmd=deploy cliLastExit=-2 cliLastOk=false cliBlocked=1 cliResultCards=1 errorCount=0
+   → 界面显示「⚠ 这条命令要在界面里点：真机部署会安装并启动应用，请在 ⑥ 屏点「安装并启动」」
+门禁：五道闸全绿（build 0 warning / TOTAL=201 / check / 骨架 build / cli build）
+```
+
+### 未做（如实）
+
+- 「让 AI 分析结果」是**手动点**（避免每条建议都自动多一轮模型调用）；自动回填留作可选项
+- 建议解析只认 `lingqu-cli <cmd>` 开头（不猜 `t2h:` 或自然语言里的命令名）
+- ④ 之后 AI 接入四步全部就绪；P7 的 5 样本推进仍未做
+
+---
+
 ## [0.34.0] - 2026-11-01
 
 **主题**：**AI 接入第 3 步 —— `t2h:*` CLI 化**：新增 `lingqu-cli` 可执行文件，让 **agent 的 bash
