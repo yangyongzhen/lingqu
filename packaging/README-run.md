@@ -1,5 +1,9 @@
 # 灵渠迁移台 · Windows 便携包
 
+> 有两种包：**动态版**（`lingqu-<ver>-win-x64`，根目录 48 个 DLL，构建快）与
+> **静态版**（`lingqu-<ver>-win-x64-static`，根目录 **5 个 DLL**，仓颉 std 与 stdx 都进了 exe）。
+> 使用方式完全一样；静态版更适合拷给别人。
+
 ## 怎么跑
 
 双击 `run.bat`（推荐），或在该目录下直接运行 `main.exe`。

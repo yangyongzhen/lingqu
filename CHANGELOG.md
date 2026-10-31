@@ -5,6 +5,45 @@
 
 ---
 
+## [0.21.1] - 2026-10-31
+
+**主题**：**静态链接的 Windows 便携包** —— 随包 DLL 从 **98 个降到 5 个**（zip 24.7 MB → 13.9 MB）。
+
+### Added
+
+- **`packaging/build-static-win.sh`**：一条命令产出静态版（`main.exe` 11.7 MB，仓颉 std + stdx 全进 exe）。
+  做对三件事才链得出来（都实测过，缺一个就失败）：
+  1. `compile-option = "--static-std"`（`--static-libs` 已 deprecated，别用）
+  2. `CANGJIE_STDX` 指向 **static 树** `<stdx>\windows_x86_64_cjnative\static\stdx`，否则 stdx 仍按 `.dll` 链
+  3. mingw 链接行补 `-lcrypt32 -lbcrypt -lws2_32 -liphlpapi -luserenv -lpsapi`——
+     静态版 stdx 的 x509 用到 `CertCloseStore`，缺 `-lcrypt32` 直接 `undefined symbol`
+- **`packaging/package-win.sh` 重写**：不再"整目录拷 DLL"，改为**按导入闭包自动收**
+  （BFS 遍历 `main.exe` 与已收 DLL 的导入表，从 `CANGJIE_HOME`/`CANGJIE_STDX`/框架 `native` 里解析；
+  收完再跑一次闭包自检，缺任何 `lib*`/`stdx*` 就失败退出）。动态版 98 个、静态版 5 个，同一份脚本
+- 新增 `--static` 模式与 `-static` 后缀包名（`lingqu-<ver>-win-x64-static.zip`）
+
+### 注意（老实话）
+
+- **只有两个 DLL 无论如何也省不掉**：`libcangjie-runtime.dll`（仓颉运行时没有静态版）、
+  `libcjtbridge.dll`（cj-tauri 的 C 桥只发了 `.dll.a` 导入库）。再加按名加载的 `WebView2Loader.dll`
+  与 cj-tauri 存储用的 `sqlite3.dll`，合计 5 个。
+- `targets/desktop/cjpm.toml` 是 `cj-tauri sync` **派生**的（手改会被 `check` 判漂移），
+  所以静态构建走的是"**临时改 → 构建 → `trap EXIT` 无条件还原**"。上游若能给
+  `cj-tauri.toml` 加 `[build] compile_option/link_option` 透传，这个临时手法就能删掉
+  （已记进 `packaging/build-static-win.sh` 的 TODO，按 AGENTS §8 属回馈项）。
+
+### 验证
+
+```
+[ok] 版本 0.21.1（static）｜main.exe 12 MB｜DLL 5 个｜整包约 39 MB
+zip = 13.9 MB；根目录：main.exe 11.7 + cangjie-runtime 1.2 + sqlite3 3.4 + cjtbridge 0.7
+                   + libboundscheck + WebView2Loader
+干净 PATH + zip 解压到临时目录 + run.bat → 窗口"灵渠迁移台 · Lingqu"
+ui_report：screens=7 idCount=146 activeScreen=env errorCount=0（自检跑到 probe-frames）
+```
+
+---
+
 ## [0.21.0] - 2026-10-31
 
 **主题**：**`t2h:deploy` 命令化 + ⑥ 真机验证屏接真数据** —— P5 的最后一块拼图。

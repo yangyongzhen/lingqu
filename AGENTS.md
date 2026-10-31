@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.21.0**（2026-10-31），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.21.1**（2026-10-31），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -162,6 +162,9 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 46 | 装配闸只判"有没有 `libs/arm64-v8a/*.so`"→ 白屏 HAP 照样 pass | 存在性校验要**点名**：期望 `<moduleName>` → `lib<name>.so`（`entryModuleNameOf` + `expectedSoNameOf` + `hapHasSo`）。别的闸也别用"至少有一个"这种弱判据 |
 | 47 | 修完 §4-45 仍白屏，但页面 `OnPageEnd httpStatusCode:200` | 比对 `.so` 与 `dist/` 的**时间戳与内嵌资源键**：tauri 把前端编进 `.so`（`index-XXXX.css/js` 明文可见），`dist/` 重建后 `.so` 没重编就是旧前端。`t2h:build` 的 verify 模式（前端指纹闸）会直接报 stale；修法是重编 `.so` 再装配（增量 30 s 级） |
 | 48 | 拿截图证明"界面出来了"，其实拍的是桌面 | `snapshot_display` 拍**整屏**，应用窗口可能被桌面/其它窗口盖住。核对三件事：`uitest dumpLayout` 的前台 bundleName、`hidumper -s WindowManagerService -a '-a'` 里的窗口 bounds、以及与"不启动应用"截图的**逐点差异**（0% 说明拍的是桌面）。**没有视觉时不要拿"进程在跑/日志正常"代替"界面正常"** |
+| 49 | 想打"静态包"，结果 exe 还是链接一堆 `libcangjie-std-*.dll` / `libstdx.*.dll` | 三件事缺一不可：① `compile-option = "--static-std"`（`--static-libs` 已 deprecated）；② `CANGJIE_STDX` 指向 **static 树**（`<stdx>\windows_x86_64_cjnative\static\stdx`），指向 dynamic 树就还是链 .dll；③ mingw 链接行补 `-lcrypt32 -lbcrypt -lws2_32 -liphlpapi -luserenv -lpsapi`——静态 stdx 的 x509 用 `CertCloseStore`，缺 `-lcrypt32` 直接 `undefined symbol`。做完静态版随包 DLL 98 → **5** 个（`libcangjie-runtime` 与 `libcjtbridge` 没静态版，省不掉） |
+| 50 | 为了改编译选项去手改 `targets/desktop/cjpm.toml` → `cj-tauri check` 判骨架漂移 | `targets/` 是派生品。要临时改就用"**备份 → `trap EXIT` 无条件还原**"的脚本（`packaging/build-static-win.sh` 就是这么做的）；根治办法是给 `cj-tauri.toml` 加 `[build] compile_option/link_option` 透传（上游 TODO，见 AGENTS §8） |
+| 51 | 打便携包时"整目录拷 DLL"，结果漏文件（别人的机器上启动即退 `0xC0000135`） | **按导入闭包自动收**：`llvm-objdump -p` 遍历 `main.exe` 与已收 DLL 的导入表做 BFS，从 `CANGJIE_HOME`/`CANGJIE_STDX`/框架 `native` 里解析；收完再跑一次闭包自检，缺任何 `lib*`/`stdx*` 就失败退出。本项目实测靠它抓到 `libwinpthread-1.dll` 与 `vendor/cjh/SHA256SUMS` 两个缺口 |
 
 ---
 
