@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.31.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.34.0**（2026-11-01），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -27,11 +27,12 @@
 
 **任何代码变更交付前必须满足：**
 
-1. `./scripts/test.sh`（Linux/macOS/Git-Bash）或 `scripts\test.bat`（Windows）**全绿**。四道闸缺一不可：
+1. `./scripts/test.sh`（Linux/macOS/Git-Bash）或 `scripts\test.bat`（Windows）**全绿**。**五道闸**缺一不可：
    - ① 业务包 `cjpm build` —— **零警告**（unused 变量/导入、deprecated 一律清零，禁止"先交付后清理"）
    - ② 业务包 `cjpm test` —— `FAILED: 0`、`ERROR: 0`
    - ③ `cj-tauri check` —— 清单校验 + 骨架漂移 + **能力三方比对**（声明 × 插件自述 × 实际装配）
    - ④ `targets/desktop` 的 `cjpm build` —— 骨架侧也要编得过且零警告
+   - ⑤ `cli/` 的 `cjpm build` —— AI 用的命令行入口也要编得过且零警告（AI 接入第 3 步）
 2. **新增行为必须有对应测试**：新增纯函数 → 至少覆盖主路径 + 错误路径 + 一个边界；
    bug 修复 → **先写复现该 bug 的用例（红）再修（绿）**。
 3. **行为变更必须给可观测证据**：日志行、命令返回值、窗口标题、进程/端口状态。
@@ -208,7 +209,7 @@ type 用 `feat` / `fix` / `docs` / `refactor` / `test` / `chore`。
 
 ## 7. 交付检查清单
 
-- [ ] `./scripts/test.sh` 或 `scripts\test.bat` 全绿（四道闸）
+- [ ] `./scripts/test.sh` 或 `scripts\test.bat` 全绿（五道闸）
 - [ ] 界面改动有 `t2h:ui_report` 的版面证据（或 `LINGQU_UI_PROBE=1` 序列）
 - [ ] 新增纯函数有测试；bug 修复有复现用例
 - [ ] 新增命令三处联动齐全（register × capabilities × UI）

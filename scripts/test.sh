@@ -143,7 +143,7 @@ say "cj-tauri  : $CJ_TAURI_ROOT"
 
 # ---------- 可选：sync ----------
 if [ "$SYNC" = "1" ]; then
-  info "[0/4] cj-tauri sync ..."
+  info "[0/5] cj-tauri sync ..."
   if [ ! -x "$CLI" ] && [ ! -f "$CLI" ]; then fail "找不到 cj-tauri CLI：$CLI"; exit 1; fi
   run_capture "$ROOT" "$CLI" sync
   if [ "$CODE" -ne 0 ]; then fail "sync 失败"; printf '%s\n' "$TEXT"; exit 1; fi
@@ -151,7 +151,7 @@ if [ "$SYNC" = "1" ]; then
 fi
 
 # ---------- ① 业务包构建（零警告） ----------
-info "[1/4] 业务包 cjpm build（零警告）..."
+info "[1/5] 业务包 cjpm build（零警告）..."
 run_capture "$ROOT" cjpm build
 WARN="$(count_pattern '^[[:space:]]*warning:')"
 if [ "$CODE" -eq 0 ] && [ "$WARN" -eq 0 ]; then
@@ -164,7 +164,7 @@ else
 fi
 
 # ---------- ② 单元测试 ----------
-info "[2/4] 业务包 cjpm test ..."
+info "[2/5] 业务包 cjpm test ..."
 run_capture "$ROOT" cjpm test
 FAILN="$(count_pattern 'FAILED:[[:space:]]*[1-9]')"
 ERRN="$(count_pattern 'ERROR:[[:space:]]*[1-9]')"
@@ -189,7 +189,7 @@ if [ "$QUICK" = "1" ]; then
 fi
 
 # ---------- ③ cj-tauri check（三方比对 + 漂移） ----------
-info "[3/4] cj-tauri check（能力三方比对 / 骨架漂移）..."
+info "[3/5] cj-tauri check（能力三方比对 / 骨架漂移）..."
 if [ ! -f "$CLI" ] && [ ! -x "$CLI" ]; then
   fail "找不到 CLI：$CLI"
   RESULTS+=("check:FAIL")
@@ -206,7 +206,7 @@ else
 fi
 
 # ---------- ④ 桌面产物构建 ----------
-info "[4/4] 桌面产物 cjpm build（targets/desktop）..."
+info "[4/5] 桌面产物 cjpm build（targets/desktop）..."
 APPDIR="$ROOT/targets/desktop"
 if [ ! -d "$APPDIR" ]; then
   fail "骨架不存在：$APPDIR（先跑 ./scripts/test.sh -s）"
@@ -241,6 +241,32 @@ else
     fail "targets/desktop cjpm build exit=$CODE warnings=$WARN"
     printf '%s\n' "$TEXT"
     RESULTS+=("build-app:FAIL")
+  fi
+fi
+
+# ---------- ⑤ CLI 入口构建（给 agent 的 bash 用）----------
+info "[5/5] CLI 入口 cjpm build（cli/，AI 接入第 3 步）..."
+CLIDIR="$ROOT/cli"
+if [ ! -d "$CLIDIR" ]; then
+  fail "CLI 目标不存在：$CLIDIR"
+  RESULTS+=("build-cli:FAIL")
+else
+  if [ "$OS" = "windows" ]; then
+    tasklist 2>/dev/null | grep -qi '^main\.exe' && {
+      warn "[!] 上一版 main.exe 仍在运行，先结束它以释放产物"
+      taskkill //F //IM main.exe >/dev/null 2>&1 || true
+      sleep 1
+    }
+  fi
+  run_capture "$CLIDIR" cjpm build
+  WARN="$(count_pattern '^[[:space:]]*warning:')"
+  if [ "$CODE" -eq 0 ] && [ "$WARN" -eq 0 ]; then
+    pass "cli cjpm build（0 warning）"
+    RESULTS+=("build-cli:PASS")
+  else
+    fail "cli cjpm build exit=$CODE warnings=$WARN"
+    printf '%s\n' "$TEXT"
+    RESULTS+=("build-cli:FAIL")
   fi
 fi
 

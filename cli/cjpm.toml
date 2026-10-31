@@ -1,0 +1,30 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "lingqu_cli"
+  description = "lingqu 命令行入口（给 AI agent 的 bash 用：与界面按钮同一份实现）"
+  version = "0.34.0"
+  target-dir = ""
+  output-type = "executable"
+  compile-option = ""
+  override-compile-option = ""
+  link-option = ""
+  package-configuration = {}
+
+[dependencies]
+  lingqu = { path = ".." }
+  cjTauri = { path = "${CJ_TAURI_ROOT}" }
+
+[target.x86_64-w64-mingw32.bin-dependencies]
+  path-option = ["${CJ_TAURI_ROOT}/native"]
+
+[target.x86_64-w64-mingw32]
+  compile-option = ""
+  link-option = "-L${CJ_TAURI_ROOT}/native -lcjtbridge -lcrypt32 -lbcrypt -lws2_32 -liphlpapi -luserenv -lpsapi --subsystem=console"
+
+[target.aarch64-unknown-linux-ohos]
+  compile-option = ""
+  link-option = ""
+
+[target.x86_64-unknown-linux-gnu]
+  compile-option = ""
+  link-option = "-L${CJ_TAURI_ROOT}/native -lcjtbridge"

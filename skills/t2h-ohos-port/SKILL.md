@@ -53,6 +53,28 @@ description: Tauri 应用移植到鸿蒙 PC（HarmonyOS / OpenHarmony）的完�
 - 版本号反推：真机设置页 vX.Y.Z 来自 .so 内嵌 dist——**看到旧版本号 = .so 没重编**（同一坑的另一种表现）
 - ArkWeb 控制台 / panic.log / hilog 三路证据都要留
 
+## 工具：`lingqu-cli`（能真跑，不只是给建议）
+
+灵渠迁移台的命令行入口，和界面按钮**同一份实现**（`lingqu-cli <命令> --键 值`）。
+在工程目录里直接跑，结果既打印 JSON、也落工程自己的 `.lingqu/`：
+
+```bash
+lingqu-cli scan   --path .                   # 扫描画像 → .lingqu/scan/<工程>.json
+lingqu-cli deps   --path .                   # 依赖矩阵 → .lingqu/deps/<工程>.json
+lingqu-cli port   --path .                   # 规则改造（预览；apply 才落盘且可 revert）
+lingqu-cli build  --path .                   # 交叉编译；--verifyOnly 只比前端指纹
+lingqu-cli hap    --path .                   # 装配 HAP
+lingqu-cli sign   --path .                   # 签名体检（--apply 写回 signingConfigs）
+lingqu-cli deploy --path .                   # 真机装启 + hilog
+lingqu-cli verify --path .                   # 采证 + 功能清单 + 可用率
+lingqu-cli report --path .                   # 三段式迁移报告
+lingqu-cli resume --path .                   # 8 步断点板（下一步是哪步）
+lingqu-cli batch  --samples "a|b|c"          # 多工程矩阵
+```
+
+规则：**先 `resume` 看停在哪步，再跑那一步**；判断"能不能用"只认 `verify` 的落档，
+不要拿 `build` 通过就宣称可用。真机装不上先 `sign` 体检再看 `deploy` 的 hilog。
+
 ## references（按需读，不要全读）
 
 | 文件 | 什么时候读 |

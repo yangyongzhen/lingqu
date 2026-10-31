@@ -5,6 +5,54 @@
 
 ---
 
+## [0.34.0] - 2026-11-01
+
+**主题**：**AI 接入第 3 步 —— `t2h:*` CLI 化**：新增 `lingqu-cli` 可执行文件，让 **agent 的 bash
+能把工具真跑起来**（此前只有应用内 IPC 入口，AI 只能"讲"不能"做"）。
+
+### Added
+
+- **`cli/` 目标**（独立可执行 `lingqu-cli`，产物 `cli/target/release/bin/main.exe`，分发时改名即可）：
+  `scan / deps / port / revert / decisions / diagnose / build / hap / sign / deploy / verify /
+  report / batch / resume / skill / agent_context / env`
+- `src/cli.cj`（业务包内，可单测）：
+  - `argvToJson` / `argvToJsonWithValues`：`--k v` 与 `--k=v` 两种形态都认；布尔开关（`verifyOnly`
+    等）不带值算 true；**纯命令（不带开关）也会占位**——否则会报"不认识的命令："
+  - `cliCommandSupported` / `cliHasCommand` / `cliUsage`：白名单 + 用法（GUI 专属 `quit`/`cjh_*` 不开放）
+  - `dispatchCli`：**零重构复用** `CommandHandler`——`XxxCommand().handle(name, args, IpcContext("cli", IpcHub()))`，
+    所以 CLI 与界面按钮是**同一份实现**，不会出现"CLI 能跑、界面报错"
+- 门禁从 **4 道 → 5 道**：新增 ⑤ `cli cjpm build`（零警告）
+- `cli/README.md`（命令表 / 退出码 / 运行环境 / 已知限制）
+- 技能正文与 `AGENTS.md` 受管区块都改成**能真跑的命令**（`lingqu-cli scan --path .` 等），
+  并写明"先 `resume` 看停在哪步，再跑那一步"
+
+### 证据（本机 Windows x64，2026-11-01）
+
+```
+门禁：build-biz:PASS test:PASS(TOTAL=198) check:PASS build-app:PASS build-cli:PASS
+--list：列出 17 个命令（用法 + 退出码说明）
+resume --path E:\test\rust\habit-tree → exit=0，JSON 4498 B
+   {"ok":true,"project":"habit-tree","next":"port",
+    "hint":"下一步是「规则改造」——从这一步接着做（前 6 步已有落档证据）"}
+scan --path E:\test\rust\habit-tree（在空目录里跑）→ exit=0
+   {"ok":true,"out":".lingqu/scan/habit-tree.json","R":24,"C1":100,…}
+   → 落档真的写在**当前目录**：.lingqu/scan/habit-tree.json 10113 B
+坏命令 nosuchcmd → exit=1，stderr 给出"不认识的命令：nosuchcmd"
+```
+
+> 关键点：`scan` 是在一个**空目录**里跑的，落档落在那个目录的 `.lingqu/` ——
+> 这正是 agent 需要的行为（它在用户工程目录里跑，产物就该进用户工程）。
+
+### 未做（如实）
+
+- `lingqu-cli.exe` 的名字要打包/分发时改（cjpm 产物固定叫 `main.exe`）；尚未加进 `packaging/`
+- cjh 技能 frontmatter 的 `tools:`（声明式工具）**硬编码 `/bin/bash -c`**，Windows 上用不了
+  （上游 `registry.cj` 实现），所以本项目让 agent 用它的 bash 工具（Windows 上自动选 Git Bash）调 CLI；
+  这条已记进 `cli/README.md` 与进度记录，作为上游回馈项
+- ④（AI 建议命令的一键执行 + 结果回填）未开工
+
+---
+
 ## [0.33.0] - 2026-11-01
 
 **主题**：**AI 接入第 2 步 —— 工程上下文**：让 agent 的 bash/文件工具真正落到用户的工程上，

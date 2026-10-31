@@ -81,12 +81,14 @@ public func testAgentContextPathAndBody(): Unit {
     // 空工程目录不给路径（调用方据此报错，而不是写到 cwd）
     @Assert(agentContextPathOf(""), "")
 
-    // 正文必须带上这个工程的名字，以及三类关键信息（落档 / 工具 / 口径）
+    // 正文必须带上这个工程的名字，以及三类关键信息（落档 / 可跑的命令 / 口径）
     let body = agentContextBody("habit-tree", "E:\\work\\habit-tree")
     @Assert(body.contains("habit-tree"), true)
     @Assert(body.contains(".lingqu/scan/habit-tree.json"), true)
-    @Assert(body.contains("t2h:scan"), true)
-    @Assert(body.contains("t2h:deploy"), true)
+    // ③ 之后正文里给的是**能真跑的命令**（不是"去界面点按钮"）
+    @Assert(body.contains("lingqu-cli scan"), true)
+    @Assert(body.contains("lingqu-cli deploy"), true)
+    @Assert(body.contains("lingqu-cli verify"), true)
     // 两条最容易让模型说错话的口径必须显式写出
     @Assert(body.contains("平台限制 ≠ 失败"), true)
     @Assert(body.contains("未验证 ≠ 通过"), true)
