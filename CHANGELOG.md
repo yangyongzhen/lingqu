@@ -5,6 +5,70 @@
 
 ---
 
+## [0.25.0] - 2026-11-01
+
+**主题**：**真·单文件包**——整份应用只剩一个 `main.exe`（无 DLL、无 `assets/`、无 `vendor/`），
+cjh 引擎与 WebView2Loader 变成 PE 资源随二进制走，运行期释放再用。
+
+### Added
+
+- **`packaging/pack-win-single-full.sh`**：把四件事一次做完（机制照抄框架
+  `cj-tauri/scripts/pack-win-single.sh`，不自创）：
+  ① 仓颉 std/stdx 静态链接（`--static --static-std` + stdx 的 static 树）；
+  ② C 桥编成静态归档 `libcjtbridge.a`（`-DCJ_EMBED_WEBVIEW2_LOADER -DCJ_PACK_ASSETS_EMBEDDED`）；
+  ③ `windres` 把随包资源打成 `pack_assets.o`（RT_RCDATA，**必须作为链接输入**直接给 ld.lld，
+     塞进 `.a` 不会被取用）；
+  ④ 页面与能力清单 base64 进二进制（复用 `pack-win-single.sh` 的 `packed_assets.cj` 做法）
+- `packaging/pack-assets.txt`（随包清单：`cjh.exe` + 3 个运行时 DLL）、`packaging/README-full.md`
+- `src/cjh_host.cj`：`extractEmbeddedCjh()`（释放到 `%LOCALAPPDATA%\lingqu\cjh`）、
+  `shouldUseExtracted()`（**释放数 > 0 且 SHA256 校验通过**才用，纯函数 + 单测）、
+  `installBinPath()`；`cjhBinPath()` 增加「内嵌释放」兜底分支
+- `cjhStatusJson()` 在 `running` 分支回投 `binPath`：引擎已在跑时也能看出用的是哪一份二进制
+  （纯函数 `knownBinPath` + 单测）——单文件产物里这直接区分「内嵌释放的那份」与「用户自己起的」
+
+### Changed
+
+- 版本 0.24.0 → **0.25.0**；单测 **154 → 156**（`testShouldUseExtracted` + `testKnownBinPath`）
+
+### Fixed
+
+- **静态链接 C 桥报 `undefined symbol: IID_IFileOpenDialog / IID_IUnknown / IID_IDropTarget`**：
+  mingw 下 COM 的 IID 守卫符号在 `libuuid.a` 里，桥的文件对话框与拖放实现引用了它们。
+  链接行补齐 `-lole32 -loleaut32 -luuid -lcomdlg32 -lgdi32 -loleacc -lshlwapi -lshcore`
+  （与框架 `native/build_win.bat` 对齐），链接通过
+
+### 证据（本机 Windows x64，2026-11-01，0.25.0 产物）
+
+```
+[1/6] 随包资源 4 个；WebView2Loader 162392 字节
+[4/6] cjpm build success（静态全量重编，0 warning）
+[5/6] 导入表：CRYPT32 KERNEL32 SHCORE SHELL32 USER32 WS2_32 comdlg32 dbghelp msvcrt ole32
+      （**没有** libcjtbridge.dll / WebView2Loader.dll / libcangjie-runtime.dll / libboundscheck.dll）
+      PE 资源节 .rsrc：有
+[6/6] 产物：dist/lingqu-0.25.0-win-x64-full/main.exe（58,998,784 字节）+ README.md —— 目录里只有这两个文件
+```
+
+隔离验证（拷到 `C:\lingqu-full-test`，目录里**只有 main.exe**，`%LOCALAPPDATA%\lingqu` 先删空）：
+
+```
+启动后 %LOCALAPPDATA%\lingqu\cjh\ 出现 4 个文件：
+  cjh.exe 13446144 / libcangjie-runtime.dll 1206272 / libcrypto-3-x64.dll 6614528 / libssl-3-x64.dll 1241600
+SHA256 与 CJH_VENDOR_FILES 常量逐字一致（3dc9db6f… / 03f4d59a… / a997e132… / bbaf8a8c…）
+8765 监听者路径 = C:\Users\<u>\AppData\Local\lingqu\cjh\cjh.exe ← 跑的是**释放出来的**那份
+ui_report：screens=7 idCount=156 wsState=connected errorCount=0 tag=probe-done
+           cjhState=running、cjhBin=C:\Users\<u>\AppData\Local\lingqu\cjh\cjh.exe（本版新增回投）
+关窗 → main 与 cjh 同时退出，8765 释放（ownership 语义未被单文件化改薄）
+```
+
+### 未做（如实）
+
+- 单文件包**只在 Windows x64 验证**；Linux/鸿蒙侧的静态桥仍是上游 TODO
+- `dist/` 产物不入库（gitignore）；复现请跑 `packaging/pack-win-single-full.sh`
+  （需要 `CANGJIE_STDX_ROOT` 的 static 树、`WEBVIEW2_SDK_ROOT`、llvm-mingw、`CJ_TAURI_ROOT`）
+- 未做代码签名：单文件 exe 首次运行仍可能被 SmartScreen 拦（与 0.24.0 相同）
+
+---
+
 ## [0.24.0] - 2026-10-31
 
 **主题**：**P6 第二刀 —— `t2h:verify` 上线**：采证据 → 出清单 → 算可用率 → 导出三段式报告，

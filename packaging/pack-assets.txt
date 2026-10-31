@@ -1,0 +1,10 @@
+# 单文件包里**编不进静态库**的随包文件（一行一个，相对仓根）
+#
+# cjh 是独立可执行程序 + 3 个按名字加载的运行时 DLL，既不能静态链接、也不在 PE 导入表里，
+# 只能作为 PE 资源（RT_RCDATA）跟着 exe 走，运行期由 C 桥取出来写盘
+# （`cj-tauri` 的 `extractEmbeddedAssets` → `%LOCALAPPDATA%\lingqu\cjh`）。
+# 清单里的路径必须真实存在，否则打包脚本直接失败（别让"少一个 DLL"变成运行期才炸）。
+vendor/cjh/win-x64/cjh.exe
+vendor/cjh/win-x64/libcangjie-runtime.dll
+vendor/cjh/win-x64/libcrypto-3-x64.dll
+vendor/cjh/win-x64/libssl-3-x64.dll

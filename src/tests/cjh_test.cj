@@ -65,3 +65,34 @@ public func testVendorCandidatesWalkUpFromCwd(): Unit {
     // 空 base 不产生候选（别造出 "/vendor/cjh/..." 这种绝对路径）
     @Assert(vendorCandidatesFrom("", 6).size, 0)
 }
+
+/* ---------- 引擎已在跑时回投「用的是哪一份二进制」 ---------- */
+
+@Test
+public func testKnownBinPath(): Unit {
+    let env = "D:\\a\\cjh.exe"
+    let inst = "C:\\Users\\u\\AppData\\Local\\lingqu\\cjh\\cjh.exe"
+    // LINGQU_CJH 优先（用户显式指定就是说"我要这份"）
+    @Assert(knownBinPath(env, true, inst, true), env)
+    // env 不可读 → 退到安装目录（单文件产物里就是内嵌释放的那份）
+    @Assert(knownBinPath(env, false, inst, true), inst)
+    // 两条都不可读 → 空串（界面据实显示"来源未知"，不编造路径）
+    @Assert(knownBinPath(env, false, inst, false), "")
+    // 空串当来源 → 等同没有
+    @Assert(knownBinPath("", true, "", true), "")
+    // 只有安装目录（env 为空）也要能报出来
+    @Assert(knownBinPath("", false, inst, true), inst)
+}
+
+/* ---------- 单文件产物的内嵌释放（PE 资源） ---------- */
+
+@Test
+public func testShouldUseExtracted(): Unit {
+    // 有资源且校验过 → 用
+    @Assert(shouldUseExtracted(1, true), true)
+    @Assert(shouldUseExtracted(4, true), true)
+    // 没有内嵌资源（普通构建）→ 不用，也不算错误
+    @Assert(shouldUseExtracted(0, false), false)
+    // 释放了但校验不过 → 绝不用（来路不明的同名文件不该被静默执行）
+    @Assert(shouldUseExtracted(4, false), false)
+}

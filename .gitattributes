@@ -23,6 +23,10 @@
 # 在 Windows 上新增 .sh 后必须显式补：git update-index --chmod=+x scripts/xxx.sh
 *.sh    text eol=lf
 
+# 打包脚本按行读的清单（packaging/pack-assets.txt）：必须是 LF——
+# 检出成 CRLF 会让每行末尾多一个 \r，脚本按名字找文件就全部找不到。
+packaging/*.txt text eol=lf
+
 # Windows 脚本：CRLF（cmd.exe 对 LF-only 的 .bat 处理不稳定）
 *.bat   text eol=crlf
 *.cmd   text eol=crlf

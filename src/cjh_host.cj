@@ -438,6 +438,15 @@ func cjhInstallDir(): String {
     return home + "/.local/share/lingqu/cjh"
 }
 
+/** 安装目录里的 cjh 可执行文件路径（拿不到安装目录回空串）；**不判存在性**，调用方自己判 */
+func installBinPath(): String {
+    let dir = cjhInstallDir()
+    if (dir.size == 0) {
+        return ""
+    }
+    return dir + cjhPathSep() + cjhBinName()
+}
+
 /**
  * cjh 可执行文件的实际路径，按优先级找；都没有返回空串（上层如实报「引擎缺失」，不猜路径）。
  *   ① LINGQU_CJH 环境变量
@@ -451,18 +460,24 @@ public func cjhBinPath(): String {
         eprintln("[lingqu] cjh: 用 LINGQU_CJH 指定的${fromEnv}")
         return fromEnv
     }
-    let install = cjhInstallDir()
-    if (install.size > 0) {
-        let p = install + cjhPathSep() + cjhBinName()
-        if (fileReadable(p)) {
-            eprintln("[lingqu] cjh: 用部署目录里的${p}")
-            return p
-        }
+    let install = installBinPath()
+    if (install.size > 0 && fileReadable(install)) {
+        eprintln("[lingqu] cjh: 用部署目录里的${install}")
+        return install
     }
     let vendor = cjhVendorDir()
     if (cjhVendorVerified(vendor)) {
         let p = vendor + cjhPathSep() + cjhBinName()
         eprintln("[lingqu] cjh: 用随包引擎 ${p}")
+        return p
+    }
+    // 真·单文件产物：vendor/ 根本不在盘上，cjh（+3 个运行时 DLL）是 **PE 资源**，
+    // 运行期由框架 `extractEmbeddedAssets` 释放到安装目录再用（机制见 packaging/pack-win-single-full.sh）。
+    // 普通构建这里返回 0（没有内嵌资源），什么都不做。
+    let extracted = extractEmbeddedCjh()
+    if (shouldUseExtracted(extracted, cjhVendorVerified(cjhInstallDir()))) {
+        let p = installBinPath()
+        eprintln("[lingqu] cjh: 用内嵌释放的引擎 ${p}（释放 ${extracted} 个文件）")
         return p
     }
     eprintln("[lingqu] cjh: 随包引擎不可用，查过的目录 = ${vendor}（可用 LINGQU_HOME / LINGQU_CJH_HOME / LINGQU_CJH 覆盖）")
@@ -487,6 +502,13 @@ public func cjhStatusJson(): JsonValue {
         obj.put("state", JsonString("running"))
         putEndpoints(obj, port)
         obj.put("owned", JsonBool(gCjhOwned))
+        // running 也要回投是哪一份二进制：单文件产物里"内嵌释放的那份"与"用户自己起的"必须能区分，
+        // 否则界面只显示 running，排查时不知道到底在跑哪个文件。
+        // 这里**不做 SHA256 校验**（已在跑就不该因为校验慢卡住轮询），只查 env 与安装目录两条。
+        let envBin = firstNonEmptyEnv(["LINGQU_CJH"])
+        let installBin = installBinPath()
+        obj.put("binPath", JsonString(knownBinPath(envBin, fileReadable(envBin), installBin,
+            fileReadable(installBin))))
         return obj
     }
     let bin = cjhBinPath()
@@ -1024,4 +1046,54 @@ public class CjhCommands <: CommandHandler {
             case None => return fallback
         }
     }
+}
+
+/**
+ * 纯函数：引擎已经在跑时，报告「用的是哪一份二进制」。
+ *
+ * 只认两条**不需要 SHA 校验**的来源（`LINGQU_CJH` 与安装目录）：正在跑的进程不该因为
+ * 轮询里做 4 个文件的哈希而变慢；校验只在"要拉起"的路径上做（`cjhBinPath`）。
+ * 两条都拿不到就回空串——界面据此显示「已在运行（来源未知）」，不编造路径。
+ */
+public func knownBinPath(fromEnv: String, envReadable: Bool, installBin: String, installReadable: Bool): String {
+    if (envReadable && fromEnv.size > 0) {
+        return fromEnv
+    }
+    if (installReadable && installBin.size > 0) {
+        return installBin
+    }
+    return ""
+}
+
+/**
+ * 把内嵌的随包资源（cjh + 它的运行时 DLL）释放到安装目录。
+ *
+ * 单文件产物里这些文件是 PE 资源（RT_RCDATA），编不进静态库、也不在导入表里，
+ * 只能运行期写盘再用绝对路径拉起。普通构建没有内嵌资源，本函数返回 0（**不是错误**）。
+ * 幂等：目标已在且大小一致时框架会跳过，所以每次启动都可以调。
+ */
+public func extractEmbeddedCjh(): Int64 {
+    let dir = cjhInstallDir()
+    if (dir == "") {
+        return 0
+    }
+    try {
+        if (!exists(Path(dir))) {
+            Directory.create(Path(dir), recursive: true)
+        }
+    } catch (e: Exception) {
+        eprintln("[lingqu] 建安装目录失败：${dir}（${e}）")
+        return 0
+    }
+    return extractEmbeddedAssets(dir)
+}
+
+/**
+ * 纯函数：释放出来的文件能不能用。
+ *
+ * 两个条件都要满足：确实释放出了文件（>0），且**SHA256 校验通过**——
+ * 校验不过绝不执行（与 vendor 目录同一条纪律：来路不明的同名文件不该被静默运行）。
+ */
+public func shouldUseExtracted(extracted: Int64, verified: Bool): Bool {
+    return extracted > 0 && verified
 }
