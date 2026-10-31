@@ -167,6 +167,8 @@ public class EnvCommand <: CommandHandler {
         res.put("signPath", JsonString(envOr("LINGQU_SIGN_PATH", "")))
         // 置 LINGQU_UI_SCREEN 就把启动时的初始屏切过去（截某屏版面证据的可复现入口）
         res.put("uiScreen", JsonString(envOr("LINGQU_UI_SCREEN", "")))
+        // 置 LINGQU_DEPLOY_PATH 就在启动时跑一次 t2h:deploy（装 → 启 → 抓 hilog，秒级）
+        res.put("deployPath", JsonString(envOr("LINGQU_DEPLOY_PATH", "")))
         return res
     }
 }
@@ -1087,6 +1089,14 @@ public class UiReportCommand <: CommandHandler {
         o.put("signType", JsonString(argStr(args, "signType", "")))
         o.put("signCandCount", JsonInt(argInt(args, "signCandCount", 0)))
         o.put("signApplied", JsonBool(argBool(args, "signApplied", false)))
+        // T5-5 真机部署（t2h:deploy 回投）
+        o.put("deployOk", JsonBool(argBool(args, "deployOk", false)))
+        o.put("deploySerial", JsonString(argStr(args, "deploySerial", "")))
+        o.put("deployDeviceCount", JsonInt(argInt(args, "deployDeviceCount", 0)))
+        o.put("deployInstalled", JsonBool(argBool(args, "deployInstalled", false)))
+        o.put("deployStarted", JsonBool(argBool(args, "deployStarted", false)))
+        o.put("deployHilogOk", JsonBool(argBool(args, "deployHilogOk", false)))
+        o.put("deployError", JsonString(argStr(args, "deployError", "")))
         o.put("errorCount", JsonInt(argInt(args, "errorCount", 0)))
         // 自检序列可判定性（0.13.1 补）：以前 tag 只进 console.log，落盘 7 条快照长得
         // 一模一样，无法回答"哪条是 probe-initial、哪条是 probe-done"
@@ -2080,7 +2090,224 @@ func profileAllows(p7bPath: String, udid: String): Bool {
     }
 }
 
-/** 签名配置 → JSON（落档用） */func signingJson(proj: ProjSigning, certPath: String, profilePath: String, storeFile: String,
+/**
+ * t2h:deploy —— 真机部署与启动体检（T5-5 命令化，0.21.0）。
+ *
+ * 把 0.17.0 手工跑通的那条链做成命令：`hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog。
+ * 两条纪律来自真机实测，别改成"看起来更顺"的写法：
+ *   · **hdc 失败时退出码仍是 0**（AGENTS §4-40）——成败只看输出文本，交给 deploy.cj 的解析层
+ *   · **安装成功 ≠ 界面出来**（§4-45）：装 / 启 / 日志三段分开报，最靠前的那段失败才是真因
+ *
+ * 落档：`.lingqu/deploy/<工程>.json`（lingqu/deploy/v1）+ `.log`（三段 hdc 原文 + hilog 尾部）
+ */
+public class DeployCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_DEPLOY_PATH", "")
+        }
+        if (path.size == 0) {
+            path = envOr("LINGQU_HAP_PATH", "")
+        }
+        var res = JsonObject()
+        let hdc = hdcPathOr()
+        if (hdc == "") {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("找不到 hdc（找过 OHOS_HOME / DEVECO_SDK_HOME / DEVECO_HOME 下的 toolchains）"))
+            return res
+        }
+
+        // ---- 工程位置：bundleName / ability / HAP 产物 ----
+        var bundleName = ""
+        var ohosDir = ""
+        var projName = "unknown"
+        if (path.size > 0) {
+            projName = sanitizeFileName(projectNameOf(path))
+            let tomlPath = cargoTomlPathOf(path)
+            if (tomlPath != "") {
+                let srcDir = tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+                ohosDir = hostPath("${srcDir}/gen/ohos")
+                let appJson = "${ohosDir}/AppScope/app.json5"
+                if (exists(Path(appJson))) {
+                    try {
+                        bundleName = json5ValueAfter(String.fromUtf8(File.readFrom(appJson)), "bundleName")
+                    } catch (e: Exception) {
+                        let _ = e
+                    }
+                }
+            }
+        }
+        var hapPath = argStr(args, "hap", "")
+        if (hapPath == "") {
+            hapPath = envOr("LINGQU_DEPLOY_HAP", "")
+        }
+        if (hapPath == "" && ohosDir != "") {
+            hapPath = "${ohosDir}/entry/build/default/outputs/default/entry-default-signed.hap"
+        }
+        var ability = argStr(args, "ability", "")
+        if (ability == "") {
+            ability = "EntryAbility"
+        }
+        let wantStart = argBool(args, "start", true)
+        let logLines = argInt(args, "logLines", 40)
+
+        // ---- ① 设备 ----
+        var listText = ""
+        try {
+            let (code, out, errOut) = executeWithOutput(hdc, ["list", "targets", "-v"])
+            listText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+            let _ = code
+        } catch (e: Exception) {
+            listText = "hdc 起不来：${e}"
+        }
+        let devices = parseHdcTargets(listText)
+        var serial = argStr(args, "serial", "")
+        if (serial == "") {
+            serial = envOr("LINGQU_DEPLOY_SERIAL", "")
+        }
+        if (serial == "" && devices.size > 0) {
+            serial = devices[0].serial
+        }
+        var serialOk = false
+        if (serial != "") {
+            if (devices.size == 0) {
+                serialOk = true   // 列表拿不到（老版本 hdc）时信任显式 serial
+            } else {
+                for (d in devices) {
+                    if (d.serial == serial) {
+                        serialOk = true
+                    }
+                }
+            }
+        }
+
+        // ---- ② 安装 ----
+        var installText = ""
+        var installStep = DeployStep("install", false, "未执行", 0)
+        if (serialOk) {
+            if (!exists(Path(hapPath))) {
+                installStep = DeployStep("install", false, "找不到 HAP：${hapPath}（先跑「装配 HAP」）", 0)
+            } else {
+                try {
+                    let (code, out, errOut) = executeWithOutput(hdc, ["-t", serial, "install", "-r", hapPath])
+                    installText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                    installStep = parseInstallResult(installText, code)
+                } catch (e: Exception) {
+                    installStep = DeployStep("install", false, "hdc install 起不来：${e}", 0)
+                }
+            }
+        }
+
+        // ---- ③ 启动 ----
+        var startText = ""
+        var startStep = DeployStep("start", false, "未执行", 0)
+        if (!wantStart) {
+            startStep = DeployStep("start", true, "按参数跳过启动", 0)
+        } else if (serialOk && installStep.ok) {
+            if (bundleName == "") {
+                startStep = DeployStep("start", false, "读不到 bundleName（AppScope/app.json5），可用 bundle 参数指定", 0)
+            } else {
+                try {
+                    let (code, out, errOut) = executeWithOutput(hdc,
+                        ["-t", serial, "shell", "aa", "start", "-a", ability, "-b", bundleName])
+                    startText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                    startStep = parseStartResult(startText, code)
+                } catch (e: Exception) {
+                    startStep = DeployStep("start", false, "aa start 起不来：${e}", 0)
+                }
+            }
+        }
+
+        // ---- ④ hilog（启动后抓尾部，判崩溃）----
+        var hilogText = ""
+        var healthy = true
+        if (serialOk && startStep.ok) {
+            try {
+                let (code, out, errOut) = executeWithOutput(hdc, ["-t", serial, "shell", "hilog", "-x"])
+                hilogText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                let _ = code
+                healthy = hilogLooksHealthy(hilogText)
+            } catch (e: Exception) {
+                hilogText = "抓 hilog 失败：${e}"
+            }
+        }
+        let tailLines = hilogTail(hilogText, logLines)
+
+        // ---- 判定 ----
+        let verdict = judgeDeploy(serialOk, installStep.ok, startStep.ok, healthy, serial,
+            installStep.failCode)
+
+        // ---- 落档 ----
+        var outError = ""
+        var outJson = ""
+        var outLog = ""
+        var logText = "[devices]\n" + listText + "\n"
+        logText += "[install] serial=${serial} ok=${installStep.ok} code=${installStep.failCode}\n" + installText + "\n"
+        logText += "[start] ok=${startStep.ok}\n" + startText + "\n"
+        logText += "[hilog] healthy=${healthy} lines=${tailLines.size}\n"
+        for (line in tailLines) {
+            logText += line + "\n"
+        }
+        try {
+            if (!exists(Path(".lingqu/deploy"))) {
+                if (!exists(Path(".lingqu"))) {
+                    Directory.create(Path(".lingqu"))
+                }
+                Directory.create(Path(".lingqu/deploy"))
+            }
+            outJson = ".lingqu/deploy/${projName}.json"
+            outLog = ".lingqu/deploy/${projName}.log"
+            File.writeTo(outLog, logText.toArray())
+            var root = JsonObject()
+            root.put("schema", JsonString("lingqu/deploy/v1"))
+            root.put("project", JsonString(projName))
+            root.put("hdc", JsonString(hdc))
+            root.put("serial", JsonString(serial))
+            root.put("deviceCount", JsonInt(Int64(devices.size)))
+            root.put("hapPath", JsonString(hapPath))
+            root.put("bundleName", JsonString(bundleName))
+            root.put("ability", JsonString(ability))
+            root.put("install", installStep.toJson())
+            root.put("start", startStep.toJson())
+            root.put("hilogHealthy", JsonBool(healthy))
+            root.put("hilogLines", JsonInt(Int64(tailLines.size)))
+            root.put("verdict", verdict.toJson())
+            File.writeTo(outJson, root.toJsonString().toArray())
+        } catch (e: Exception) {
+            outError = "落档失败：${e}"
+        }
+
+        res.put("ok", JsonBool(verdict.ok && outError == ""))
+        res.put("serial", JsonString(serial))
+        res.put("deviceCount", JsonInt(Int64(devices.size)))
+        res.put("hapPath", JsonString(hapPath))
+        res.put("bundleName", JsonString(bundleName))
+        res.put("installed", JsonBool(installStep.ok))
+        res.put("installDetail", JsonString(installStep.detail))
+        res.put("installCode", JsonInt(installStep.failCode))
+        res.put("started", JsonBool(startStep.ok))
+        res.put("startDetail", JsonString(startStep.detail))
+        res.put("hilogHealthy", JsonBool(healthy))
+        res.put("hilogLines", JsonInt(Int64(tailLines.size)))
+        res.put("reason", JsonString(verdict.reason))
+        res.put("nextStep", JsonString(verdict.nextStep))
+        res.put("outJson", JsonString(outJson))
+        res.put("outLog", JsonString(outLog))
+        var em = outError
+        if (em == "" && !verdict.ok) {
+            em = verdict.reason
+        }
+        res.put("error", JsonString(em))
+        eprintln("[lingqu][deploy] ${projName} serial=${serial} installed=${installStep.ok} " +
+            "started=${startStep.ok} hilogHealthy=${healthy} ok=${verdict.ok}")
+        return res
+    }
+}
+
+/** 签名配置 → JSON（落档用） */
+func signingJson(proj: ProjSigning, certPath: String, profilePath: String, storeFile: String,
     filesExist: Bool): JsonObject {
     var o = JsonObject()
     o.put("configuredName", JsonString(proj.signingConfigName))
@@ -2321,6 +2548,7 @@ public func build(): AppSpec {
         app.register("t2h:build", BuildCommand())
         app.register("t2h:hap", HapCommand())
         app.register("t2h:sign", SignCommand())
+        app.register("t2h:deploy", DeployCommand())
 
             // cjh 命令面：handler 是同一个类，但**每个命令名都要单独 register**
             // （match 里写了分支 ≠ 已注册；漏注册的症状是页面拿到 command not registered）

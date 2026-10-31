@@ -633,7 +633,21 @@ body.ai-hidden .ai-show{display:block}
       <section class="screen" data-screen="verify">
         <div class="whead">
           <div><h1>真机验证</h1><p>功能清单由画像自动生成；每项都要有证据（截图 / hilog / 探针），没有证据不算通过。</p></div>
-          <div class="acts"><button class="btn">重装并复跑</button><button class="btn primary">采集全部证据</button></div>
+        </div>
+        <div class="acts-row">
+          <input id="deployPath" class="mono" placeholder="Tauri 工程路径（或置 LINGQU_DEPLOY_PATH / LINGQU_HAP_PATH）" style="flex:1 1 200px;min-width:160px">
+          <button class="btn primary" id="btnDeploy" title="hdc list targets → hdc install -r → aa start → 抓 hilog">安装并启动</button>
+          <button class="btn" id="btnDeployNoStart" title="只安装，不启动（用于只看签名/包是否被接受）">仅安装</button>
+        </div>
+        <div class="card" style="margin-bottom:12px;padding:10px 14px" id="deployCard">
+          <div class="legend" style="margin:0 0 6px">
+            <span>设备：<b id="depDevice" class="mono">—</b></span>
+            <span>安装：<b id="depInstall">—</b></span>
+            <span>启动：<b id="depStart">—</b></span>
+            <span>hilog：<b id="depHilog">—</b></span>
+            <span>HAP：<b id="depHap">—</b></span>
+          </div>
+          <div class="sethint" id="depNote">点「安装并启动」跑 `hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog 尾部。三段分开报：装得上不等于界面出来（装了但启动失败多半是 ability/bundle 名不对）。</div>
         </div>
         <div class="grid4">
           <div class="stat"><div class="k">核心功能可用率</div><div class="v" style="color:var(--ok)">87<small>%</small></div></div>
@@ -643,7 +657,7 @@ body.ai-hidden .ai-show{display:block}
         </div>
         <div class="grid2" style="margin-top:13px">
           <div class="card" style="margin-top:0">
-            <div class="card-h"><h3>功能清单</h3><span class="right">验收 A4：≥80%</span></div>
+            <div class="card-h"><h3>功能清单</h3><span class="right">验收 A4：≥80%</span><span class="right muted">占位示意</span></div>
             <div class="evi"><span class="chk on">✓</span><span class="t">应用启动无 panic，主界面渲染</span><span class="chips"><span class="pill ok">截图</span><span class="pill ok">hilog</span></span></div>
             <div class="evi"><span class="chk on">✓</span><span class="t">配置列表加载 / 搜索 / 排序</span><span class="chips"><span class="pill ok">截图</span></span></div>
             <div class="evi"><span class="chk on">✓</span><span class="t">新增后重启仍在（存储持久化）</span><span class="chips"><span class="pill ok">探针</span></span></div>
@@ -913,6 +927,11 @@ withBridge(function(tauri){
       // 签名体检探针（T5-5）：LINGQU_SIGN_PATH 显式设置时才跑（秒级，不需要账号）
       if (d && d.signPath) {
         runSign(String(d.signPath));
+      }
+      // 真机部署探针（T5-5）：LINGQU_DEPLOY_PATH 显式设置时跑（装 → 启 → 抓 hilog）
+      if (d && d.deployPath) {
+        $("deployPath").value = String(d.deployPath);
+        runDeploy(String(d.deployPath), true);
       }
       // 指定初始屏（LINGQU_UI_SCREEN=build 之类）：给「截某屏的版面证据」一个可复现入口，
       // 不必靠人手动点左栏（无视觉环境也能落到 ui-report 的 activeScreen 上）
@@ -2279,6 +2298,57 @@ withBridge(function(tauri){
     runBuild(p);
   });
 
+  /* ===== ⑥ 屏 真机部署（T5-5）：hdc 装 → 启 → 抓 hilog ===== */
+  var DEPLOY = { ok: false, serial: '', devices: 0, installed: false, started: false, hilogOk: false, error: '' };
+  function renderDeploy(r){
+    r = r || {};
+    DEPLOY = {
+      ok: r.ok === true,
+      serial: String(r.serial || ''),
+      devices: (typeof r.deviceCount === 'number') ? r.deviceCount : 0,
+      installed: r.installed === true,
+      started: r.started === true,
+      hilogOk: r.hilogHealthy === true,
+      error: String(r.error || '')
+    };
+    $('depDevice').textContent = DEPLOY.serial ? (DEPLOY.serial + '（共 ' + DEPLOY.devices + ' 台）') : ('无（' + DEPLOY.devices + '）');
+    $('depDevice').style.color = DEPLOY.serial ? 'var(--ok)' : 'var(--err)';
+    $('depInstall').textContent = r.installed === true ? '成功' : (r.installDetail ? '失败' : '—');
+    $('depInstall').style.color = r.installed === true ? 'var(--ok)' : (r.installDetail ? 'var(--err)' : '');
+    $('depInstall').title = String(r.installDetail || '');
+    $('depStart').textContent = r.started === true ? '成功' : (r.startDetail ? '失败' : '—');
+    $('depStart').style.color = r.started === true ? 'var(--ok)' : (r.startDetail ? 'var(--err)' : '');
+    $('depStart').title = String(r.startDetail || '');
+    $('depHilog').textContent = r.hilogHealthy === true ? ('无崩溃（' + (r.hilogLines || 0) + ' 行）') : '有崩溃痕迹';
+    $('depHilog').style.color = r.hilogHealthy === true ? 'var(--ok)' : 'var(--err)';
+    var hap = String(r.hapPath || '');
+    $('depHap').textContent = hap ? (hap.split(/[\\/]/).pop() || hap) : '—';
+    $('depHap').title = hap;
+    var note = $('depNote');
+    note.style.color = DEPLOY.ok ? 'var(--ok)' : 'var(--err)';
+    note.textContent = (r.reason || r.error || '尚未部署。') + (r.nextStep ? ('　下一步：' + r.nextStep) : '');
+    if (r.error && !r.reason) { note.textContent = String(r.error).split('\n')[0]; }
+  }
+  function runDeploy(path, start){
+    var note = $('depNote');
+    note.style.color = 'var(--warn)';
+    note.textContent = start ? '部署中（hdc install → aa start → 抓 hilog）…' : '安装中（hdc install -r）…';
+    $('btnDeploy').disabled = true; $('btnDeployNoStart').disabled = true;
+    invoke('t2h:deploy', { path: path || '', start: start === true }).then(function(r){
+      renderDeploy(r || {});
+      reportUi(start === true ? 'deploy-done' : 'deploy-install-only');
+    }).catch(function(e){
+      renderDeploy({ ok: false, error: e && e.message ? e.message : 'invoke error' });
+      reportUi('deploy-error');
+    }).then(function(){ $('btnDeploy').disabled = false; $('btnDeployNoStart').disabled = false; });
+  }
+  $('btnDeploy').addEventListener('click', function(){
+    runDeploy(($('deployPath').value || '').trim(), true);
+  });
+  $('btnDeployNoStart').addEventListener('click', function(){
+    runDeploy(($('deployPath').value || '').trim(), false);
+  });
+
   /* ===== 界面自检上报 ===== */
   function reportUi(tag){
     var body = document.querySelector('.body');
@@ -2360,6 +2430,14 @@ withBridge(function(tauri){
       signType: SIGN.type || '',
       signCandCount: (typeof SIGN.candCount === 'number') ? SIGN.candCount : 0,
       signApplied: SIGN.applied === true,
+      // ⑥ 真机部署（T5-5）
+      deployOk: DEPLOY.ok === true,
+      deploySerial: DEPLOY.serial || "",
+      deployDeviceCount: (typeof DEPLOY.devices === "number") ? DEPLOY.devices : 0,
+      deployInstalled: DEPLOY.installed === true,
+      deployStarted: DEPLOY.started === true,
+      deployHilogOk: DEPLOY.hilogOk === true,
+      deployError: DEPLOY.error || "",
       errorCount: window.__uiErrors.length,
       // tag / ts 让落盘序列可判定（以前 tag 只进 console.log，快照之间无法区分）
       tag: String(tag || ''),

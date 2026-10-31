@@ -217,3 +217,60 @@ public func hilogLooksHealthy(text: String): Bool {
     }
     return true
 }
+
+/** 部署体检结论（`t2h:deploy` 的判定层，纯函数） */
+public class DeployVerdict {
+    public var ok: Bool = false
+    public var reason: String = ""
+    public var nextStep: String = ""
+
+    public func toJson(): JsonObject {
+        var o = JsonObject()
+        o.put("ok", JsonBool(this.ok))
+        o.put("reason", JsonString(this.reason))
+        o.put("nextStep", JsonString(this.nextStep))
+        return o
+    }
+}
+
+/**
+ * 一次部署的四段结论 → 一句话判定 + 可执行下一步。
+ *
+ * 顺序有意为之：**先设备、再安装、再启动、最后看日志**——每一段都是下一段的前提，
+ * 报最靠前的那段失败（后面的"失败"只是前因的后果，报出来反而误导人）。
+ * 特别地：`install` 成功但 `aa start` 失败时，多半是 **ability 名/bundle 名不对**，
+ * 而**不是**签名或包的问题（这两个我们在 0.17.0 真机上实测过区别）。
+ */
+public func judgeDeploy(hasDevice: Bool, installOk: Bool, startOk: Bool, hilogHealthy: Bool,
+    serial: String, failCode: Int64): DeployVerdict {
+    let v = DeployVerdict()
+    if (!hasDevice) {
+        v.ok = false
+        v.reason = "没有在线设备（`hdc list targets` 为空；注意挡掉 `COM1 UART Ready` 这类串口噪声）"
+        v.nextStep = "连上鸿蒙设备并开启 USB 调试，或用 `serial` 参数指定目标"
+        return v
+    }
+    if (!installOk) {
+        v.ok = false
+        v.reason = "安装失败（设备 ${serial}）" + (if (failCode != 0) { "，失败码 ${failCode}" } else { "" })
+        v.nextStep = if (failCode != 0) { hdcFailHintOf(failCode) } else { "看 .lingqu/deploy/<工程>.log 里的 hdc 原文" }
+        return v
+    }
+    if (!startOk) {
+        v.ok = false
+        v.reason = "装上了但启动失败（设备 ${serial}）——多半是 ability/bundle 名不对，不是签名问题"
+        v.nextStep = "确认 `aa start -a <ability> -b <bundle>` 的名字：ability 默认 EntryAbility，bundle 在 AppScope/app.json5"
+        return v
+    }
+    if (!hilogHealthy) {
+        v.ok = false
+        v.reason = "启动成功，但 hilog 里有崩溃/panic 痕迹"
+        v.nextStep = "看落档的 hilog 尾部与 /data/log/faultlog/faultlogger/；崩在 ArkTS 侧多半是缺 .so 或资源"
+        return v
+    }
+    v.ok = true
+    v.reason = "安装 + 启动成功，hilog 无崩溃痕迹（设备 ${serial}）"
+    v.nextStep = "截图确认界面（人眼）；核心功能清单见 ⑥ 屏"
+    return v
+}
+

@@ -87,3 +87,41 @@ public func testHdcFailCodeTable(): Unit {
     @Assert(hdcFailHintOf(9568269).contains("目录"), true)
     @Assert(hdcFailHintOf(0), "")
 }
+
+/* ---------- 部署判定（t2h:deploy 的结论层） ---------- */
+
+@Test
+public func testJudgeDeployHappyPath(): Unit {
+    let v = judgeDeploy(true, true, true, true, "3QC0124B20000048", 0)
+    @Assert(v.ok, true)
+    @Assert(v.reason.contains("安装 + 启动成功"), true)
+    @Assert(v.nextStep.contains("截图"), true)
+}
+
+@Test
+public func testJudgeDeployOrderedFailures(): Unit {
+    // ① 没设备：最靠前，且要提示串口噪声坑
+    let noDev = judgeDeploy(false, false, false, true, "", 0)
+    @Assert(noDev.ok, false)
+    @Assert(noDev.reason.contains("没有在线设备"), true)
+    @Assert(noDev.nextStep.contains("USB"), true)
+    // ② 装不上：报失败码 + 对应处置（9568322 = 签名不可信）
+    let badSign = judgeDeploy(true, false, false, true, "SN1", 9568322)
+    @Assert(badSign.ok, false)
+    @Assert(badSign.reason.contains("9568322"), true)
+    @Assert(badSign.nextStep.contains("签名"), true)
+    // 装不上但没失败码 → 指向落档日志
+    let noCode = judgeDeploy(true, false, false, true, "SN1", 0)
+    @Assert(noCode.nextStep.contains(".lingqu/deploy"), true)
+    // ③ 装上了但启动失败：要点明「不是签名问题」，避免误诊
+    let badStart = judgeDeploy(true, true, false, true, "SN1", 0)
+    @Assert(badStart.ok, false)
+    @Assert(badStart.reason.contains("启动失败"), true)
+    @Assert(badStart.reason.contains("不是签名问题"), true)
+    @Assert(badStart.nextStep.contains("EntryAbility"), true)
+    // ④ 启了但日志有崩溃：指向 faultlog（缺 .so / 资源这类真机坑）
+    let crashed = judgeDeploy(true, true, true, false, "SN1", 0)
+    @Assert(crashed.ok, false)
+    @Assert(crashed.reason.contains("崩溃"), true)
+    @Assert(crashed.nextStep.contains("faultlog"), true)
+}

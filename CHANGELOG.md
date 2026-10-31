@@ -5,6 +5,64 @@
 
 ---
 
+## [0.21.0] - 2026-10-31
+
+**主题**：**`t2h:deploy` 命令化 + ⑥ 真机验证屏接真数据** —— P5 的最后一块拼图。
+0.17.0 手工跑通的 `hdc install -r` → `aa start` → 抓 hilog，现在是一条命令，并且**三段分开报**
+（装得上 ≠ 界面出来，这是 0.20.0 白屏的教训）。
+
+### Added
+
+- **命令 `t2h:deploy`**（三处联动齐全）：
+  - `hdc list targets -v` → `parseHdcTargets`（挡 `COM1 UART Ready` 串口噪声）→ 选设备
+    （`serial` 参数 / `LINGQU_DEPLOY_SERIAL` / 第一台 USB；显式 serial 也会在列表里核对）
+  - `hdc -t <serial> install -r <hap>` → `parseInstallResult`（**按文本判**，hdc 失败退出码仍是 0）
+  - `hdc -t <serial> shell aa start -a <ability> -b <bundle>` → `parseStartResult`
+    （ability 默认 `EntryAbility`，bundle 读 `AppScope/app.json5`）
+  - `hilog -x` 抓尾部 → `hilogLooksHealthy` 判 panic / SIGABRT / JS error
+  - 落档 `.lingqu/deploy/<工程>.json`（`lingqu/deploy/v1`）+ `.log`（三段 hdc 原文 + hilog 尾部）
+- **判定层 `judgeDeploy`**（纯函数）：按「设备 → 安装 → 启动 → 日志」**顺序短路**，只报最靠前那段失败——
+  装不上给失败码处置（9568322 → 签名），**装上了但启动失败明确写"不是签名问题"**（多半是 ability/bundle 名不对），
+  启动了但日志有崩溃则指向 `faultlog`
+- **2 例新单测**（总 **140**）：happy path + 四个有序失败分支
+- **⑥ 屏接真数据**：路径输入 +「安装并启动」/「仅安装」按钮 + 部署卡（设备 / 安装 / 启动 / hilog / HAP 五项）
+  + 原因与下一步；占位的"功能清单"卡明确标了 `占位示意`（不冒充真数据）
+- `ui_report` 新增 `deployOk/deploySerial/deployDeviceCount/deployInstalled/deployStarted/deployHilogOk/deployError`
+- `LINGQU_DEPLOY_PATH` 探针（置了就启动时跑一次部署体检）
+
+### Added（打包）
+
+- **`packaging/package-win.sh`**：产出 `dist/lingqu-<版本>-win-x64/`（可直接双击 `run.bat`）+ 同名 `.zip`
+  （24.7 MB）。清单里显式列出"运行期真的需要的文件"，并带 **依赖闭包自检**：
+  把 `main.exe` 与所有随包 DLL 的导入表走一遍，缺失任何 `lib*`/`stdx*` 依赖就直接失败退出——
+  这类漏文件的症状是"开发机上好好的、拷给别人启动即退 0xC0000135"，在别人机器上几乎无法自查
+- **踩到并修掉的两个打包缺口**（自检就是为了不再犯）：
+  `libwinpthread-1.dll`（`libstdx.net.tlsFFI.dll` 显式依赖，缺了启动即退）；
+  `vendor/cjh/SHA256SUMS`（少了它引擎自校验不过、压根不会被拉起）
+- `packaging/README-run.md`（随包交付的使用说明）、`run.bat`（把本目录加进 PATH 再启动）、
+  `.gitignore` 增 `dist/`
+
+### 证据（真机 HAD-W32 / HarmonyOS 7.0.0.111 / API 26，2026-10-31）
+
+```
+[devices] 3QC0124B20000048 USB Connected localhost hdc   （COM1/COM2 UART 噪声已滤掉）
+[install] serial=3QC0124B20000048 ok=true code=0   msg:install bundle successfully.
+[start]   ok=true   start ability successfully.
+[hilog]   healthy=true lines=40
+verdict:  安装 + 启动成功，hilog 无崩溃痕迹（设备 3QC0124B20000048）
+ui_report（activeScreen=verify）：deployOk=true deploySerial=3QC0124B20000048 deployDeviceCount=1
+          deployInstalled=true deployStarted=true deployHilogOk=true
+```
+
+**便携包实测（2026-10-31）**：把 zip 解压到干净目录、把 PATH 剥到只剩 `System32`，
+双击 `run.bat` → 窗口标题 `灵渠迁移台 · Lingqu`、`ui_report` 回投 `screens=7 idCount=146
+activeScreen=env errorCount=0`（自检序列跑到 `probe-frames`）；包内 `cjh.exe --version` → `cjh v1.6.1`。
+
+**未做（如实）**：⑥ 屏的「功能清单 / 可用率」仍是占位示意——那要等 P6 的 `t2h:verify`（从画像生成清单 +
+逐项挂证据）；T5-4 release 签名两态仍未开工。
+
+---
+
 ## [0.20.0] - 2026-10-31
 
 **主题**：**修真机白屏的两个真缺陷**（T5-3/T5-5 的漏检）—— 用户报"habit-tree 在真机上跑起来但看不到界面"，
@@ -47,10 +105,11 @@
 | 仍白屏 | 截图 350 KB、中央区 97.8% 纯白 → 定位到 `.so` 嵌旧前端（见上） |
 | 重编 `.so` 后 | 截图 173 KB、中央区 **574 色**、主色 `12,15,24`（36.6%）；ArkWeb `gpu`+2×`render` 子进程在跑，无 faultlog |
 
-**未验证（如实）**：本轮抓屏与"仅桌面"截图逐点相同（11310 采样差 1），
-窗口管理器里确实有 `habit_tree0`（bounds `[515,281]-[2605,1675]`），
-但**界面是否真的呈现给人眼，需要人看一眼确认**——我无视觉能力，不能把"进程/日志正常"说成"界面正常"。
-0.17.0 的"真机首验通过"结论按本条收窄：**链路（装/启/签名）成立，界面呈现当时并不成立**。
+**人眼确认（2026-10-31，用户）**：修完后界面正常显示 —— 白屏问题闭环。
+我这边抓屏仍与"仅桌面"截图逐点相同（11310 采样差 1）、窗口管理器里 `habit_tree0` 的 bounds 为
+`[515,281]-[2605,1675]`，但 `uitest dumpLayout` 的前台是 `com.ohos.sceneboard`——
+**说明"截屏 + 窗口树"不能替代人眼**（抓屏可能拍到桌面）。0.17.0 的"真机首验通过"结论按此收窄：
+**链路（装/启/签名）当时成立，界面呈现不成立；0.20.0 起两者都成立**。
 
 ---
 
