@@ -5,6 +5,27 @@
 
 ---
 
+## [0.39.4] - 2026-11-01
+
+**主题**：cjh 第 4 个 PR（bash `timeout` 参数）合入后复跑全自动 —— **AI 第一次把没迁过的样本编译到 exit=0**。
+
+### 实跑证据（Windows x64，`LINGQU_UI_PROBE=ai-full`，m3u8dl-tauri，`CJH_BASH_TIMEOUT=600`）
+
+    ui_report：toolCards=49  frames=110  errorCount=0  agentTraceLines=98
+    trace.jsonl：bash 77 次，**命令超时 0 次**，exit code: 0 共 37 条
+    build 落档：project=m3u8dl-tauri  target=aarch64-unknown-linux-ohos
+                exitCode=0  errorCount=0  ← 交叉编译成功（0.39.2 时是 exitCode=101）
+                gates.passed=false，唯一失败项：前端指纹闸「.so 里没有内嵌前端资源（frontendDist 配了吗）」
+    行为：它自己写了 src-tauri/src/lib.rs（write_file，2242 字符），随后在跑命令继续处理
+
+对照：0.39.2 同一路径 25 次 bash 全失败、build exit=101；现在 77 次调用零超时、**编译通过**。
+
+### 仍未完成（下一步）
+
+- 前端指纹闸还没修好（frontendDist 未配），所以没走到 hap/sign/deploy；
+- 实测最后一条 trace 是 in-flight 的 `python - <<EOF`（heredoc），4 分钟无结果 —— 疑点：
+  这条命令依赖 PATH 里的 python，且 heredoc 在持久 bash 会话里可能吞掉后续输入。
+  排查方向：① 机器上 python 是否存在；② 是否需要提示 agent「heredoc 少用，改写脚本文件再执行」。
 ## [0.39.3] - 2026-11-01
 
 **主题**：修 `--path .` 让落档名变成 `.`（0.39.2 实测暴露，`..json` 那种）。
