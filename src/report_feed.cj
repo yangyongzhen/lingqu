@@ -187,6 +187,45 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
         case None => ()
     }
 
+    // ④ 风险分级要的判定事实（0.39.47）。纪律：落档不在就**不设** `*Ran`，
+    //    风险表据此区分「没跑过」（无法评估）与「跑过没过」（可判定）——两者混一起就是谎报。
+    match (readJsonOrNone(lqArtifact(projPath, ".lingqu/build/${projName}.json"))) {
+        case Some(root) =>
+            facts.buildRan = true
+            facts.buildExit = intFieldOf(root, "exitCode", -1)
+            facts.buildWarn = intFieldOf(root, "warningCount", 0)
+            facts.buildOk = boolFieldOf(objFieldOf(root, "gates"), "passed") && facts.buildExit == 0
+            // assetDiff 的三个字段是**数组**（§4-57），要条数就 arraySizeFieldOf，别当整数取
+            let ad = objFieldOf(root, "assetDiff")
+            facts.assetStale = arraySizeFieldOf(ad, "staleInSo")
+            facts.assetMissing = arraySizeFieldOf(ad, "missingInSo")
+        case None => ()
+    }
+    match (readJsonOrNone(lqArtifact(projPath, ".lingqu/hap/${projName}.json"))) {
+        case Some(root) =>
+            facts.hapRan = true
+            facts.hapBuilt = boolFieldOf(root, "built")
+            facts.hapSigned = boolFieldOf(root, "signed")
+            facts.hapRawfile = intFieldOf(objFieldOf(root, "entries"), "rawfileCount", 0)
+        case None => ()
+    }
+    match (readJsonOrNone(lqArtifact(projPath, ".lingqu/deploy/${projName}.json"))) {
+        case Some(root) =>
+            facts.deployRan = true
+            facts.deployInstalled = boolFieldOf(objFieldOf(root, "install"), "ok")
+            facts.deployStarted = boolFieldOf(objFieldOf(root, "start"), "ok")
+            facts.deployHilogHealthy = boolFieldOf(root, "hilogHealthy")
+        case None => ()
+    }
+    match (readJsonOrNone(lqArtifact(projPath, ".lingqu/deps/${projName}.json"))) {
+        case Some(root) =>
+            let metrics = objFieldOf(root, "metrics")
+            facts.depsRan = true
+            facts.depsTotal = intFieldOf(metrics, "total", 0)
+            facts.depsUnavailable = intFieldOf(metrics, "unavailable", 0)
+        case None => ()
+    }
+
     // ④ A3 人工介入：只有"采纳"才算一次介入；没有记录就如实说明
     let decisions = collectDecisionValues(projName, projPath)
     let hc = countHumanDecisions(decisions)
@@ -200,6 +239,13 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
 
     // ⑤ 证据与产物（**存在性按工程解析，附录里写相对路径**）
     facts.evidenceCount = countEvidenceFiles(projName, projPath)
+    // ⑤b 本地经验（0.39.55）：agent 自己记的踩坑条数 —— 报告要能说出"这次学到了什么"
+    let lessons = loadLessons(projPath, projName)
+    facts.lessonCount = Int64(lessons.size)
+    facts.lessonsLine = lessonsSummaryLine(lessons)
+    if (lessons.size > 0) {
+        facts.artifacts.add(("本地经验（agent 记录）", ".lingqu/notes/${projName}.md"))
+    }
     facts.artifacts.add(("断点板（8 步状态）", resolveLqPath(projPath, "tasks.json")))
     addArtifactIfExists(facts.artifacts, "扫描画像", ".lingqu/scan/${projName}.json", projPath)
     addArtifactIfExists(facts.artifacts, "依赖矩阵", ".lingqu/deps/${projName}.json", projPath)
