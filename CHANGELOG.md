@@ -5,6 +5,43 @@
 
 ---
 
+## [0.39.23] - 2026-11-02
+
+**主题**：把「跑过但没过」从「没跑过」里分出来——`verify` 之前会把**装配跑过、闸没过**说成
+「没跑过装配」，既不诚实，也把一条**可修的失败**藏成了"待办"。
+
+### 实测证据（同一条链跑到底，HarmonyOS PC `3QC0124B20000048`）
+
+| 环节 | 结果 |
+|---|---|
+| `sign --auto --newKeys` | `ok=true` |
+| `hap` | `built=true signed=true hapBytes=8,273,766` |
+| `deploy --start` | `installed=true started=true ok=true`，hilog 40 行无崩溃 |
+| 前台确认 | `aa dump -a`：`state #FOREGROUND`、Mission #149；`uitest dumpLayout` 里有本应用窗口（focused）与 **ArkWeb 的 `Web`/`rootWebArea` 节点**，且 dump 出真实界面文本（"m3u8dl 多线程下载器 · Rust + Tauri 2 复刻"、"下载配置"、"线程数"、"限速(KB/s)"…） |
+| 截图 | `E:\test\rust\m3u8dl-tauri\.lingqu\evidence\m3u8dl-autosign.jpeg`（3120×2080，用户已人眼确认界面正常） |
+| `verify` | `pass=4 fail=1 limit=1 unknown=0` → **可用率 80%**；唯一失败是 `hap` 闸（rawfile 死资源） |
+
+### Fixed
+
+- **"跑了没过" ≠ "没跑过"**（AGENTS §4-63 的口径被自己违反了）：`build`/`hap` 两条清单项原来只有
+  一个 `xxxOk` 布尔，失败一律写成「没跑过…」。新增 `hasBuild` / `hasHap` 位 +
+  `hapBuilt` / `hapSigned` / `hapFirstFailure`：
+  - 落档不存在 → `unknown`「没跑过装配」；
+  - 跑过但 hvigor 没成功 → `fail`「装配跑过但 hvigor 没成功」；
+  - 跑过、包也出来了、是**闸**没过 → `fail`，并把闸门**第一条失败**贴进 note；
+  - 跑过且过 → `pass`，证据里列出 `built=true` / `signed=true`。
+  交叉编译那条同样处理（`exitCode != 0` 不再显示成"没跑过交叉编译"）。
+- 新增纯函数 `firstArrayItemOf`（取闸门 `failures[0]`），单测 +1 例
+  （`testRanButFailedIsNotReportedAsNeverRan`，覆盖 hap/build 各自的 跑过未过 / 没跑过 四种分支），
+  合计 **331 例**。
+
+### 说明（未验证 / 遗留）
+
+- 剩下的 `fail` 是 **m3u8dl 工程自己的 `rawfile/` 有 6 个死资源**（前端已在 `.so` 里），
+  与本轮签名无关；清掉后 `hap` 项即可转 pass（可用率 → 100%）。
+- 复盘文档 `docs/自动签名实战复盘.md` 的「当前状态」表已按实测更新（启动/界面从"未验证"改为已验证，
+  并补上 `uitest dumpLayout` 这条**可机器断言**的界面证据口径）。
+
 ## [0.39.22] - 2026-11-02
 
 **主题**：**路线 A（AGC 云生成自动签名）真机打通**——`m3u8dl-tauri` 从"没有签名"走到

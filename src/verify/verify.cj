@@ -76,8 +76,15 @@ public class ChecklistInput {
     /** 交叉编译 + 前端指纹闸是否通过（`t2h:build` 落档） */
     public var buildOk: Bool = false
     public var assetOk: Bool = false
+    /** 这一步**跑过没有**（落档存在）。缺了它，"跑了没过"会被报成"没跑过"（AGENTS §4-63） */
+    public var hasBuild: Bool = false
     /** HAP 装配闸是否通过（`t2h:hap` 落档） */
     public var hapOk: Bool = false
+    public var hasHap: Bool = false
+    /** HAP 装配的子判据：编出来了吗 / 签名了吗 / 闸门第一条失败说什么 */
+    public var hapBuilt: Bool = false
+    public var hapSigned: Bool = false
+    public var hapFirstFailure: String = ""
     /** 真机部署：装上了 / 起来了 / hilog 无崩溃（`t2h:deploy` 落档） */
     public var installed: Bool = false
     public var started: Bool = false
@@ -157,9 +164,12 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
     if (inp.assetOk) {
         build.evidence.add(".so 内嵌 AssetKey ↔ dist/ 双向比对一致")
     }
-    if (!inp.buildOk) {
+    if (!inp.hasBuild) {
         build.verdict = "unknown"
         build.note = "没跑过交叉编译（⑤ 屏「交叉编译（OHOS）」）"
+    } else if (!inp.buildOk) {
+        build.verdict = "fail"
+        build.note = "交叉编译跑过但没通过（看 .lingqu/build/<工程>.json 的 exitCode / firstError）"
     } else if (!inp.assetOk) {
         build.verdict = "fail"
         build.note = "前端指纹不一致：改了前端没重编 .so（会白屏）"
@@ -173,9 +183,29 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
     if (inp.hapOk) {
         hap.evidence.add("t2h:hap：gates.passed=true")
     }
-    hap.verdict = if (inp.hapOk) { "pass" } else { "unknown" }
-    if (!inp.hapOk) {
+    if (inp.hapBuilt) {
+        hap.evidence.add("hvigor assembleHap 成功（built=true）")
+    }
+    if (inp.hapSigned) {
+        hap.evidence.add("产物是 signed HAP（signed=true）")
+    }
+    if (!inp.hasHap) {
+        hap.verdict = "unknown"
         hap.note = "没跑过装配（⑤ 屏「装配 HAP」）"
+    } else if (!inp.hapBuilt) {
+        hap.verdict = "fail"
+        hap.note = "装配跑过但 hvigor 没成功（看 .lingqu/hap/<工程>.log）"
+    } else if (!inp.hapOk) {
+        // 跑过、包也出来了，是**闸**没过（最典型：rawfile/ 里有死资源）——
+        // 这是"跑了没过"，必须报 fail 并把第一条失败贴出来，不能混成"没跑过"
+        hap.verdict = "fail"
+        hap.note = if (inp.hapFirstFailure != "") {
+            "装配闸未通过：${inp.hapFirstFailure}"
+        } else {
+            "装配闸未通过（看 .lingqu/hap/<工程>.json 的 gates.failures）"
+        }
+    } else {
+        hap.verdict = "pass"
     }
     items.add(hap)
 

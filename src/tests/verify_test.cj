@@ -24,7 +24,11 @@ func greenInput(): ChecklistInput {
     i.platformCount = 5
     i.buildOk = true
     i.assetOk = true
+    i.hasBuild = true
     i.hapOk = true
+    i.hasHap = true
+    i.hapBuilt = true
+    i.hapSigned = true
     i.installed = true
     i.started = true
     i.hilogHealthy = true
@@ -216,6 +220,69 @@ public func testBuildAssetFlagsTreatsAssetDiffAsArrays(): Unit {
     let (bOk4, aOk4) = buildAssetFlagsOf(JsonValue.fromStr(bad))
     @Assert(bOk4, false)
     @Assert(aOk4, false)        // matched=0 时不能靠"没 stale"蒙成一致
+}
+
+@Test
+public func testRanButFailedIsNotReportedAsNeverRan(): Unit {
+    // 0.39.23 实测踩到：m3u8dl 装配**跑过**（built=true、signed=true，8,273,766 字节），
+    // 只是闸没过（rawfile/ 有 6 个死资源），verify 却报成「没跑过装配」。
+    // "跑了没过" 与 "没跑过" 必须分开（AGENTS §4-63）——前者是 fail，后者才是 unknown。
+    let i = greenInput()
+    i.hapOk = false
+    i.hasHap = true
+    i.hapBuilt = true
+    i.hapSigned = true
+    i.hapFirstFailure = "HAP 闸：发现 6 个 rawfile/ 条目——前端已在 .so 里，这些是死资源（应清掉）"
+    var hap: Option<CheckItem> = None
+    for (it in buildChecklist(i)) {
+        if (it.id == "hap") {
+            hap = Some(it)
+        }
+    }
+    match (hap) {
+        case Some(h) =>
+            @Assert(h.verdict, "fail")                          // 不是 unknown
+            @Assert(h.note.contains("rawfile"), true)           // 把闸门第一条失败贴出来
+            // 跑过的证据也要露出来，避免"失败=什么都没做"的误读
+            var joined = ""
+            for (e in h.evidence) {
+                joined += e
+            }
+            @Assert(joined.contains("built=true"), true)
+            @Assert(joined.contains("signed"), true)
+        case None => @Assert(true, false)
+    }
+    // 落档不存在 → unknown（没跑过），且不能出现"跑过"的证据行
+    let i2 = greenInput()
+    i2.hapOk = false
+    i2.hasHap = false
+    i2.hapBuilt = false
+    i2.hapSigned = false
+    for (it in buildChecklist(i2)) {
+        if (it.id == "hap") {
+            @Assert(it.verdict, "unknown")
+            @Assert(it.note.contains("没跑过"), true)
+        }
+    }
+    // 同样的口径套到交叉编译上：跑过但 exit!=0 → fail，不是"没跑过"
+    let i3 = greenInput()
+    i3.buildOk = false
+    i3.hasBuild = true
+    for (it in buildChecklist(i3)) {
+        if (it.id == "build") {
+            @Assert(it.verdict, "fail")
+            @Assert(it.note.contains("没通过"), true)
+        }
+    }
+    let i4 = greenInput()
+    i4.buildOk = false
+    i4.hasBuild = false
+    for (it in buildChecklist(i4)) {
+        if (it.id == "build") {
+            @Assert(it.verdict, "unknown")
+            @Assert(it.note.contains("没跑过"), true)
+        }
+    }
 }
 
 @Test

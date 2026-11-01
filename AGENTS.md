@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.22**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.23**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -216,7 +216,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 60 | 页面加了新的 `ui_report` 字段，JSON 里却**根本没有这个键**（界面上看着有值，报告里查不到） | `t2h:ui_report` 是**白名单**实现：`UiReportCommand` 里没写同名 `o.put(...)` 的键会被静默丢弃。0.28.0 的 `signSwitchRows` 就这么丢过一次。**新增 ui_report 字段必须两处一起加**（`assets/ui/index.html` 的 `reportUi` + `src/main.cj` 的 `o.put`），否则"版面可断言"是假的 |
 | 61 | 报告里出现「上架前：上架前：…」这种叠词 | 跨层拼句子时，**先看被引用的那句是否已经自带前缀**（`sign.cj` 的 `releaseNextStep` 本身以「上架前：」开头）。原文引用就不要再加壳；要加壳就让来源给"纯内容"版本 |
 | 62 | 拼路径时用 `cur += "${b}"`（`b` 是 `Byte`）→ 得到 `695892116101…` 这种数字串（0.29.0 的矩阵样本名就这么坏过） | **Byte 插值按十进制打印**，与 §3 的 `StringBuilder.append(Byte)` 同款坑。要按字节拼字符串就攒 `ArrayList<Byte>` 再 `String.fromUtf8(bytes.toArray())`，这样中文/非 ASCII 路径才不会坏 |
-| 63 | 矩阵/报表里"没跑过"显示成「未过」「0 分」 | 每一列都要有**"有没有跑过"的位**（`hasScan/hasBuild/hasHap/hasDeploy/hasVerify`），"没跑"与"跑了没过"必须分开写，且未跑的样本**不进平均**。否则读者分不清"还没做"和"做了不行"，数字也会凭空变低 |
+| 63 | 矩阵/报表里"没跑过"显示成「未过」「0 分」；**反向也栽过**：`verify` 把"装配**跑过**、闸没过"报成「没跑过装配」（落档里明明 `built=true signed=true hapBytes=8,273,766`） | 每一列都要有**"有没有跑过"的位**（`hasScan/hasBuild/hasHap/hasDeploy/hasVerify`），"没跑"与"跑了没过"必须分开写，且未跑的样本**不进平均**。`ChecklistInput` 现在有 `hasBuild/hasHap` + `hapBuilt/hapSigned/hapFirstFailure`：没跑过 → `unknown`；跑过但工具失败 → `fail`；跑过、产物也出来了、是**闸**没过 → `fail` **并把闸门第一条失败贴进 note**。否则读者分不清"还没做"和"做了不行"（0.39.23 实测踩到反向那一半） |
 | 64 | AI 助手回复"没渲染"：表格变成一串带竖线的句子、列表挤成一行、代码块没有等宽 | 气泡**不能用 `textContent` 塞模型输出**——那等于放弃 Markdown。用 `renderMd`（移植自 `cj-tauri/examples/ai-chat`），顺序固定：**先摘代码块 → 再整体转义 → 只认受控标记**（外部内容先转义 `<>&"`，之后只加自己生成的标签）。改完用 `LINGQU_UI_PROBE=md` + `ui_report.mdOk/mdBlocks` 断言，别靠肉眼看 |
 | 65 | 页内自检把好实现判红：`escape-code` 断言要求 `&lt;b&gt;hi&lt;/b&gt;` **连续出现**，接上 hljs 后 `&lt;` 被再切成 span，断言就假失败（`mdFail=escape-code`） | 断言要断**语义**不要断**字节顺序**：这里应写成"原文标签 `<b>` 不存在 **且** 出现 `&lt;`"。同理带高亮/格式化的输出，别断言"某段文本连续出现"——中间随时可能插 span |
 | 66 | 右栏 372px 里再套一层气泡，内容只剩 299px（25 头像 + 9 间距 + 11 内边距全吃掉），看着"左侧一片空白" | 窄栏的 assistant 消息要**平铺**（`.msg:not(.me)` 去头像栏与气泡框，正文贴内容区左缘）；用 `ui_report` 的 `aiFlatLeft / aiBubbleW / aiAvatarsShown` 量化，别用"看起来差不多"。用户自己的消息保留气泡以便区分"谁说的" |

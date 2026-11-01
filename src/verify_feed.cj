@@ -53,6 +53,26 @@ func intFieldOf(v: JsonValue, key: String, fallback: Int64): Int64 {
     }
 }
 
+/** 字符串数组的第一个元素（不是数组/空给 ""）——用来把闸门的第一条失败贴进清单 */
+func firstArrayItemOf(v: JsonValue, key: String): String {
+    let arr = objFieldOf(v, key)
+    match (arr.kind()) {
+        case JsonKind.JsArray =>
+            let a = arr.asArray()
+            if (a.size() == 0) {
+                return ""
+            }
+            match (a.get(0)) {
+                case Some(item) => match (item.kind()) {
+                    case JsonKind.JsString => return item.asString().getValue()
+                    case _ => return ""
+                }
+                case None => return ""
+            }
+        case _ => return ""
+    }
+}
+
 /** 安全读一份落档 JSON；读不到/解析不了都返回 None（调用方按"没跑过"处理） */
 func readJsonOrNone(p: String): Option<JsonValue> {
     if (!exists(Path(p))) {
@@ -122,18 +142,24 @@ func collectVerifyInput(projName: String, projPath: String): ChecklistInput {
     }
 
     // ⑤ 交叉编译：退出码 + 前端指纹比对
+    // ② 交叉编译 + 前端指纹（"跑过没有"与"过没过"分开记：§4-63）
     match (readJsonOrNone(resolveLqPath(projPath, "build/${projName}.json"))) {
         case Some(build) =>
             let (bOk, aOk) = buildAssetFlagsOf(build)
             inp.buildOk = bOk
             inp.assetOk = aOk
+            inp.hasBuild = true
         case None => ()
     }
 
-    // ⑤ HAP 装配闸
+    // ③ HAP 装配闸
     match (readJsonOrNone(resolveLqPath(projPath, "hap/${projName}.json"))) {
         case Some(hap) =>
             inp.hapOk = boolFieldOf(objFieldOf(hap, "gates"), "passed") && boolFieldOf(hap, "built")
+            inp.hasHap = true
+            inp.hapBuilt = boolFieldOf(hap, "built")
+            inp.hapSigned = boolFieldOf(hap, "signed")
+            inp.hapFirstFailure = firstArrayItemOf(objFieldOf(hap, "gates"), "failures")
         case None => ()
     }
 
