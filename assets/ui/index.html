@@ -2681,14 +2681,27 @@ withBridge(function(tauri){
   function renderStatus(s){
     s = s || {};
     CJ_STATUS = s;
-    var running = s.state === 'running';    setDot('dotCjh', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
-    $('txtCjh').textContent = '引擎 ' + (stateNames[s.state] || '未知') + (running ? (' :' + s.port) : '');
+    // 0.39.42：**通道连着就别宣称引擎缺失**。实测现象：浏览器打得开 http://127.0.0.1:8765/、
+    // WS 也是 ESTABLISHED，界面却写「AI 引擎缺失」——那是某次 `/api/health` 读超时
+    // （引擎在处理回合）被当成"不存在"。判活要宽容、判死要有证据（§2.3）：
+    //   · 后端已改成"重试 3 次 + 20 秒宽容窗口"（cjhStatusJson）；
+    //   · 界面再加一条兜底：本侧 WS 还连着 ⇒ 引擎一定在，只说"健康检查变慢"，不说缺失。
+    var wsUp = (typeof CJ !== 'undefined') && CJ.up === true;
+    var running = (s.state === 'running') || (wsUp && s.state === 'missing');
+    var degraded = (s.state === 'running' && s.unstable === true) || (wsUp && s.state === 'missing');
+    setDot('dotCjh', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
+    $('txtCjh').textContent = '引擎 ' + (stateNames[s.state] || '未知') + (s.port ? (' :' + s.port) : '')
+      + (degraded ? '（健康检查变慢）' : '');
     setDot('dotFoot', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
     $('txtFoot').textContent = running ? ('已连接 ' + (s.apiUrl || '')) : (s.state === 'ready' ? '引擎待拉起' : '引擎缺失');
     setDot('dotAgent', running ? 'ok' : '');
     $('txtAgent').textContent = running
-      ? ('AI 引擎已就绪' + (s.owned ? '（本应用托管）' : '（复用已有实例）'))
+      ? ('AI 引擎已就绪' + (s.owned ? '（本应用托管）' : '（复用已有实例）') + (degraded ? '·健康检查变慢' : ''))
       : (s.state === 'ready' ? 'AI 引擎待拉起' : 'AI 引擎缺失');
+    if (running && degraded) {
+      $('txtAgent').title = '引擎在跑，但这一轮 /api/health 读超时了（引擎忙时会这样）。\n'
+        + (wsUp ? 'WS 通道仍连着，说明引擎肯定在。' : '等几秒会自动恢复。');
+    }
     // 缺失时把"查过的目录"带上：只说"没找到"没法排查（便携包路径问题就靠这个定位）
     if (!running && s.state === 'missing' && s.vendorDir) {
       $('txtAgent').title = '查过的引擎目录：' + s.vendorDir
@@ -2705,7 +2718,8 @@ withBridge(function(tauri){
 
     $('setState').textContent = (stateNames[s.state] || '未知') + (s.owned ? '（本应用托管）' : '');
     $('setState').className = 'bv ' + (running ? 'good' : 'bad');
-    $('setEndpoint').textContent = running ? (s.apiUrl + '　' + (s.wsUrl || '')) : (s.binPath || s.vendorDir || '（未就绪）');
+    var apiUrlShown = s.apiUrl || ('http://127.0.0.1:' + (s.port || 8765));
+    $('setEndpoint').textContent = running ? (apiUrlShown + '　' + (s.wsUrl || '')) : (s.binPath || s.vendorDir || '（未就绪）');
 
     // 引擎就绪 → 建 WS 通道；引擎掉了 → 主动断开（不装作还连着）
     // 0.39.38 修正：**一次 `missing` 不足以断开 WS**。实测（0.39.37 探针日志）同一个实例

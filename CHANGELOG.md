@@ -5,6 +5,53 @@
 
 ---
 
+## [0.39.42] - 2026-11-02
+
+**主题**：状态轮询为什么偶发超时——查清了：`/api/health` 本身不慢，是**我们自己每次探活都新建 TCP 再拆掉**；顺手把「通道连着却报引擎缺失」也堵住。
+
+### 现象（用户实测 + 追问）
+
+> 启动起来报「AI 引擎缺失」，网页都能打开 `http://127.0.0.1:8765/`，说明 cjh 服务是在的。
+> 状态轮询为啥会偶尔超时？
+
+### 实测结论（先量再说）
+
+| 场景 | 结果 |
+|---|---|
+| 空载串行 40 次 `/api/health` | min 9.8ms / avg 21ms / max 384ms（首次冷启动），**超过 1s 的 0 次** |
+| 16 路并发 `/api/health`（node 单进程，排除进程启动开销） | p50 8ms、p90 9ms、max 106ms，失败 0 |
+| 8 路并发压 `/api/sessions`（读全部会话）时穿插探活 | health max **15ms**，失败 0 |
+| 30 次「新建连接→取完就关」（旧写法，`Connection: close`） | 8765 上留下 **30 个 TIME_WAIT** |
+| 30 次 keep-alive 单连接 | **新增 0 个** |
+
+⇒ `/api/health` 与引擎的 HTTP 层都不慢。**慢的是我们的探活写法**：
+`cjhHealthy()` 每次都 `ClientBuilder().build()` → 请求 → `client.close()`，即**每 2 秒新建一条 TCP 再拆掉**；
+而 cjh 侧对断开连接**不回收**（常驻 `CLOSE_WAIT`，`docs/上游回馈-cjh.md` 第 11 条）——
+长会话里引擎 socket 表只涨不落，偶发一次建连/accept 慢过 3s，就判成"引擎不在"，
+配合"发现路径也没找到二进制"（未设 `LINGQU_CJH` 时）直接落到 `missing` ⇒ 界面写「AI 引擎缺失」。
+
+### 处置
+
+- `src/cjh_host.cj`：探活改成**整条会话复用一条 keep-alive 客户端**（`gHealthClient`），
+  出错才 `dropHealthClient()` 重建；churn 从「1 次/2 秒」降到「1 次/会话」。
+- **判死要有证据**：`cjhStatusJson` 先单次探活 → 失败重试 3 次 → 仍失败但 **20 秒内成功过**
+  就报 `running + unstable`（附 `note`），只有"最近没成功过且二进制也找不到"才报 `missing`。
+- 界面兜底：**本侧 WS 还连着就绝不宣称引擎缺失**（`renderStatus` 用 `CJ.up` 修正状态），
+  文案改成「引擎 已连接（健康检查变慢）」。
+- 新增单测 `testCjhHealthyRecentlyWindow`（宽容窗口语义）。
+
+### 证据
+
+- 修后实测：重启应用轮询 50 秒（约 25 次探活）→ `TIME_WAIT=0`、`ESTABLISHED=3`、
+  `cjhState=running`、`wsState=connected`（旧写法同条件下 30 次探活留 30 个 TIME_WAIT）。
+- `cjpm test` TOTAL=343、FAILED:0；五道闸全绿。
+
+### 未验证
+
+- 没有在一次**真实 agent 长回合**里复测超时率（会占用用户的会话）；上面的结论是
+  "探活写法与连接 churn" 这个可测部分。引擎侧 socket 不回收仍是上游问题（第 11 条），
+  修好后对端不会再攒 `CLOSE_WAIT`。
+
 ## [0.39.41] - 2026-11-02
 
 **主题**：① 活干完了不再喊「AI 连续 20 次轮询落档没有变化」；② 左栏步骤徽标不再是写死的「待接入」。

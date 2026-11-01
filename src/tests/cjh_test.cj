@@ -96,3 +96,19 @@ public func testShouldUseExtracted(): Unit {
     // 释放了但校验不过 → 绝不用（来路不明的同名文件不该被静默执行）
     @Assert(shouldUseExtracted(4, false), false)
 }
+/**
+ * 0.39.42：健康检查的「宽容窗口」。
+ *
+ * 用户实测：浏览器打得开 8765、WS 也连着，界面却报「AI 引擎缺失」——
+ * 某次 `/api/health` 读超时被当成"引擎不存在"。纪律是**判死要有证据**：
+ * 只要最近 20 秒内成功探活过，就不许改口说缺失（状态改成 running+unstable）。
+ */
+@Test
+public func testCjhHealthyRecentlyWindow(): Unit {
+    // 刚记过一次成功 → 必须算"最近活着"
+    noteCjhHealthy()
+    @Assert(cjhHealthyRecently(), true)
+    // 窗口是正的（常量被改成 0 或负数就等于关闭这条宽容，属于语义破坏）
+    @Assert(HEALTH_GRACE_MS > 0, true)
+    @Assert(HEALTH_GRACE_MS >= 10000, true)
+}

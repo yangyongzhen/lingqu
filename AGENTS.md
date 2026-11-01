@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.41**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.42**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -256,6 +256,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 105 | 写「进度 100%　未连接真机」，可应用已在真机上跑起来 | **一次性快照不许当"现在"报**：`migrateHasDevice()` 只在迁移开始查一次。判据双口径：`hasDevice`（起始时，决定是否跳过 deploy/verify）+ `deviceInRecord/deviceSerial`（`deployDeviceOf()` 读 `.lingqu/deploy/<工程>.json`）。文案三档标来源：`真机已连接` / `真机已连接（部署记录 3QC…）` / `未连接真机（无部署记录）`。取证先看落档（`deploy.deviceCount`、`verify.ratePercent`）与 `hdc list targets -v`，别只信界面（0.39.40） |
 | 106 | DOS 黑窗一闪一闪（问过三次） | 本应用是 **GUI 子系统**：进程没有 console ⇒ `executeWithOutput`（hdc/cargo/hvigor/git/java/curl）每调一次 Windows 就给子进程**新配一个控制台窗口**；cjh（DETACHED）亦然。**单点修法**：`src/win_console.cj` 的 `ensureHiddenConsole()`（`AllocConsole` + `ShowWindow(SW_HIDE)`，FFI 要包 `unsafe`）让本进程持一个**看不见的** console，子进程继承；cjh 有隐藏控制台时改 `std.process.launch` 继承拉起（回落 `launchHidden`），句柄用 `CjhHandle` 收口。**断言**：`ui_report.consoleHidden=true` + spawn 一批子进程后 `conhost` 只 +1（不是每个子进程一个）；自拉起验证用 `LINGQU_CJH_PORT=8766`，别动用户的 8765（0.39.40） |
 | 107 | 页面某段代码"什么都不做、也不报错"（左栏徽标永远是空的） | **同一个 `<script>` 里可能是两个作用域**：业务代码在内层 IIFE（`invoke`/`CJ`/`projectPathValue`），文件末尾那段（`setCurrentProject`/左栏代码）在**外层**。外层引用内层符号抛 `ReferenceError`，**只落 `window.onerror`，调用方与 promise 都看不到**。处置：外层只"读 DOM + 画"，取数据走内层注册的桥（`window.__railBridge`）；任何"静默不生效"的界面逻辑，第一动作是**把 `window.__uiErrors` 回投 `ui_report`**；另：**改完 `index.html` 必须重建 `targets/desktop`**（只 `cjpm build` 业务包不够）（0.39.41） |
+| 108 | 「AI 引擎缺失」，可浏览器打得开 8765；追问"状态轮询为啥偶发超时" | 实测：`/api/health` 空载 8~15ms、16 路并发 p90 9ms、8 路压重接口时 max 15ms —— **端点不慢**；慢在**我们自己**：`cjhHealthy()` 每次 `ClientBuilder().build()`→请求→`close()`，**每 2 秒换一条 TCP**；30 次探活后 8765 上留 **30 个 TIME_WAIT**（keep-alive 单连接新增 **0**），叠加 cjh 侧不回收 `CLOSE_WAIT`（上游第 11 条）⇒ 偶发建连 >3s 就判"引擎不在"。处置：① 探活**复用一条 keep-alive 客户端**（出错才重建）；② 判死要有证据：单次→重试 3 次→**20 秒宽容窗口**报 `running+unstable`；③ 界面用 `CJ.up` 兜底，**通道连着就不说缺失**。证据：修后轮询 50 秒 `TIME_WAIT=0`（0.39.42） |
 ---
 
 ## 5. 文档与提交

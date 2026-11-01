@@ -6,6 +6,7 @@ import stdx.crypto.digest.*   // 具体实现 SHA256 在 stdx 侧（两处都要
 import std.env.*
 import std.fs.*
 import std.io.*            // InputStream（读 HTTP 响应体）
+import std.time.*          // DateTime（健康检查的宽容窗口要取时刻）
 import std.collection.*    // ArrayList
 // SubProcess / launch：非 Windows 分支一直用；Windows 侧 0.39.40 起也用它（让 cjh 继承
 // 我们的隐藏控制台，避免它再拉 bash/find 时各自弹黑窗）。因此两边都要 import——
@@ -149,25 +150,102 @@ func fileReadable(p: String): Bool {
 // 健康检查（唯一判据：GET /api/health 收到 200）
 // ============================================================
 
+/**
+ * 「最近刚验活过」的宽容窗口（0.39.42）。
+ *
+ * 现象（用户实测）：浏览器打开 `http://127.0.0.1:8765/` 正常、WS 也连着，
+ * 界面却报「AI 引擎缺失」——因为某几次 `/api/health` 读超时（引擎在处理回合/GC），
+ * 状态轮询就把这一瞬间当成"引擎不存在"，而**发现路径也没找到二进制**（这一版没设 LINGQU_CJH
+ * 时 `cjhBinPath()` 会空），于是落到 `missing`。
+ *
+ * 判据纪律（§2.3）：判活要宽容、**判死要有证据**。所以：
+ *   ① 先单次探活；② 失败就重试 3 次；③ 仍失败但 20 秒内成功过 → 报「running + unstable」；
+ *   ④ 只有连"最近成功"都没有、二进制也找不到，才报 missing。
+ */
+public let HEALTH_GRACE_MS: Int64 = 20000
+
+var gCjhLastHealthyMs: Int64 = 0
+
+/** 记一次成功探活（状态轮询、拉起、就绪等待都调它） */
+public func noteCjhHealthy(): Unit {
+    gCjhLastHealthyMs = DateTime.now().toUnixTimeStamp().toMilliseconds()
+}
+
+/** 最近 [HEALTH_GRACE_MS] 内是否成功探活过 */
+public func cjhHealthyRecently(): Bool {
+    if (gCjhLastHealthyMs <= 0) {
+        return false
+    }
+    let nowMs = DateTime.now().toUnixTimeStamp().toMilliseconds()
+    return (nowMs - gCjhLastHealthyMs) <= HEALTH_GRACE_MS
+}
+
+/**
+ * 探活用的 HTTP 客户端：**整条会话复用一条 keep-alive 连接**（0.39.42）。
+ *
+ * 为什么必须复用（2026-11-01 实测）：
+ *   · 旧写法每次探活都 `ClientBuilder().build()` → 发请求 → `client.close()`，
+ *     即**每 2 秒新建一条 TCP 再拆掉**；
+ *   · 30 次这样的探活之后，8765 上留下 **30 个 TIME_WAIT**；同样 30 次改用 keep-alive
+ *     单连接，**新增 0 个**；
+ *   · cjh 侧对断开连接**不回收**（常驻 CLOSE_WAIT，见 docs/上游回馈-cjh.md 第 11 条），
+ *     长会话里引擎的 socket 表只涨不落，偶发一次建连/accept 慢过 3s 就被判"引擎不在"。
+ * 复用之后：churn 从「1 次/2 秒」降到「1 次/会话」。
+ *
+ * 出错就把缓存丢掉（下次重建）：一条坏连接不能拖死整个轮询。
+ */
+var gHealthClient: Option<Client> = None
+
+func healthClientOrBuild(): Client {
+    match (gHealthClient) {
+        case Some(c) => return c
+        case None => ()
+    }
+    let c = ClientBuilder()
+        .readTimeout(Duration.second * 3)
+        .writeTimeout(Duration.second * 3)
+        .build()
+    gHealthClient = Some(c)
+    return c
+}
+
+func dropHealthClient(): Unit {
+    match (gHealthClient) {
+        case Some(c) =>
+            try {
+                c.close()
+            } catch (e: Exception) {
+                let _ = e
+            }
+        case None => ()
+    }
+    gHealthClient = None
+}
+
 public func cjhHealthy(port: Int64): Bool {
     // 3s 而不是 1s（0.39.33 实测教训）：cjh 正在跑 agent 回合 / 大工具调用时，
     // /api/health 可能排队到 1s 以上才回 —— 1s 超时会把它判成"引擎不在"，
     // 于是应用**又拉起一只引擎**（端口被占，那只注定失败），用户侧表现为
     // 「连接已断开」+ 偶发的僵尸进程。判活要宽容，判死要有证据。
-    let client = ClientBuilder()
-        .readTimeout(Duration.second * 3)
-        .writeTimeout(Duration.second * 3)
-        .build()
     var ok = false
+    var broken = false
     try {
+        let client = healthClientOrBuild()
         let req = HttpRequestBuilder().get().url("http://127.0.0.1:${port}/api/health").build()
         let resp = client.send(req)
         ok = Int64(resp.status) == 200
         resp.close()
+        if (ok) {
+            // 一次成功就记下时刻：后面几次读不到时，状态轮询靠它区分"引擎忙"与"引擎没了"
+            noteCjhHealthy()
+        }
     } catch (e: Exception) {
         let _ = e
+        broken = true
     }
-    client.close()
+    if (broken) {
+        dropHealthClient()
+    }
     return ok
 }
 
@@ -572,6 +650,7 @@ public func cjhStatusJson(): JsonValue {
     let obj = JsonObject()
     obj.put("port", JsonInt(port))
     if (cjhHealthy(port)) {
+        noteCjhHealthy()
         obj.put("state", JsonString("running"))
         putEndpoints(obj, port)
         obj.put("owned", JsonBool(gCjhOwned))
@@ -582,6 +661,25 @@ public func cjhStatusJson(): JsonValue {
         let installBin = installBinPath()
         obj.put("binPath", JsonString(knownBinPath(envBin, fileReadable(envBin), installBin,
             fileReadable(installBin))))
+        return obj
+    }
+    // 判活要宽容、判死要有证据（0.39.42）：一次 `/api/health` 读超时就改口说"引擎缺失"，
+    // 用户侧看到的是「网页能打开、界面说引擎缺失」。重试几次，并给"最近刚验活过"留一条宽容窗口。
+    if (cjhHealthyWithRetry(port, 3)) {
+        noteCjhHealthy()
+        obj.put("state", JsonString("running"))
+        obj.put("unstable", JsonBool(true))
+        putEndpoints(obj, port)
+        obj.put("owned", JsonBool(gCjhOwned))
+        return obj
+    }
+    if (cjhHealthyRecently()) {
+        // 刚刚还在，只是这几秒读不到：如实说"在跑，但健康检查变慢"，**不是缺失**
+        obj.put("state", JsonString("running"))
+        obj.put("unstable", JsonBool(true))
+        putEndpoints(obj, port)
+        obj.put("owned", JsonBool(gCjhOwned))
+        obj.put("note", JsonString("健康检查最近一次成功在 ${HEALTH_GRACE_MS / 1000} 秒内，按「在跑」处理"))
         return obj
     }
     let bin = cjhBinPath()
