@@ -2697,20 +2697,29 @@ withBridge(function(tauri){
     //   · 后端已改成"重试 3 次 + 20 秒宽容窗口"（cjhStatusJson）；
     //   · 界面再加一条兜底：本侧 WS 还连着 ⇒ 引擎一定在，只说"健康检查变慢"，不说缺失。
     var wsUp = (typeof CJ !== 'undefined') && CJ.up === true;
-    var running = (s.state === 'running') || (wsUp && s.state === 'missing');
-    var degraded = (s.state === 'running' && s.unstable === true) || (wsUp && s.state === 'missing');
-    setDot('dotCjh', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
-    $('txtCjh').textContent = '引擎 ' + (stateNames[s.state] || '未知') + (s.port ? (' :' + s.port) : '')
+    // 0.39.45：`unknown` = 这一轮**状态查询本身没回来**（IPC 失败/超时），不是"引擎不在"。
+    // 它与 missing 一样，绝不能盖过"通道还连着"这条更硬的证据。
+    var unknown = (s.state === 'unknown');
+    var suspect = (s.state === 'missing') || unknown;
+    var running = (s.state === 'running') || (wsUp && suspect);
+    var degraded = (s.state === 'running' && s.unstable === true) || (wsUp && suspect);
+    setDot('dotCjh', running ? 'ok' : (s.state === 'ready' || unknown ? 'warn' : 'err'));
+    $('txtCjh').textContent = '引擎 ' + (unknown ? '状态未知' : (stateNames[s.state] || '未知')) + (s.port ? (' :' + s.port) : '')
       + (degraded ? '（健康检查变慢）' : '');
-    setDot('dotFoot', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
-    $('txtFoot').textContent = running ? ('已连接 ' + (s.apiUrl || '')) : (s.state === 'ready' ? '引擎待拉起' : '引擎缺失');
+    setDot('dotFoot', running ? 'ok' : (s.state === 'ready' || unknown ? 'warn' : 'err'));
+    $('txtFoot').textContent = running ? ('已连接 ' + (s.apiUrl || ''))
+      : (s.state === 'ready' ? '引擎待拉起' : (unknown ? '引擎状态未知（状态查询未返回）' : '引擎缺失'));
     setDot('dotAgent', running ? 'ok' : '');
     $('txtAgent').textContent = running
       ? ('AI 引擎已就绪' + (s.owned ? '（本应用托管）' : '（复用已有实例）') + (degraded ? '·健康检查变慢' : ''))
-      : (s.state === 'ready' ? 'AI 引擎待拉起' : 'AI 引擎缺失');
+      : (s.state === 'ready' ? 'AI 引擎待拉起' : (unknown ? '引擎状态未知（状态查询未返回）' : 'AI 引擎缺失'));
     if (running && degraded) {
       $('txtAgent').title = '引擎在跑，但这一轮 /api/health 读超时了（引擎忙时会这样）。\n'
         + (wsUp ? 'WS 通道仍连着，说明引擎肯定在。' : '等几秒会自动恢复。');
+    }
+    if (unknown && s.diag) {
+      // 状态查询为什么没回来：把原因摊开（不是"引擎缺失"，别让人去翻 vendor 目录）
+      $('txtAgent').title = '状态查询失败：' + String(s.diag);
     }
     // 缺失时把"查过的目录"带上：只说"没找到"没法排查（便携包路径问题就靠这个定位）
     if (!running && s.state === 'missing' && s.vendorDir) {
@@ -2724,10 +2733,11 @@ withBridge(function(tauri){
     st.className = 'state';
     if (running) { st.innerHTML = '<i class="dot ok"></i><span id="aiStateTxt">已连接</span>'; }
     else if (s.state === 'ready') { st.innerHTML = '<i class="dot warn"></i><span id="aiStateTxt">待拉起</span>'; }
+    else if (unknown) { st.innerHTML = '<i class="dot warn"></i><span id="aiStateTxt">状态未知</span>'; }
     else { st.innerHTML = '<i class="dot err"></i><span id="aiStateTxt">缺失</span>'; }
 
-    $('setState').textContent = (stateNames[s.state] || '未知') + (s.owned ? '（本应用托管）' : '');
-    $('setState').className = 'bv ' + (running ? 'good' : 'bad');
+    $('setState').textContent = (unknown ? '状态未知' : (stateNames[s.state] || '未知')) + (s.owned ? '（本应用托管）' : '');
+    $('setState').className = 'bv ' + (running ? 'good' : (unknown ? 'warn' : 'bad'));
     var apiUrlShown = s.apiUrl || ('http://127.0.0.1:' + (s.port || 8765));
     $('setEndpoint').textContent = running ? (apiUrlShown + '　' + (s.wsUrl || '')) : (s.binPath || s.vendorDir || '（未就绪）');
 
@@ -2756,9 +2766,11 @@ withBridge(function(tauri){
     }
 
     // 缺失时在对话区给一张可操作的提示卡，而不是干巴巴一句"未连接"
+    // （0.39.45：节点可能被别的清屏代码带走 —— 缺了就重建，绝不因为一个空节点让整段状态渲染崩掉）
+    var hintNodes = ensureAiHint();
     if (!running) {
-      var hint = $('aiHint'); var body = $('aiHintBody');
-      hint.style.display = 'block';
+      hintNodes.hint.style.display = 'block';
+      var body = hintNodes.body;
       if (s.state === 'ready') {
         body.innerHTML = '<b>引擎还没起来。</b><br>已经找到可用的 cjh：<span class="mono small">' + esc(s.binPath || '') + '</span>' +
           '<br><br><button class="btn sm primary" id="hintDeploy">立刻拉起</button>';
@@ -2770,14 +2782,50 @@ withBridge(function(tauri){
       var hb = $('hintDeploy');
       if (hb) { hb.onclick = deploy; }
     } else {
-      $('aiHint').style.display = 'none';
+      hintNodes.hint.style.display = 'none';
     }
     return running;
   }
 
+  /**
+   * 提示卡常驻节点（0.39.45）：`#aiHint` / `#aiHintBody` 本来写在 HTML 里，
+   * 但清屏类代码（历史回放）会把它们冲掉——一旦没了，`renderStatus` 就抛
+   * `Cannot read properties of null (reading 'style')`，整段状态渲染中断，
+   * 界面永远停在上一次的状态（实测：页脚"已连接"、设置页"引擎缺失"）。
+   * 这里按需重建，保证"渲染状态"这件事不依赖别人有没有保住 DOM。
+   */
+  function ensureAiHint(){
+    var hint = $('aiHint');
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.id = 'aiHint';
+      hint.style.display = 'none';
+      chatBox().appendChild(hint);
+    }
+    var body = $('aiHintBody');
+    if (!body) {
+      body = document.createElement('div');
+      body.className = 'hintcard';
+      body.id = 'aiHintBody';
+      hint.appendChild(body);
+    }
+    return { hint: hint, body: body };
+  }
+
+  // 状态轮询（0.39.45 修正）：**IPC 调用失败 ≠ 引擎缺失**。
+  // 0.39.44 之前的兜底是 `renderStatus({state:'missing'})`——后端只是这一轮回得慢/超时，
+  // 界面就写死「缺失」（还带上"把 cjh.exe 放进 vendor"的引导），这就是用户看到的
+  // 「页脚已连接、设置页说引擎缺失」自相矛盾。现在：如实报「状态未知（IPC 未响应）」，
+  // 把失败原因记进 CJ_STATUS.diag 回投 ui_report.cjhDiag，并把次数记在 cjhPollFail。
+  var CJ_POLL = { fail: 0, last: '' };
   function loadStatus(){
-    return invoke('t2h:cjh_status').then(renderStatus).catch(function(){
-      return renderStatus({ state: 'missing' });
+    return invoke('t2h:cjh_status').then(function(s){
+      CJ_POLL.last = '';
+      return renderStatus(s);
+    }).catch(function(e){
+      CJ_POLL.fail += 1;
+      CJ_POLL.last = 'status_ipc_fail: ' + String((e && e.message) ? e.message : e);
+      return renderStatus({ state: 'unknown', diag: CJ_POLL.last });
     });
   }
   loadStatus();
@@ -4188,9 +4236,17 @@ withBridge(function(tauri){
    * 断线/重连后 cjh 推 `history_messages`（{role, content, name?, tool_call_id?}）。
    * 以前只显示一句"已恢复历史会话"，断线期间 agent 的产出全丢在界面上。
    * 现在按历史重建：user → 我的气泡；assistant → Markdown 气泡；tool → 折叠成一行工具结果。
+   *
+   * ⚠ 0.39.45 修正：清屏时**必须保住 `#aiHint`**。它会 `innerHTML=''` 把提示卡（以及所有
+   * 依赖它的代码）一起冲掉——而 `renderStatus()` 每 5 秒都要写 `$('aiHint').style.display`，
+   * 元素没了就抛 `Cannot read properties of null (reading 'style')`，状态渲染**整段中断**，
+   * 界面从此一直显示旧状态（实测表现：「页脚已连接、设置页说引擎缺失」）。
    */
   function renderHistory(msgs){
-    var list = msgs || [];    chatBox().innerHTML = '';
+    var list = msgs || [];
+    var keepHint = $('aiHint');          // 提示卡是常驻节点，清屏不能把它删掉
+    chatBox().innerHTML = '';
+    if (keepHint) { chatBox().appendChild(keepHint); }
     CJ.curBubble = null; CJ.acc = '';
     var shown = 0;
     var lastAssistant = '';
@@ -6406,6 +6462,13 @@ withBridge(function(tauri){
       cjhBin: CJ_STATUS.binPath || "",
       cjhVendorDir: CJ_STATUS.vendorDir || "",
       cjhHome: CJ_STATUS.lingquHome || "",
+      // 引擎状态的诊断串（0.39.45）：port / 最近失败原因 / 多久没成功 / 二进制是否可读 / 查过的目录
+      cjhDiag: CJ_STATUS.diag || "",
+      // 状态查询失败计数与原因（0.39.45）：IPC 失败 ≠ 引擎缺失，这条把两者分开断言
+      cjhPollFail: (typeof CJ_POLL !== 'undefined') ? CJ_POLL.fail : -1,
+      cjhPollLast: (typeof CJ_POLL !== 'undefined') ? String(CJ_POLL.last || '') : '',
+      // 提示卡节点是否还在（0.39.45）：历史回放清屏曾把它冲掉，导致状态渲染整段抛异常
+      aiHintOk: (document.getElementById('aiHint') && document.getElementById('aiHintBody')) ? 1 : 0,
       // P6 验证与报告（⑥ 屏真数据）
       verifyOk: VERIFY.ok === true,
       verifyRate: (typeof VERIFY.rate === "number") ? VERIFY.rate : -1,
@@ -6554,6 +6617,14 @@ withBridge(function(tauri){
         ] });
       }, 1200);
       setTimeout(function(){ reportUi('history-restored'); }, 2600);
+      // 0.39.45：历史回放清屏后必须仍能渲染状态——以前 `#aiHint` 被一起冲掉，
+      // renderStatus 抛 null.style，状态从此不再更新（界面一直显示旧状态）。
+      setTimeout(function(){
+        loadStatus().then(function(){
+          window.__histProbe = { hintOk: !!document.getElementById('aiHint'), state: CJ_STATUS.state };
+          reportUi('history-after-status');
+        });
+      }, 5400);
       return;
     }
     // 聊天窗宽度拖动自检（LINGQU_UI_PROBE=resize，0.39.39）：

@@ -1405,6 +1405,13 @@ public class UiReportCommand <: CommandHandler {
         o.put("cjhBin", JsonString(argStr(args, "cjhBin", "")))
         o.put("cjhVendorDir", JsonString(argStr(args, "cjhVendorDir", "")))
         o.put("cjhHome", JsonString(argStr(args, "cjhHome", "")))
+        // 引擎状态诊断（0.39.45）：说清"为什么判成缺失"——端口 / 最近失败原因 / 多久没成功 / 二进制可读性
+        o.put("cjhDiag", JsonString(argStr(args, "cjhDiag", "")))
+        // 状态查询失败（0.39.45）：IPC 失败 ≠ 引擎缺失。fail 是累计次数，last 是最近一次的报错文本
+        o.put("cjhPollFail", JsonInt(argInt(args, "cjhPollFail", -1)))
+        o.put("cjhPollLast", JsonString(argStr(args, "cjhPollLast", "")))
+        // 提示卡节点是否还在（0.39.45）：被清屏冲掉会让状态渲染整段抛异常
+        o.put("aiHintOk", JsonInt(argInt(args, "aiHintOk", 0)))
         o.put("frames", JsonInt(argInt(args, "frames", 0)))
         o.put("toolCards", JsonInt(argInt(args, "toolCards", 0)))
         // 工具卡片折叠证据（0.39.37）：open=当前展开几张（成功调用应 0，失败自动展开），

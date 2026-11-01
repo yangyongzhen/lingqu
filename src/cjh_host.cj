@@ -196,6 +196,9 @@ public func cjhHealthyRecently(): Bool {
  */
 var gHealthClient: Option<Client> = None
 
+/** 最近一次探活失败的原因（诊断用；成功时为 ""）。Cangjie 要求顶层变量**先定义后使用**。 */
+var gLastHealthErr: String = ""
+
 func healthClientOrBuild(): Client {
     match (gHealthClient) {
         case Some(c) => return c
@@ -238,15 +241,66 @@ public func cjhHealthy(port: Int64): Bool {
         if (ok) {
             // 一次成功就记下时刻：后面几次读不到时，状态轮询靠它区分"引擎忙"与"引擎没了"
             noteCjhHealthy()
+            gLastHealthErr = ""
+        } else {
+            gLastHealthErr = "status=${Int64(resp.status)}"
         }
     } catch (e: Exception) {
-        let _ = e
+        // 失败原因要留证据（0.39.45）：界面报「引擎缺失」时必须能说出是超时、拒连还是没这端点
+        gLastHealthErr = safeErrText(e)
         broken = true
     }
     if (broken) {
         dropHealthClient()
     }
     return ok
+}
+
+/** 最近一次探活失败的原因（诊断用；成功时为 ""）。异常文本截断，别把整段栈塞进 UI。 */
+func safeErrText(e: Exception): String {
+    var s = ""
+    try {
+        s = e.toString()
+    } catch (e2: Exception) {
+        let _ = e2
+        s = "exception"
+    }
+    if (s.size > 160) {
+        return s[0..160]
+    }
+    return s
+}
+
+public func cjhLastHealthErr(): String {
+    return gLastHealthErr
+}
+
+/** 距上次成功探活多少毫秒；从没成功过回 -1（诊断用） */
+func cjhHealthyAgoMs(): Int64 {
+    if (gCjhLastHealthyMs <= 0) {
+        return -1
+    }
+    return DateTime.now().toUnixTimeStamp().toMilliseconds() - gCjhLastHealthyMs
+}
+
+/**
+ * 状态轮询的诊断串（0.39.45，给 `ui_report.cjhDiag`）。
+ *
+ * 起因：用户侧出现"页脚已连接、设置页却写引擎缺失"（`cjhState=missing` 而 `wsState=connected`，
+ * 同时外部 `curl /api/health` 200）。只回一个 `state` 没法查——**判死要有证据**，
+ * 所以把"探的哪个端口、最近一次失败原因、多久没成功过、env 里的二进制是否可读、
+ * 发现路径有没有找到东西"一并回投，下次一句话就能定位。
+ */
+public func cjhDiagText(): String {
+    let port = cjhPort()
+    let rev = firstNonEmptyEnv(["LINGQU_CJH"])
+    let revOk = if (rev.size > 0) { fileReadable(rev) } else { false }
+    let install = installBinPath()
+    let envShow = if (rev.size > 0) { rev } else { "-" }
+    let instShow = if (install.size > 0) { install } else { "-" }
+    let ago = cjhHealthyAgoMs()
+    let owned = gCjhOwned
+    return "port=${port} lastErr=${gLastHealthErr} lastOkAgoMs=${ago} envCjh=${envShow} readable=${revOk} install=${instShow} vendor=${cjhVendorDir()} owned=${owned}"
 }
 
 /**
@@ -649,6 +703,8 @@ public func cjhStatusJson(): JsonValue {
     let port = cjhPort()
     let obj = JsonObject()
     obj.put("port", JsonInt(port))
+    // 诊断串（0.39.45）：每个分支都带上，界面报"缺失"时才有据可查
+    obj.put("diag", JsonString(cjhDiagText()))
     if (cjhHealthy(port)) {
         noteCjhHealthy()
         obj.put("state", JsonString("running"))

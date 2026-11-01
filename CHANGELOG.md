@@ -5,6 +5,49 @@
 
 ---
 
+## [0.39.45] - 2026-11-02
+
+**主题**：查清「页脚已连接、设置页却说引擎缺失」——不是引擎没了，是**状态渲染被一个 null 打断了**。
+
+### 现象（0.39.44 交付时顺手观察到）
+
+页脚「已连接 http://127.0.0.1:8765」、WS `ESTABLISHED`、外部 `curl /api/health` 200 且 20 次探活 0 失败，
+而 `ui_report` 里 `cjhState=missing` 且 `cjhBin` 为空。
+
+### 排查（先加证据，再下结论）
+
+1. 先给状态回包加诊断串 `diag`（端口 / 最近一次探活失败原因 / 多久没成功 / `LINGQU_CJH` 是否可读 /
+   查过的 vendor 目录 / 是否本应用托管），回投 `ui_report.cjhDiag`。**第一次跑就露了馅**：
+   ```
+   cjhState = unknown
+   cjhDiag  = status_ipc_fail: Cannot read properties of null (reading 'style')
+   ```
+2. 真根因：`renderStatus()` 末尾写 `$('aiHint').style.display`，而**历史回放**里
+   `chatBox().innerHTML = ''` 把常驻的 `#aiHint` 节点一起冲掉了。于是状态渲染每 5 秒抛一次
+   `TypeError`，被 `loadStatus().catch` 吞成 `renderStatus({state:'missing'})`——
+   界面从此**停止更新状态**，永远停在上一次渲染的结果，且报告里写着"缺失"。
+
+### 处置
+
+- **清屏保住常驻节点**：`renderHistory()` 先摘下 `#aiHint`，清完再塞回去。
+- **渲染不再依赖别人保住 DOM**：新增 `ensureAiHint()`，节点缺了就重建。
+- **IPC/渲染失败不再冒充"引擎缺失"**：新增 `unknown` 状态，文案「引擎状态未知（状态查询未返回）」，
+  `title` 摊开真实原因；`unknown` 与 `missing` 一样，绝不盖过"通道还连着"这条更硬的证据。
+- 新回投 `ui_report`：`cjhDiag`、`cjhPollFail`、`cjhPollLast`、`aiHintOk`（白名单两处一起加）。
+
+### 证据
+
+- 探针 `LINGQU_UI_PROBE=history`（喂一帧 `history_messages` 触发清屏）：
+  修前 `cjhState=missing` + `status_ipc_fail: …null…style…`；
+  修后 `history-restored` / `history-after-status` 两行都是 `aiHintOk=1`、`cjhState=running`、`cjhPollFail=0`。
+- 正常冷启动连续采样 4 次（约 30 秒）：`cjh=running`、`cjhPollFail=0`、`aiHintOk=1`、`wsState=connected`，
+  诊断串：`port=8765 lastErr= lastOkAgoMs=4976 envCjh=…\cjh\main.exe readable=true install=… vendor=vendor\cjh\win-x64 owned=false`。
+- `cjpm test` TOTAL=348 FAILED:0；五道闸全绿。
+
+### 未验证
+
+- 只在本机（WebView2 / Windows）验证；鸿蒙 ArkWeb 侧未跑同一序列。
+
 ## [0.39.44] - 2026-11-02
 
 **主题**：启动就带回上次的工程，左栏徽标立刻刷出来——不用每次开窗重新选一遍。
