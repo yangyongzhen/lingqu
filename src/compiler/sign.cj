@@ -1034,6 +1034,136 @@ public func json5EscapeOf(s: String): String {
 }
 
 /**
+ * 定位 `signingConfigs` 的 `[` 与配对的 `]`。
+ *
+ * 返回 (open 下标, close 下标, 键所在行的缩进, 错误)。扫描**按深度配对**并跳过 json5 字符串，
+ * 因为就地更新时要处理"数组里已经有内容"的形态——早期实现"遇到第一个 `]` 就停"，
+ * 只在空数组上成立（0.39.22 要改写已有 block，才把它抽成共用函数）。
+ */
+func locateSigningArray(text: String): (Int64, Int64, String, String) {
+    let bytes = text.toArray()
+    var keyEnd: Int64 = -1
+    var lineStart: Int64 = 0
+    match (text.indexOf("\"signingConfigs\"")) {
+        case Some(at) =>
+            keyEnd = at + "\"signingConfigs\"".size
+            lineStart = at
+        case None => match (text.indexOf("signingConfigs:")) {
+            case Some(at) =>
+                keyEnd = at + "signingConfigs:".size
+                lineStart = at
+            case None => return (-1, -1, "", "找不到 signingConfigs 字段（build-profile.json5 结构不认识）")
+        }
+    }
+    // 该行的缩进：从键位置往回找到行首
+    while (lineStart > 0 && bytes[lineStart - 1] != 10 && bytes[lineStart - 1] != 13) {
+        lineStart--
+    }
+    var indentLen: Int64 = 0
+    while (lineStart + indentLen < keyEnd && (bytes[lineStart + indentLen] == 32 || bytes[lineStart + indentLen] == 9)) {
+        indentLen++
+    }
+    let keyIndent = String.fromUtf8(bytes[lineStart..(lineStart + indentLen)])
+    // 找紧邻的 `[`
+    var i = keyEnd
+    while (i < bytes.size && bytes[i] != 91) {   // [
+        if (bytes[i] == 123 || bytes[i] == 125) {   // { }
+            return (-1, -1, "", "signingConfigs 后面没找到数组")
+        }
+        i++
+    }
+    if (i >= bytes.size) {
+        return (-1, -1, "", "signingConfigs 后面没找到数组")
+    }
+    let open = i
+    var depth: Int64 = 0
+    var inStr = false
+    var esc = false
+    i++
+    while (i < bytes.size) {
+        let c = bytes[i]
+        if (inStr) {
+            if (esc) {
+                esc = false
+            } else if (c == 92) {        // \
+                esc = true
+            } else if (c == 34) {        // "
+                inStr = false
+            }
+        } else if (c == 34) {
+            inStr = true
+        } else if (c == 91) {            // [
+            depth++
+        } else if (c == 93) {            // ]
+            if (depth == 0) {
+                return (open, i, keyIndent, "")
+            }
+            depth--
+        }
+        i++
+    }
+    return (-1, -1, "", "signingConfigs 数组没闭合")
+}
+
+/** `[` 与 `]` 之间是不是只有空白与逗号（即"空数组"） */
+func arrayBodyIsBlank(text: String, open: Int64, close: Int64): Bool {
+    let bytes = text.toArray()
+    if (open < 0 || close <= open || close >= bytes.size) {
+        return false
+    }
+    for (i in (open + 1)..close) {
+        let c = bytes[i]
+        if (c != 32 && c != 9 && c != 10 && c != 13 && c != 44) {
+            return false
+        }
+    }
+    return true
+}
+
+/**
+ * 就地**更新**已有的 `signingConfigs`（只允许在同一套材料上更新）。
+ *
+ * 为什么需要它：自动签名复用本地 p12 时，`.p7b/.cer` 会换成新签发的（旧证书过期后必须换），
+ * 这时工程里的 block 已经存在——按"非空就拒绝"处理会让整条路线走到最后一步失败
+ * （实测 0.39.22：`⑦ 写回失败：工程里已经有非空的 signingConfigs`）。
+ *
+ * 安全边界：**只有当工程里那份 `storeFile` 与我们要写的是同一份材料（同一个 .p12 文件名）**
+ * 才就地更新；换材料不做静默覆盖，报错让人决定。
+ */
+public func replaceOwnSigningConfigs(text: String, m: SigningMaterial): (String, String) {
+    if (text == "") {
+        return ("", "build-profile.json5 内容为空")
+    }
+    if (!m.complete()) {
+        return ("", "材料不完整（缺 .p12/.cer/.p7b 或口令密文），无法写回")
+    }
+    // 判序：先看"有没有东西可更新"，再看"是不是同一套材料"。
+    // 反过来会让空数组也落进"另一套材料"的报错里，话说不清（单测抓到的）。
+    if (!parseProjSigning(text).hasSigningConfigs) {
+        return ("", "signingConfigs 是空数组，应该走注入而不是更新")
+    }
+    let cur = signingMaterialOf(text)
+    if (!sameMaterialFile(cur.storeFile, m.storeFile)) {
+        return ("", "工程里已有另一套签名材料（${cur.storeFile}），不做覆盖（要换材料请先清空 signingConfigs）")
+    }
+    let (open, close, keyIndent, loErr) = locateSigningArray(text)
+    if (loErr != "") {
+        return ("", loErr)
+    }
+    // 名字沿用工程里那份：products[].signingConfig 指的就是它，改名会打断这条引用
+    let keepName = if (cur.name != "") { cur.name } else { m.name }
+    let savedName = m.name
+    m.name = keepName
+    let elemIndent = keyIndent + "  "
+    let body = "[\n${signingBlockJson5(m, elemIndent)}\n${keyIndent}]"
+    m.name = savedName
+    let bytes = text.toArray()
+    let head = String.fromUtf8(bytes[0..open])
+    let tail = String.fromUtf8(bytes[(close + 1)..bytes.size])
+    return (head + body + tail, "")
+}
+
+/**
  * 把一块 signingConfigs 注入 `build-profile.json5` 文本（**纯文本手术，不重排整份文件**）。
  *
  * 只处理"`signingConfigs` 是空数组"这一种情况（其余一律不动）：空数组里塞进 block，
@@ -1047,61 +1177,18 @@ public func injectSigningConfigs(text: String, m: SigningMaterial): (String, Str
     if (parseProjSigning(text).hasSigningConfigs) {
         return ("", "工程里已经有非空的 signingConfigs，不做覆盖（要重配请先手动清空）")
     }
-    // 定位 signingConfigs 键（带引号 / 裸键两种写法）
-    var keyEnd: Int64 = -1
-    var lineStart: Int64 = 0
-    match (text.indexOf("\"signingConfigs\"")) {
-        case Some(at) =>
-            keyEnd = at + "\"signingConfigs\"".size
-            lineStart = at
-        case None => match (text.indexOf("signingConfigs:")) {
-            case Some(at) =>
-                keyEnd = at + "signingConfigs:".size
-                lineStart = at
-            case None => return ("", "找不到 signingConfigs 字段（build-profile.json5 结构不认识）")
-        }
+    // 定位 signingConfigs 键（带引号 / 裸键两种写法）→ 交给共用的定位器
+    let (open, close, keyIndent, loErr) = locateSigningArray(text)
+    if (loErr != "") {
+        return ("", loErr)
     }
-    let bytes = text.toArray()
-    // 该行的缩进：从键位置往回找到行首
-    while (lineStart > 0 && bytes[lineStart - 1] != 10 && bytes[lineStart - 1] != 13) {
-        lineStart--
-    }
-    var indentLen: Int64 = 0
-    while (lineStart + indentLen < keyEnd && (bytes[lineStart + indentLen] == 32 || bytes[lineStart + indentLen] == 9)) {
-        indentLen++
-    }
-    let keyIndent = String.fromUtf8(bytes[lineStart..(lineStart + indentLen)])
-    // 找紧邻的 [ ... ]
-    var i = keyEnd
-    while (i < bytes.size && bytes[i] != 91) {
-        if (bytes[i] == 123 || bytes[i] == 125) {   // { }
-            return ("", "signingConfigs 后面没找到数组")
-        }
-        i++
-    }
-    if (i >= bytes.size) {
-        return ("", "signingConfigs 后面没找到数组")
-    }
-    let open = i
-    var close: Int64 = -1
-    i++
-    while (i < bytes.size) {
-        let c = bytes[i]
-        if (c == 93) {   // ]
-            close = i
-            break
-        }
-        if (c != 32 && c != 9 && c != 10 && c != 13 && c != 44) {
-            // 空数组里居然有东西：解析口径与 hasSigningConfigs 不一致，别动
-            return ("", "signingConfigs 数组非空（或结构异常），不做覆盖")
-        }
-        i++
-    }
-    if (close < 0) {
-        return ("", "signingConfigs 数组没闭合")
+    if (!arrayBodyIsBlank(text, open, close)) {
+        // 空数组里居然有东西：解析口径与 hasSigningConfigs 不一致，别动
+        return ("", "signingConfigs 数组非空（或结构异常），不做覆盖")
     }
     let elemIndent = keyIndent + "  "
     let body = "[\n${signingBlockJson5(m, elemIndent)}\n${keyIndent}]"
+    let bytes = text.toArray()
     let head = String.fromUtf8(bytes[0..open])
     // 从 `]` 的**下一个字符**开始接原文：body 自己已经带上了收尾的 `]`，
     // 若从 `close` 起接会多出一个 `]`（实测把 json5 写成 `]]`，语法错误）

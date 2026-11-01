@@ -144,6 +144,7 @@ public func hdcFailHintOf(code: Int64): String {
         case 9568322 => return "签名/release 分发问题：装机的 profile 缺 device-ids 或不是调试签名 → 换 debug 签名或把设备 UDID 加进 profile（FP-012）"
         case 9568269 => return "hdc file send 会保留源目录结构 → 先 cd 到 HAP 所在目录再发文件名（FP-013）"
         case 10106102 => return "设备在锁屏，拒绝自动解锁 → 解锁后重试（FP-014）"
+        case 9568332 => return "同包名已装过**另一套签名**的版本 → 先卸载再装（工具会自动做一次，仍失败就手动 `bm uninstall -n <bundle>`）"
         case _ => return ""
     }
 }

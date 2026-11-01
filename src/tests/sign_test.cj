@@ -318,6 +318,50 @@ public func testApplySigningConfigHappyPath(): Unit {
     @Assert(out.contains("]]"), false)
 }
 
+@Test
+public func testReplaceOwnSigningConfigs(): Unit {
+    // 0.39.22：复用旧 p12 时 .p7b/.cer 会因证书换发而变，工程里那块已经存在 →
+    // 必须能**就地更新**（"非空就拒绝"会让自动签名死在最后一步），但只允许在同一套材料上改。
+    let m = donorMaterial()
+    let (injected, err0) = applySigningConfig(PROFILE_EMPTY, m)
+    @Assert(err0, "")
+    // 换成新签发的 profile / 证书，p12 与口令密文不变（同一口令才能沿用密文）
+    let fresh = donorMaterial()
+    let newP7b = "C:\\Users\\me\\.ohos\\config\\DEMO-2026.p7b"
+    fresh.profile = newP7b
+    let (updated, err1) = replaceOwnSigningConfigs(injected, fresh)
+    @Assert(err1, "")
+    let parsed = parseProjSigning(updated)
+    @Assert(parsed.hasSigningConfigs, true)
+    @Assert(parsed.profilePath, newP7b)                 // 换成了新 profile
+    @Assert(parsed.storeFile, m.storeFile)              // 材料没换
+    @Assert(json5ValueAfter(updated, "storePassword"), m.storePassword)   // 口令密文沿用
+    @Assert(bracketBalance(updated), 0)
+    @Assert(updated.contains("]]"), false)
+    // 名字沿用工程里那份（products[].signingConfig 指的就是它，改名会打断引用）
+    @Assert(parsed.signingConfigName, "default")
+
+    // 换材料（storeFile 不是同一个 .p12）→ 拒绝，不静默覆盖别人的配置
+    let other = donorMaterial()
+    other.storeFile = "C:\\Users\\me\\.ohos\\config\\someone_else=.p12"
+    let (bad, err2) = replaceOwnSigningConfigs(injected, other)
+    @Assert(bad, "")
+    @Assert(err2.contains("另一套签名材料"), true)
+    // 空数组走注入，不该走更新
+    let (bad2, err3) = replaceOwnSigningConfigs(PROFILE_EMPTY, m)
+    @Assert(bad2, "")
+    @Assert(err3.contains("应该走注入"), true)
+    // 材料不全 / 空文本：明确报错
+    let partial = SigningMaterial()
+    partial.storeFile = m.storeFile
+    let (bad3, err4) = replaceOwnSigningConfigs(injected, partial)
+    @Assert(bad3, "")
+    @Assert(err4.contains("材料不完整"), true)
+    let (bad4, err5) = replaceOwnSigningConfigs("", m)
+    @Assert(bad4, "")
+    @Assert(err5 != "", true)
+}
+
 /** 方括号/花括号配平检查（0 = 平衡；>0 少闭合，<0 多闭合） */
 func bracketBalance(text: String): Int64 {
     let bytes = text.toArray()

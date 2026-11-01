@@ -88,6 +88,15 @@ public class AutoSignInput {
     public var deviceType: String = "4"
     /** 云端 profile 是否保留（默认 false：下载完就删，省配额） */
     public var keepProvision: Bool = false
+    /**
+     * 丢弃本地旧材料、重新生成密钥对（并把云端那张同名证书换成绑新公钥的）。
+     *
+     * 为什么需要：材料是从别处拷来的 / `material/` 重建过时，`.p12` 的口令**没人知道**
+     * （密文解不开 → 我们没法用本机 workKey 重新加密）→ hvigor 侧必然报
+     * `00303242 Signature material verification failed, as: Unsupported state or unable to
+     * authenticate data`。这时唯一干净的路是**换一套自己能掌握口令的材料**。
+     */
+    public var forceNewKeys: Bool = false
 }
 
 /**
@@ -126,22 +135,53 @@ public func autoSign(inp: AutoSignInput, token: AgcLoginOutcome): AutoSignOutcom
     }
     // ---------------- ④ 材料命名与本地密钥 ----------------
     let base = signingFileBaseName(inp.product, inp.projectRoot)
-    out.p12Path = "${inp.configDir}/${base}=.p12"
-    out.csrPath = "${inp.configDir}/${base}=.csr"
-    out.cerPath = "${inp.configDir}/${base}=.cer"
-    out.p7bPath = "${inp.configDir}/${base}=.p7b"
+    // 四种材料**同一个前缀**（`<base>=`）：后面凡是拼路径都必须走它，
+    // 手抄模板漏掉那个 `=` 就会得到"看着像、其实不存在"的路径（0.39.22 因此让
+    // `--newKeys` 静默失效：exists() 全 false，一个文件都没被挪走）。
+    let matPrefix = "${inp.configDir}/${base}="
+    out.p12Path = "${matPrefix}.p12"
+    out.csrPath = "${matPrefix}.csr"
+    out.cerPath = "${matPrefix}.cer"
+    out.p7bPath = "${matPrefix}.p7b"
     out.add("④ 材料路径（DevEco 同名规则）：${base}=.{p12,csr,cer,p7b}")
     // java / hap-sign-tool 位置（只在需要生成/申请证书时用）
     let javaHome = envOf("JAVA_HOME")
     let devecoHome = firstExistingEnv(["DEVECO_HOME", "DEVECO_SDK_HOME"])
     let sdkHome = firstExistingEnv(["DEVECO_SDK_HOME", "OHOS_HOME"])
+    // `DEVECO_SDK_HOME` 没设时按 `DEVECO_HOME/sdk` 推导（DevEco 6.x 的实际布局）：
+    // 少了这一步，`--newKeys` 会卡在"找不到 hap-sign-tool.jar"（实测 0.39.22）
+    var jarHome = sdkHome
+    if (jarHome == "" && devecoHome != "") {
+        let guess = hostPathOf("${devecoHome}/sdk")
+        if (exists(Path(guess))) {
+            jarHome = guess
+        }
+    }
     let javaPath = javaCandidates(javaHome, devecoHome)
     var javaExe = firstExisting(javaPath)
     if (javaExe == "") {
         javaExe = "java"        // 交给 PATH，失败会在 runSignTool 里带回 exit 码
     }
-    let jar = firstExisting(hapSignToolCandidates(sdkHome))
+    let jar = firstExisting(hapSignToolCandidates(jarHome))
     var password = ""
+    // 先把旧材料挪开（**改名不删**：私钥不可再生，留一份可回退）
+    if (inp.forceNewKeys) {
+        for (suffix in [".p12", ".csr", ".cer", ".p7b"]) {
+            let p = matPrefix + suffix
+            if (!exists(Path(p))) {
+                continue
+            }
+            let dst = "${p}.lingqu-bak-${nowMs()}"
+            try {
+                File.writeTo(dst, File.readFrom(p))
+                remove(Path(p))
+                out.add("④ 旧材料已改名留底：${fileNameOf(dst)}")
+            } catch (e: Exception) {
+                out.error = "④ 挪开旧材料失败（${p}）：${e}"
+                return out
+            }
+        }
+    }
     if (!exists(Path(out.p12Path))) {
         if (jar == "") {
             out.error = "本地没有 ${out.p12Path}，且找不到 hap-sign-tool.jar（设 DEVECO_SDK_HOME）"
@@ -175,13 +215,36 @@ public func autoSign(inp: AutoSignInput, token: AgcLoginOutcome): AutoSignOutcom
     }
     out.add("⑤ 云端已有证书 ${certs.size} 张，按名字找 ${certName}")
     var cert = AgcCert()
-    match (findCertByName(certs, certName)) {
+    // 新建证书时必须**重下**本地 .cer：本地那份对应的是旧证书（多半已过期），
+    // 不重下就会拿"新证书 id + 旧证书文件"去签，hvigor 那边报的错会离真正原因很远。
+    var freshCert = false
+    // 刚生成了新密钥对 → 云端那张同名证书绑的是**旧公钥**，profile 里写的证书会对不上 .p12，
+    // 必须换一张；反之（复用旧 p12）云端那张就是这个密钥对的证书，直接复用。
+    if (out.generatedKeys) {
+        match (findCertByName(certs, certName)) {
+            case Some(old) =>
+                let oldIds = ArrayList<String>()
+                oldIds.add(old.id)
+                let (delOK, delNote) = agcCertDelete(token.accessToken, token.userId, teamId, oldIds)
+                out.add("⑤ 旧证书绑的是旧密钥，先换掉：${delNote}")
+                if (!delOK) {
+                    out.error = "⑤ ${delNote}"
+                    return out
+                }
+            case None => ()
+        }
+    }
+    var reusable: Option<AgcCert> = None
+    if (!out.generatedKeys) {
+        reusable = findUsableCert(certs, certName)
+    }
+    match (reusable) {
         case Some(c) =>
             cert = c
             out.add("⑤ 复用证书：${certName}（id=${cert.id}）")
         case None =>
             if (!exists(Path(out.csrPath))) {
-                out.error = "⑤ 云端没有 ${certName}，本地也没有 CSR 可用来新建（先删掉 p12 让它重生）"
+                out.error = "⑤ 云端没有可用的 ${certName}，本地也没有 CSR 可用来新建（先删掉 p12 让它重生）"
                 return out
             }
             var csrText = ""
@@ -191,6 +254,22 @@ public func autoSign(inp: AutoSignInput, token: AgcLoginOutcome): AutoSignOutcom
                 out.error = "⑤ 读 CSR 失败：${e}"
                 return out
             }
+            // AGC 证书数量有上限（本账号实测 4 张），过期的照样占位 → 先把**自己的**过期自动签名
+            // 证书删掉腾位置，否则新建会被回 `205389872 certificate number exceeds limit.`。
+            let stale = staleCertsOf(certs)
+            if (stale.size > 0) {
+                let ids = ArrayList<String>()
+                for (s in stale) {
+                    ids.add(s.id)
+                    out.add("⑤ 过期证书占位：${s.certName}（id=${s.id}，到期 ${s.expireMs}）")
+                }
+                let (ok, note) = agcCertDelete(token.accessToken, token.userId, teamId, ids)
+                out.add("⑤ ${note}")
+                if (!ok) {
+                    out.error = "⑤ ${note}（可以登录 AGC 控制台手动删除过期证书后重试）"
+                    return out
+                }
+            }
             let (newCert, addErr) = agcCertAdd(token.accessToken, token.userId, teamId, csrText,
                 certName, "1")       // 1 = debug 证书
             if (addErr != "") {
@@ -198,15 +277,17 @@ public func autoSign(inp: AutoSignInput, token: AgcLoginOutcome): AutoSignOutcom
                 return out
             }
             cert = newCert
+            freshCert = true
             out.add("⑤ 新建证书：${certName}（id=${cert.id}）")
     }
     out.certId = cert.id
+    out.add("⑤ 证书对象：id=${cert.id} objectId=${cert.certObjectId}")
     if (cert.id == "") {
         out.error = "⑤ 证书没有 id，无法申请 profile"
         return out
     }
-    // 本地 .cer：没有就按 certObjectId 下载
-    if (!exists(Path(out.cerPath))) {
+    // 本地 .cer：没有（或刚换了新证书）就按 certObjectId 下载
+    if (freshCert || !exists(Path(out.cerPath))) {
         let objectRef = if (cert.certObjectId != "") { cert.certObjectId } else { cert.id }
         let (saved, dlErr) = agcDownloadObject(token.accessToken, token.userId, teamId, objectRef,
             out.cerPath)
@@ -219,8 +300,26 @@ public func autoSign(inp: AutoSignInput, token: AgcLoginOutcome): AutoSignOutcom
         out.add("⑤ 复用本地证书文件：${out.cerPath}")
     }
     // ---------------- ⑥ profile ----------------
+    // `deviceList` 要的是**云端设备 id**（不是 UDID）：AGC 对元素长度有限制（≤32），
+    // 而 UDID 是 64 位十六进制 → 直接传 UDID 会被拒：
+    //   `signIdeTestProvision.reqParams.deviceList[0].<list element>: size must be between 0 and 32`
+    // （实测踩到）。所以先拉 device/list，把 id 收集起来。
+    let (cloudDevices, devErr) = agcDeviceList(token.accessToken, token.userId, teamId)
+    if (devErr != "") {
+        out.error = "⑥ 拉设备列表失败：${devErr}"
+        return out
+    }
     let deviceIds = ArrayList<String>()
-    deviceIds.add(upperAscii(inp.udid).trimAscii())
+    for (d in cloudDevices) {
+        if (d.id != "") {
+            deviceIds.add(d.id)
+        }
+    }
+    if (deviceIds.size == 0) {
+        out.error = "⑥ 云端没有已注册设备（先跑设备注册，或检查 UDID 是否在团队里）"
+        return out
+    }
+    out.add("⑥ 云端设备 id ${deviceIds.size} 个（用它申请 profile，不是 UDID）")
     let (p7b, provNote) = agcProvisionDebug(token.accessToken, token.userId, teamId, cert.id,
         inp.bundleName, inp.product, deviceIds, ArrayList<String>(), out.p7bPath)
     if (p7b == "") {
@@ -292,7 +391,13 @@ func writeBack(out: AutoSignOutcome, inp: AutoSignInput, m: SigningMaterial): Au
     out.buildProfile = inp.buildProfile
     try {
         let origin = String.fromUtf8(File.readFrom(inp.buildProfile))
-        let (newText, err) = applySigningConfig(origin, m)
+        // 已有配置：同一套材料（同一个 .p12）就地更新（.p7b/.cer 会因为证书换发而变）；
+        // 别的材料一律不动，报错让人决定
+        let (newText, err) = if (parseProjSigning(origin).hasSigningConfigs) {
+            replaceOwnSigningConfigs(origin, m)
+        } else {
+            applySigningConfig(origin, m)
+        }
         if (err != "") {
             out.error = "⑦ 写回失败：${err}"
             return out

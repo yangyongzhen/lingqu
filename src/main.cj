@@ -2436,6 +2436,59 @@ public class SignCommand <: CommandHandler {
             eprintln("[lingqu][sign:reencrypt] ok=${outError == ""} bp=${bpPath} storePwdLen=${pwd.size}")
             return res3
         }
+        // ---- `--tool-check`：自检自动签名依赖的外部工具（java / hap-sign-tool.jar / hdc） ----
+        // 为什么单列：这三样缺任何一样，"全新材料"那条路就跑不动，而它们都在**别人的安装目录**里。
+        // 与其在关键路径上撞墙，不如先 1 秒说清"有没有、在哪、能不能真生成一对密钥"。
+        if (argBool(args, "toolCheck", false) || envOr("LINGQU_SIGN_TOOLCHECK", "") == "1") {
+            var res5 = JsonObject()
+            let javaHome = envOr("JAVA_HOME", "")
+            let devecoHome = envOr("DEVECO_HOME", "")
+            let sdkHome = envOr("DEVECO_SDK_HOME", "")
+            let javaExe = firstExisting(javaCandidates(javaHome, devecoHome))
+            let jar = firstExisting(hapSignToolCandidates(sdkHome))
+            let hd = hdcPathOr()
+            res5.put("javaHome", JsonString(javaHome))
+            res5.put("devecoHome", JsonString(devecoHome))
+            res5.put("sdkHome", JsonString(sdkHome))
+            res5.put("java", JsonString(javaExe))
+            res5.put("hapSignToolJar", JsonString(jar))
+            res5.put("hdc", JsonString(hd))
+            var genOK = false
+            var genMsg = ""
+            if (javaExe != "" && jar != "") {
+                let dir = "${agcTempDir()}/lingqu-sign-toolcheck"
+                try {
+                    Directory.create(Path(dir), recursive: true)
+                } catch (e: Exception) {
+                    let _ = e
+                }
+                let p12 = "${dir}/probe.p12"
+                let csr = "${dir}/probe.csr"
+                let pwd = randomPasswordAlnum()
+                let kp = genKeypair(javaExe, jar, p12, pwd, dir)
+                if (!kp.ok) {
+                    genMsg = "generate-keypair 失败：${kp.error}"
+                } else {
+                    let c2 = genCsr(javaExe, jar, p12, pwd, csr, dir)
+                    if (!c2.ok) {
+                        genMsg = "generate-csr 失败：${c2.error}"
+                    } else {
+                        genOK = exists(Path(p12)) && exists(Path(csr))
+                        genMsg = if (genOK) { "生成密钥对与 CSR 成功（${p12}）" } else {
+                            "命令成功但产物缺失"
+                        }
+                    }
+                }
+                res5.put("probeDir", JsonString(dir))
+            } else {
+                genMsg = "java 或 hap-sign-tool.jar 缺失，跳过生成尝试"
+            }
+            res5.put("generated", JsonBool(genOK))
+            res5.put("generateMessage", JsonString(genMsg))
+            res5.put("ok", JsonBool(javaExe != "" && jar != "" && hd != "" && genOK))
+            eprintln("[lingqu][sign:toolcheck] java=${javaExe} jar=${jar} hdc=${hd} gen=${genOK}")
+            return res5
+        }
         // ---- `--auto`：自动签名全流程（需要先 `--login` 过） ----
         //
         // 一条命令把「设备 → 证书 → 新包名 profile → 按 DevEco 命名落盘 → 写 build-profile」跑完。
@@ -2525,13 +2578,17 @@ public class SignCommand <: CommandHandler {
             inp.buildProfile = bp
             inp.udid = udid
             inp.deviceType = deviceType
+            // `--newKeys`：丢掉本地旧材料、重新生成密钥对与自己掌握口令的 .p12。
+            // 什么时候要它：材料是从别处拷来的 / `material/` 重建过 —— 旧 .p12 的口令无人知道，
+            // 密文解不开就没法用本机 workKey 重加密，hvigor 必然报 00303242。
+            inp.forceNewKeys = argBool(args, "newKeys", false) || envOr("LINGQU_SIGN_NEWKEYS", "") == "1"
             let result = autoSign(inp, token)
             res4 = result.toJson()
             res4.put("bundleName", JsonString(bundle))
             res4.put("udid", JsonString(udid))
             res4.put("deviceType", JsonString(deviceType))
             eprintln("[lingqu][sign:auto] ok=${result.ok} bundle=${bundle} cert=${result.certName} " +
-                "err=${result.error}")
+                "newKeys=${inp.forceNewKeys} err=${result.error}")
             return res4
         }
         var path = argStr(args, "path", "")
@@ -4798,6 +4855,27 @@ public class DeployCommand <: CommandHandler {
                     let (code, out, errOut) = executeWithOutput(hdc, ["-t", serial, "install", "-r", hapPath])
                     installText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
                     installStep = parseInstallResult(installText, code)
+                    // `9568332 install sign info inconsistent`：同包名已装过**另一套签名**的版本。
+                    // 自动签名会换材料（旧证书过期后必须换），重签后再装必然撞这个码 →
+                    // 先卸载再装一次（调试机上这是常规动作，不动用户数据之外的东西）。
+                    if (!installStep.ok && installStep.failCode == 9568332 && bundleName != "") {
+                        let (_, uOut, uErrOut) = executeWithOutput(hdc,
+                            ["-t", serial, "shell", "bm", "uninstall", "-n", bundleName])
+                        let unText = (String.fromUtf8(uOut) + "\n" + String.fromUtf8(uErrOut)).trimAscii()
+                        try {
+                            let (code2, out2, errOut2) = executeWithOutput(hdc,
+                                ["-t", serial, "install", "-r", hapPath])
+                            installText = installText + "\n-- 卸载后重装（${unText}）--\n" +
+                                String.fromUtf8(out2) + "\n" + String.fromUtf8(errOut2)
+                            installStep = parseInstallResult(String.fromUtf8(out2) + String.fromUtf8(errOut2),
+                                code2)
+                            if (installStep.ok) {
+                                installStep.detail = installStep.detail + "（先卸载了旧签名的同包名版本）"
+                            }
+                        } catch (e2: Exception) {
+                            installStep.detail = installStep.detail + " ｜ 卸载后重装失败：${e2}"
+                        }
+                    }
                 } catch (e: Exception) {
                     installStep = DeployStep("install", false, "hdc install 起不来：${e}", 0)
                 }
@@ -4842,6 +4920,12 @@ public class DeployCommand <: CommandHandler {
         // ---- 判定 ----
         let verdict = judgeDeploy(serialOk, installStep.ok, startStep.ok, healthy, serial,
             installStep.failCode)
+        // 启动失败时别一律怪"ability 名写错"：锁屏（10106102）是最常见的一类，
+        // 它的处置是"解锁后重试"，跟名字无关（实测误导过一轮，见 FP-014）
+        if (!startStep.ok && startStep.failCode == 10106102) {
+            verdict.reason = "装上了，但设备锁屏拒绝自动拉起（设备 ${serial}，10106102）"
+            verdict.nextStep = "解锁设备后重跑 deploy --start（开发者模式下无法自动解锁）"
+        }
 
         // ---- 落档 ----
         var outError = ""

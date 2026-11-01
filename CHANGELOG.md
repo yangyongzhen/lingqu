@@ -5,6 +5,80 @@
 
 ---
 
+## [0.39.22] - 2026-11-02
+
+**主题**：**路线 A（AGC 云生成自动签名）真机打通**——`m3u8dl-tauri` 从"没有签名"走到
+`signed=true`、**装机成功**（`install bundle successfully`），全程零手工点 DevEco。
+
+### 实测证据（本机，HarmonyOS PC `3QC0124B20000048`）
+
+| 环节 | 结果 |
+|---|---|
+| `sign --auto --newKeys` | `ok=true`：团队 40574614 → 设备已注册 → 生成密钥对/CSR → 建证书 → debug profile → 写回 |
+| `hap` | `built=true signed=true hapBytes=8,273,766 errorCount=0` |
+| `deploy` | `installed=true installDetail="install bundle successfully"` |
+| `deploy --start` | 装上了但**设备锁屏**拒绝自动拉起（10106102，非签名问题） |
+
+### Fixed（一条链上逐个撞出来的六个坑）
+
+1. **证书"名字对得上"≠"能用"**：AGC 里 `auto_debug_40574614.cer` 名字对、`expireTime` 早已过去
+   （`status=2`），拿它申请 profile 被回 `The certList is invalid.`。新增 `AgcCert.expireMs/status/usable()`
+   与 `findUsableCert`——按**有效期**挑，不按名字挑。
+2. **证书数量上限**：`cert/add` 回 `205389872 certificate number exceeds limit.`（本账号上限 4 张，
+   **过期的照样占位**）。新增 `agcCertDelete` + `staleCertsOf`（只删"过期 **且** 名字是
+   `auto_debug_*`/`auto_release_*`"的，不碰用户手工建的证书）。
+   端点参数位置是实测出来的：删除是 **DELETE + 请求体** `{"certIds":[...]}`（放 query 一律被回
+   `Body parameter is required.`），且请求体要带 Content-Length。
+3. **同名证书绑的是旧公钥**：换了新密钥对后复用云端同名证书 → profile 里的证书与 `.p12` 对不上。
+   现在 `--newKeys` 会先删同名旧证书再新建，并**强制重下**本地 `.cer`（本地那份是旧证书）。
+4. **写回被自己的保护挡住**：工程里已有 `signingConfigs` 时旧实现一律拒绝，
+   于是整条链死在第 ⑦ 步。新增 `replaceOwnSigningConfigs`（**同一套材料才就地更新**，
+   换材料仍拒绝）+ 抽出共用的 `locateSigningArray`（按深度配对，跳过 json5 字符串）。
+5. **`.p12` 的口令没人知道**：材料来自别处 / `material/` 重建过时，旧密文解不开
+   （`GCM tag mismatch`）→ hvigor 报 `00303242 Signature material verification failed, as:
+   Unsupported state or unable to authenticate data`。新增 `--newKeys`（旧材料**改名留底**后重生成），
+   自己掌口令 → 自己加密 → hvigor 解得开。
+   `DEVECO_SDK_HOME` 没设时按 `DEVECO_HOME/sdk` 推导出 `hap-sign-tool.jar` 位置。
+6. **`9568332 install sign info inconsistent`**：同包名已装过另一套签名的版本（重签后必然撞上）。
+   `deploy` 现在自动 `bm uninstall` 后重试一次并记进证据；`10106102`（锁屏）的结论文案也改对了
+   （原来一律怪"ability 名写错"）。
+
+### Added
+
+- `sign --auto --newKeys`（`LINGQU_SIGN_NEWKEYS=1`）：丢弃并重生成材料。
+- `t2h:sign --tool-check`（0.39.20 起）：自检 java / `hap-sign-tool.jar` / hdc，并真生成一对密钥验通路。
+- 单测 +5 例（`usable()` 与过期挑选手法、`staleCertsOf` 只挑自己的、`replaceOwnSigningConfigs`
+  就地更新/拒绝换材料/空数组分流），合计 **330 例**。
+
+### 说明（未验证 / 遗留）
+
+- **应用启动与界面未验证**：设备锁屏（开发者模式禁止自动解锁），`aa start` 报 10106102。
+  装机已成功，启动与 `verify` 需解锁后重跑。
+- `hap` 闸仍报 `rawfile/` 有 6 个死资源（前端已编进 `.so`）——与本轮签名无关，属 m3u8dl 工程的清资源待办。
+
+## [0.39.21] - 2026-11-02
+
+**主题**：AGC 云侧四处"字段名/编码"错误——它们让设备与证书这两步**看着成功其实没用**。
+
+### Fixed
+
+- **设备列表解析**：AGC 真正用的字段是 `list`（`devicesInfo`/`devices`/`deviceList`/`deviceInfos`
+  全不存在）→ "设备已注册"永远判成没注册，随后 `device/add` 报 `205389858 UDID is repeat`。
+- `205389858`（UDID 重复）**按已注册处理**：语义上就是"已经好了"，不该当失败。
+- **profile 的 `deviceList` 要云端设备 id**：传 UDID（64 位）被拒
+  （`deviceList[0].<list element>: size must be between 0 and 32`）。
+- **证书下载 403**：AGC 给的是 SigV4 签名链，通用 HTTP 客户端会重新编码 query 使签名失效；
+  改为**原样用系统 curl**取字节，再校验 sha256 落盘。
+
+## [0.39.20] - 2026-11-02
+
+**主题**：`sign --tool-check` —— 先把"别人的安装目录里那三样东西"体检清楚。
+
+### Added
+
+- `t2h:sign --tool-check`（`LINGQU_SIGN_TOOLCHECK=1`）：逐项报告 java / `hap-sign-tool.jar` / hdc
+  是否存在、在哪、版本，并**真生成一对密钥再删**（证明它不只是"文件在"）。
+
 ## [0.39.19] - 2026-11-02
 
 **主题**：把「回调判定」抽成纯函数并**放宽到只认 quit**——连续三次登录失败都出在"一次异常回调

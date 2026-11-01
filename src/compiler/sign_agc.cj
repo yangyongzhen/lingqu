@@ -55,6 +55,9 @@ public let AGC_TEAM_LIST_PATH: String = "/api/ups/user-permission-service/v1/use
 /** 证书 / 设备 / profile 端点（cloud.dart 常量） */
 public let AGC_CERT_LIST_PATH: String = "/api/cps/harmony-cert-manage/v1/cert/list"
 public let AGC_CERT_ADD_PATH: String = "/api/cps/harmony-cert-manage/v1/cert/add"
+// 删除证书是 **DELETE**，且参数必须放**请求体**（`{"certIds":[...]}`）：
+// 放 query 一律被回 `Body parameter is required.`；且体还要带 Content-Length（实测 0.39.22）。
+public let AGC_CERT_DELETE_PATH: String = "/api/cps/harmony-cert-manage/v1/cert/delete"
 public let AGC_DEVICE_LIST_PATH: String = "/api/cps/device-manage/v1/device/list"
 public let AGC_DEVICE_ADD_PATH: String = "/api/cps/device-manage/v1/device/add"
 public let AGC_PROVISION_ADD_TEST_PATH: String = "/api/cps/provision-manage/v1/ide/test/provision/add"
@@ -350,8 +353,16 @@ public func agcHttp(method: String, url: String, headers: ArrayList<String>, bod
         cb = cb.noProxy()
         let client = cb.build()
         var rb = HttpRequestBuilder().url(url)
-        let isPost = method.trimAscii() == "POST" || method.trimAscii() == "post"
-        rb = if (isPost) { rb.post() } else { rb.get() }
+        // 只认这三个方法：AGC 的删除证书是 **DELETE 带请求体**，用 get() 会把体丢掉，
+        // 服务端就回 `Body parameter is required.`（实测 0.39.22）
+        let verb = upperAscii(method.trimAscii())
+        rb = if (verb == "POST") {
+            rb.post()
+        } else if (verb == "DELETE") {
+            rb.delete()
+        } else {
+            rb.get()
+        }
         for (h in headers) {
             match (h.indexOf(":")) {
                 case Some(cut) => if (cut > 0) {

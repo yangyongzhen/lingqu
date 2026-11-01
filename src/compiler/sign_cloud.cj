@@ -3,6 +3,8 @@ package lingqu.compiler
 import std.collection.*
 import std.crypto.digest.*
 import std.fs.*
+import std.process.*
+import std.time.*
 import stdx.crypto.digest.*
 import stdx.encoding.json.*
 
@@ -33,6 +35,39 @@ public class AgcCert {
     public var id: String = ""
     public var certName: String = ""
     public var certObjectId: String = ""
+    /** 到期时间（毫秒时间戳；取不到给 0） */
+    public var expireMs: Int64 = 0
+    /** AGC 侧状态（实测：1=可用、2=已过期） */
+    public var status: Int64 = 0
+
+    /**
+     * 这张证书现在能不能用来申请 debug profile。
+     *
+     * 实测（0.39.21）：AGC 里那张 `auto_debug_<teamId>.cer` 名字对得上，但 `expireTime` 早已过去
+     * （status=2），拿它申请会被回 `The certList is invalid.` —— 看名字复用是不够的，必须看**有效期**。
+     */
+    public func usable(): Bool {
+        if (this.id == "") {
+            return false
+        }
+        if (this.status != 0 && this.status != 1) {
+            return false
+        }
+        if (this.expireMs > 0 && this.expireMs <= nowMs()) {
+            return false
+        }
+        return true
+    }
+}
+
+/** 当前时间（毫秒；取不到给 0 → 视为"无法判断过期"，让 usable() 放行） */
+public func nowMs(): Int64 {
+    try {
+        return DateTime.now().toUnixTimeStamp().toMilliseconds()
+    } catch (e: Exception) {
+        let _ = e
+        return 0
+    }
 }
 
 // ============================================================
@@ -48,6 +83,17 @@ public func parseDeviceList(root: JsonValue): ArrayList<AgcDevice> {
     var arr = jsonArrayField(root, "devicesInfo")
     if (arr.size() == 0) {
         arr = jsonArrayField(root, "devices")
+    }
+    if (arr.size() == 0) {
+        arr = jsonArrayField(root, "deviceList")
+    }
+    if (arr.size() == 0) {
+        arr = jsonArrayField(root, "deviceInfos")
+    }
+    // 实测（0.39.21）：AGC 真正用的字段名是 **`list`** —— 上面几个名字都不对，
+    // 于是"设备已注册"永远判成"没注册"（随后 device/add 报 205389858 UDID is repeat）。
+    if (arr.size() == 0) {
+        arr = jsonArrayField(root, "list")
     }
     for (i in 0..arr.size()) {
         let d = AgcDevice()
@@ -87,9 +133,21 @@ public func parseCertList(root: JsonValue): ArrayList<AgcCert> {
         c.id = jsonStringField(arr[i], "id")
         c.certName = jsonStringField(arr[i], "certName")
         c.certObjectId = jsonStringField(arr[i], "certObjectId")
+        c.expireMs = jsonIntField(arr[i], "expireTime", 0)
+        c.status = jsonIntField(arr[i], "status", 0)
         out.add(c)
     }
     return out
+}
+
+/** 按名字找**可用**（未过期）的证书；名字对得上但过期的会被跳过 */
+public func findUsableCert(certs: ArrayList<AgcCert>, name: String): Option<AgcCert> {
+    for (c in certs) {
+        if (c.certName == name && c.usable()) {
+            return Some(c)
+        }
+    }
+    return None
 }
 
 /** 按名字找证书（`auto_debug_<teamId>.cer` 是确定性命名，所以这就是"要不要新建"的判据） */
@@ -100,6 +158,31 @@ public func findCertByName(certs: ArrayList<AgcCert>, name: String): Option<AgcC
         }
     }
     return None
+}
+
+/**
+ * 名字是不是**自动签名**产出的（`auto_debug_<teamId>.cer` / `auto_release_<teamId>.cer`）。
+ *
+ * 只删这个前缀的，是为了不碰用户自己在 AGC 控制台建的证书——删别人的东西不在工具职责里。
+ */
+public func isAutoSignCertName(name: String): Bool {
+    let n = lowerAscii(name.trimAscii())
+    return n.startsWith("auto_debug_") || n.startsWith("auto_release_")
+}
+
+/**
+ * 挑出**已过期**的自动签名证书：AGC 的证书数量有上限（本账号实测 4 张），
+ * 过期的那几张照样占位，于是新建会撞 `205389872 certificate number exceeds limit.`。
+ * 它们的唯一用处就是占位，删掉才能腾出位置。
+ */
+public func staleCertsOf(certs: ArrayList<AgcCert>): ArrayList<AgcCert> {
+    let out = ArrayList<AgcCert>()
+    for (c in certs) {
+        if (c.id != "" && !c.usable() && isAutoSignCertName(c.certName)) {
+            out.add(c)
+        }
+    }
+    return out
 }
 
 /**
@@ -338,6 +421,11 @@ public func agcEnsureDevice(accessToken: String, uid: String, teamId: String, ud
     let body = buildDeviceAddBody(udid, deviceType, nonce)
     let (_, e2) = agcCall("POST", AGC_DEVICE_ADD_PATH, accessToken, uid, teamId, body)
     if (e2 != "") {
+        // `205389858 UDID is repeat`：**这个 UDID 已经注册过了**（可能在本团队也可能在别处）。
+        // 语义上等于"已注册"，不该当失败——否则用户会被一个"其实已经好了"的错误卡住。
+        if (e2.contains("205389858")) {
+            return (true, "设备已注册（AGC 回报 UDID 重复，视为已注册）")
+        }
         // 名字重复/数量超限都不是致命：前者换个 nonce 重试一次，后者要人处理
         if (e2.contains("205389857")) {
             let body2 = buildDeviceAddBody(udid, deviceType, toHexLower(randomBytes(4)))
@@ -381,6 +469,31 @@ public func agcCertAdd(accessToken: String, uid: String, teamId: String, csrPem:
 }
 
 /**
+ * 删除云端证书（**DELETE + 请求体**）。
+ *
+ * 参数位置是实测定出来的：`?certIds=<id>`、`?certIds[]=<id>`、JSON 数组编码都被回
+ * `... Parameter is [reqParams]. Processor is [body]. Message is [Body parameter is required.]`；
+ * 而 `DELETE` 带体 `{"certIds":["<id>"]}`（且要有 Content-Length）回 `{"ret":{"code":0,"msg":"OK"}}`。
+ */
+public func agcCertDelete(accessToken: String, uid: String, teamId: String,
+    certIds: ArrayList<String>): (Bool, String) {
+    if (certIds.size == 0) {
+        return (false, "没有要删除的证书 id")
+    }
+    var arr = JsonArray()
+    for (id in certIds) {
+        arr.add(JsonString(id))
+    }
+    var o = JsonObject()
+    o.put("certIds", arr)
+    let (_, err) = agcCall("DELETE", AGC_CERT_DELETE_PATH, accessToken, uid, teamId, o.toJsonString())
+    if (err != "") {
+        return (false, "删除证书失败：${err}")
+    }
+    return (true, "已删除 ${certIds.size} 张云端证书")
+}
+
+/**
  * 把 AGC 的对象 URL 换成**带签名的临时下载链**，并下载到本地。
  *
  * 顺序照 flutter：先 `objects/url/reapply`（body 是 `{"sourceUrls":"<单字符串>"}`），
@@ -407,14 +520,14 @@ public func agcDownloadObject(accessToken: String, uid: String, teamId: String, 
     if (!isSafeDownloadUrl(newUrl)) {
         return ("", "拒绝下载：下载链不是安全的 HTTPS 公网地址（${newUrl}）")
     }
-    let r = agcHttp("GET", newUrl, ArrayList<String>(), "", 60000)
-    if (r.error != "") {
-        return ("", "下载失败：${r.error}")
+    // 下载**必须原样使用**这条签名 URL：AWS SigV4 对 query 的字节敏感，
+    // 而通用 HTTP 客户端会把 `%2F` 之类的转义重新编码 → 签名失效 → **403**
+    // （实测：同一 URL 用 curl 原样 GET 是 200/2914 字节，用我们自己的客户端 403）。
+    // 所以这里优先走系统 curl（Win10+ / Linux 都自带），拿不到再退回内置客户端。
+    let bytes = downloadRawBytes(newUrl)
+    if (bytes.size == 0) {
+        return ("", "下载失败：curl 与内置客户端都没拿到内容（URL 可能已过期，签名链有效期很短）")
     }
-    if (r.status != 200) {
-        return ("", "下载失败：HTTP ${r.status}")
-    }
-    let bytes = r.body.toArray()
     if (bytes.size == 0) {
         return ("", "下载到 0 字节（AGC 对象可能已过期）")
     }
@@ -502,4 +615,64 @@ public func digitsOnlyValue(s: String): Int64 {
         }
     }
     return v
+}
+
+/**
+ * 用系统 `curl` 原样下载（保留 URL 的原始字节，避免签名被重编码）。
+ *
+ * 为什么不用内置客户端：签名链是 AWS SigV4，query 里 `%2F`、`+` 这类字符一旦被重新编码，
+ * 签名就对不上 → 403。curl 是"把 URL 当字节"的，最稳。Win10 1803+ 与主流 Linux 都自带。
+ * 返回值：拿到的字节（失败返回空）。
+ */
+public func downloadRawBytes(url: String): Array<Byte> {
+    let tmp = "${agcTempDir()}/lingqu-dl-${toHexLower(randomBytes(4))}.bin"
+    // `-sS` 静默但报错、`-L` 跟随跳转、`-f` HTTP 错误码当失败、`--max-time` 防挂死
+    let args = ArrayList<String>()
+    args.add("-sS")
+    args.add("-L")
+    args.add("-f")
+    args.add("--max-time")
+    args.add("90")
+    args.add("-o")
+    args.add(tmp)
+    args.add(url)
+    try {
+        let (code, _, _) = executeWithOutput("curl", args.toArray())
+        if (code != 0) {
+            // curl 不可用或下载失败：退回内置客户端（可能仍失败，但至少留证据）
+            let r = agcHttp("GET", url, ArrayList<String>(), "", 60000)
+            if (r.error == "" && r.status == 200) {
+                return r.body.toArray()
+            }
+            return []
+        }
+        if (!exists(Path(tmp))) {
+            return []
+        }
+        let data = File.readFrom(tmp)
+        try {
+            remove(Path(tmp))
+        } catch (e: Exception) {
+            let _ = e
+        }
+        return data
+    } catch (e: Exception) {
+        let _ = e
+        return []
+    }
+}
+
+/** 取整数字段（数字或"数字字符串"都认；取不到给 fallback） */
+func jsonIntField(root: JsonValue, key: String, fallback: Int64): Int64 {
+    match (root.kind()) {
+        case JsonKind.JsObject => match (root.asObject().get(key)) {
+            case Some(v) => match (v.kind()) {
+                case JsonKind.JsInt => return v.asInt().getValue()
+                case JsonKind.JsString => return digitsOnlyValue(v.asString().getValue())
+                case _ => return fallback
+            }
+            case None => return fallback
+        }
+        case _ => return fallback
+    }
 }

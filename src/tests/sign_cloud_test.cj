@@ -207,3 +207,138 @@ public func testAutoSignOutcomeJsonShape(): Unit {
     // 落档里**不能**出现任何口令明文/密文（只有长度）
     @Assert(j.toString().contains("storePassword"), false)
 }
+
+// ============================================================
+// 0.39.20：签名工具链的定位逻辑（纯函数部分）
+// ============================================================
+
+@Test
+public func testJavaAndJarCandidatesShapes(): Unit {
+    // java：JAVA_HOME → DevEco JBR → PATH 裸名，三条都要在（顺序即优先级）
+    // 四条：JAVA_HOME → DevEco JBR → DevEco JRE → PATH 裸名（顺序即优先级）
+    let j = javaCandidates("D:/jdk", "D:/DevEco")
+    @Assert(j.size, 4)
+    @Assert(j[0].contains("jdk"), true)
+    @Assert(j[0].endsWith("java.exe"), true)
+    @Assert(j[1].contains("jbr"), true)
+    @Assert(j[2].contains("jre"), true)
+    @Assert(j[3], "java")                       // 兜底裸名，交给 PATH
+    // 两个环境变量都空时只剩裸名（不猜路径）
+    let j2 = javaCandidates("", "")
+    @Assert(j2.size, 1)
+    @Assert(j2[0], "java")
+
+    // jar：SDK 三档布局都要试到（default → 根 → 版本目录）
+    let jars = hapSignToolCandidates("D:/sdk")
+    @Assert(jars.size >= 2, true)
+    @Assert(jars[0].contains("default"), true)
+    @Assert(jars[0].endsWith("hap-sign-tool.jar"), true)
+    @Assert(jars[1].contains("openharmony"), true)
+    // SDK 为空的极端情况：不返回任何候选（由调用方报"找不到 jar"）
+    @Assert(hapSignToolCandidates("").size, 0)
+}
+
+@Test
+public func testFirstExistingSkipsBareName(): Unit {
+    // 裸名 "java" 无从判断存在性 → 必须跳过，交给执行期
+    let cands = ArrayList<String>()
+    cands.add("java")
+    @Assert(firstExisting(cands), "")
+    // 真实存在的路径要挑出来（用当前目录下的 cjpm.toml 当靶子）
+    let c2 = ArrayList<String>()
+    c2.add("java")
+    c2.add("cjpm.toml")
+    @Assert(firstExisting(c2), "cjpm.toml")
+}
+
+@Test
+public func testPasswordAndArgBuilding(): Unit {
+    // 随机口令：纯字母数字、7~10 位（8 随机字节 → base64url 去 -_= 后长度会变）
+    let pwd = randomPasswordAlnum()
+    @Assert(pwd.size >= 6 && pwd.size <= 11, true)
+    for (b in pwd.toArray()) {
+        let alnum = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+        @Assert(alnum, true)                     // 不能出现 - _ = ，否则当命令行参数会出问题
+    }
+    @Assert(randomPasswordAlnum() == randomPasswordAlnum(), false)
+    // keypair 参数：**没有 -outFile**；csr 参数：**有 -outFile**
+    let ka = keypairArgs("debugKey", "x.p12", "pwd")
+    var hasOut = false
+    for (a in ka) {
+        if (a == "-outFile") {
+            hasOut = true
+        }
+    }
+    @Assert(hasOut, false)
+    let ca = csrArgs("debugKey", "x.p12", "pwd", "x.csr")
+    var hasOut2 = false
+    for (a in ca) {
+        if (a == "-outFile") {
+            hasOut2 = true
+        }
+    }
+    @Assert(hasOut2, true)
+    // 打码：紧跟 -keystorePwd / -keyPwd 的值必须变成 ******
+    let masked = maskSecrets(ka)
+    @Assert(masked.contains("******"), true)
+    @Assert(masked.contains("pwd"), false)       // 原始口令不得出现在日志串里
+}
+
+@Test
+public func testUsableCertAndStaleSelection(): Unit {
+    // 0.39.22：证书"名字对得上"≠"能用" —— 过期那张拿去申请 profile 会被回
+    // `The certList is invalid.`，所以可用性必须看有效期/状态
+    let mk = { id: String, name: String, expire: Int64, status: Int64 =>
+        let c = AgcCert()
+        c.id = id
+        c.certName = name
+        c.expireMs = expire
+        c.status = status
+        c
+    }
+    let now = nowMs()
+    let live = mk("c1", "auto_debug_40574614.cer", now + 86400000, 1)
+    let dead = mk("c2", "auto_debug_40574614.cer", now - 86400000, 2)
+    let noExpire = mk("c3", "x.cer", 0, 0)          // 取不到到期时间 → 视为不判过期
+    @Assert(live.usable(), true)
+    @Assert(dead.usable(), false)
+    @Assert(noExpire.usable(), true)
+    @Assert(mk("", "y.cer", now + 1, 1).usable(), false)     // 没有 id 就没法申请 profile
+
+    // 按名字挑"可用"的那张：同名的过期件要被跳过
+    let all = ArrayList<AgcCert>()
+    all.add(dead)
+    all.add(live)
+    match (findUsableCert(all, "auto_debug_40574614.cer")) {
+        case Some(c) => @Assert(c.id, "c1")
+        case None => @Assert(true, false)
+    }
+    // 只有过期件时 → 找不到可用证书（触发"删旧+新建"分支）
+    let onlyDead = ArrayList<AgcCert>()
+    onlyDead.add(dead)
+    @Assert(findUsableCert(onlyDead, "auto_debug_40574614.cer").isNone(), true)
+    @Assert(findCertByName(onlyDead, "auto_debug_40574614.cer").isSome(), true)
+
+    // 自动签名的命名识别：只认自己产出的前缀，别去删用户在控制台建的证书
+    @Assert(isAutoSignCertName("auto_debug_40574614.cer"), true)
+    @Assert(isAutoSignCertName("AUTO_RELEASE_40574614.cer"), true)   // 大小写不敏感
+    @Assert(isAutoSignCertName("yangTest"), false)
+    @Assert(isAutoSignCertName("my_auto_debug_x.cer"), false)        // 前缀必须从头开始
+    @Assert(isAutoSignCertName(""), false)
+
+    // 腾位置：只挑"过期 + 自动签名命名"的
+    let pool = ArrayList<AgcCert>()
+    pool.add(dead)                                   // 过期 + auto_debug → 选中
+    pool.add(live)                                   // 未过期 → 不选
+    pool.add(mk("c4", "yangTest", now - 1, 2))       // 过期但不是我们建的 → 不碰
+    pool.add(mk("c5", "auto_release_40574614.cer", now - 1, 2))   // 过期 + auto_release → 选中
+    let stale = staleCertsOf(pool)
+    @Assert(stale.size, 2)
+    @Assert(stale[0].id, "c2")
+    @Assert(stale[1].id, "c5")
+    // 空列表 / 全都可用 → 不删任何东西
+    @Assert(staleCertsOf(ArrayList<AgcCert>()).size, 0)
+    let allLive = ArrayList<AgcCert>()
+    allLive.add(live)
+    @Assert(staleCertsOf(allLive).size, 0)
+}

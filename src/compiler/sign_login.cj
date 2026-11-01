@@ -2,6 +2,7 @@ package lingqu.compiler
 
 import std.collection.*
 import std.fs.*
+import std.io.*
 import std.process.*
 import std.sync.*
 import std.time.*
@@ -167,7 +168,27 @@ class LoginCallbackHandler <: HttpRequestHandler {
             case Some(v) => query = v
             case None => ()
         }
+        // 华为登录页可能是 **POST 表单**把回调参数发回来（flutter 侧同样处理过"POST 表单可覆盖"）：
+        // 只读 query 会漏掉 tempToken，于是被判成"预检跳转"→ 用户看到页面反复回到回调页。
+        var bodyText = ""
+        try {
+            bodyText = StringReader(ctx.request.body).readToEnd()
+        } catch (e: Exception) {
+            let _ = e
+        }
         let q = parseQueryParams(query)
+        if (bodyText.trimAscii() != "") {
+            let bq = parseQueryParams(bodyText)
+            for ((k, v) in bq) {
+                if (!q.contains(k)) {
+                    q.add(k, v)
+                }
+            }
+        }
+        // 证据：记下这次的原始输入（tempToken 只记长度），出问题不用再猜
+        if (this.state.rawQuery == "") {
+            this.state.rawQuery = "query=[${shapeOf(query)}] body=[${shapeOf(bodyText)}]"
+        }
         var gotCode = ""
         var tempToken = ""
         var siteId = ""
@@ -740,4 +761,32 @@ public func agcUserLine(out: AgcLoginOutcome): String {
     let team = if (out.teamName != "") { "${out.teamName}（${out.teamId}）" } else { out.teamId }
     return "user=${who} uid=${out.userId} country=${out.countryCode} realName=${out.isRealName} " +
         "teams=${out.teamCount} team=${team}"
+}
+
+/**
+ * 把一个 query/表单串"脱敏成形状"：`k=v` → `k(len)`，用于排障而不泄漏值。
+ * 例：`tempToken=abc&siteId=1` → `tempToken(len=3)&siteId(len=1)`
+ */
+public func shapeOf(s: String): String {
+    let text = s.trimAscii()
+    if (text == "") {
+        return ""
+    }
+    var out = ""
+    for (pair in text.split("&", -1)) {
+        if (pair == "") {
+            continue
+        }
+        if (out != "") {
+            out += "&"
+        }
+        match (pair.indexOf("=")) {
+            case Some(eq) =>
+                let k = pair[0..eq]
+                let vlen = pair.size - eq - 1
+                out += "${k}(len=${vlen})"
+            case None => out += "${pair}(noeq)"
+        }
+    }
+    return out
 }

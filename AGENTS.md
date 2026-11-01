@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.19**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.22**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -161,7 +161,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 8 | `cjpm build` 报 `imports package 'stdx.encoding.json' ... not added as a dependency` | 没设 `CANGJIE_STDX`（toml 里的 `${CANGJIE_STDX}` 展开为空） |
 | 9 | `cjpm test` 报一堆 `undefined symbol: cj_bridge_*` | 业务包 `cjpm.toml` 缺 `-lcjtbridge`（测试可执行文件走的是业务包自己的链接行） |
 | 10 | 跑 `.ps1` 报「数组索引表达式丢失或无效」且报错行中文是乱码 | 历史坑：本仓已弃用 `.ps1`（见 §3 与 ADR D-012）。若确要写 PowerShell 脚本，必须存成 UTF-8 **带 BOM** |
-| 11 | `cj-tauri check` 报「骨架漂移」 | 改了 `cj-tauri.toml` 或 `assets/` 却没重跑 sync → `cj-tauri sync desktop` / `sync ohos` |
+| 11 | `cj-tauri check` 报「骨架漂移」 | 改了 `cj-tauri.toml` 或 `assets/` 却没重跑 sync → `cj-tauri sync desktop` / `sync ohos`。**注意：`cj-tauri sync` 不带参数不会重新生成 `targets/*/cjpm.toml` 与 `AppScope/app.json5`**（改了版本号这类清单字段时，跑门禁的 `[0/5] sync` 之后 check 仍报漂移，实测 0.39.22）——要显式跑 `sync desktop` **和** `sync ohos` |
 | 12 | 链接报 `undefined symbol: _CGP7cjTauri…`（符号名一串乱码） | 业务包公开接口变了（新增/改动 `public func`）但骨架的增量缓存还是旧对象 → `./scripts/test.sh -c`（删 `targets/desktop/target` 与 `target/` 后重建） |
 | 13 | 页面报 `command not registered: t2h:xxx` | **同一个 handler 类的 `match` 里写了分支 ≠ 已注册**——每个命令名都要单独 `app.register`。`cj-tauri check` 只校验「已注册 ⊆ 已声明」，**不查反方向** |
 | 14 | 后端 `eprintln` 不出现在 stderr 也不在 .log 里 | `setLogToDefaultFile` 会接管 stderr 的去向；**要当证据的东西落文件**（如 `.lingqu/ui-report.json`），别只打日志 |
@@ -231,7 +231,15 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 78 | 以为仓颉能直接做 AES-GCM（写口令密文、与 hvigor 互操作时）→ 编译期 `undeclared identifier 'AES'`，或退而用 `SM4(OperationMode.GCM, …)` 运行期抛 `CryptoException: Encrypt failed due to create tag error` | **仓颉 std / stdx 1.0.5.1 没有 AES**：`stdx.crypto.crypto` 只有 `SM4`/`SecureRandom`/`OperationMode`/`PaddingMode`，标准库 `std.crypto.cipher` 只有 `BlockCipher` **接口**；SM4 的 GCM 在本机不可用（CBC/ECB/CTR 可用）。需要 AES 就自己实现（本项目 `src/compiler/aes_gcm.cj`，用 NIST SP 800-38D 向量 + 本机 Node/OpenSSL 互证），或改用不需要 AES 的方案。别指望 KB 里的写法一定存在——**KB 给形状，编译给真相** |
 | 79 | 照知识库写 `SecureRandom().nextBytes(n)` 想拿到 n 字节随机数 → `mismatched types: expected 'Array<UInt8>', found 'Int64'` | `nextBytes` 是**填缓冲区**：先 `let buf = Array<Byte>(n, repeat: 0)`，再 `SecureRandom().nextBytes(buf)`，随后用 `buf`。VB 里同类"给长度返回数组"的语义在这里不成立 |
 | 80 | 用 `cmd /c start "" <url>` 打开浏览器，用户却在网页侧登录失败 | **URL 里的 `&` 被 cmd 当命令分隔符**：`…apply?port=21570&appid=1009&code=…` 只会打开 `…?port=21570`，其余几段被当命令执行（日志里是 `'appid' is not recognized …`）。Windows 上打开 URL 用 **`rundll32 url.dll,FileProtocolHandler <url>`**（不经 shell 解析）；`xdg-open`/`open` 按 argv 收参没这问题。同理：任何**带 `&`/`%`/`^` 的参数**都别交给 `cmd /c`——要么绕开 shell，要么自己加引号并验证 |
-| 81 | OAuth 回环登录"怎么点都不成"：网页提示 `Bad code` / `Bad Request`，或登录进程当场退出 | 三个坑叠在一起，逐个治：① **一次异常回调不许终止会话**——浏览器/华为页面的预检跳转不带 `tempToken`，把它当致命错误会让进程退出、端口不再监听（现在只有显式 `quit` 才终止）；② **`code` 只核对不拒绝**——华为回调自带它自己的 `code`，与我们的防伪值天然不同，硬比对会把正常登录判成失败（安全边界靠：只绑 `127.0.0.1` + 一次性服务 + Host 白名单 + tempToken 仍要过华为校验）；③ **别让用户去猜哪条链接**——`/callback` 是内部地址，手动打开必然报错，回调页上直接给出可点的登录页链接。判定抽成纯函数 `judgeCallback` 单测钉住 |---
+| 81 | OAuth 回环登录"怎么点都不成"：网页提示 `Bad code` / `Bad Request`，或登录进程当场退出 | 三个坑叠在一起，逐个治：① **一次异常回调不许终止会话**——浏览器/华为页面的预检跳转不带 `tempToken`，把它当致命错误会让进程退出、端口不再监听（现在只有显式 `quit` 才终止）；② **`code` 只核对不拒绝**——华为回调自带它自己的 `code`，与我们的防伪值天然不同，硬比对会把正常登录判成失败（安全边界靠：只绑 `127.0.0.1` + 一次性服务 + Host 白名单 + tempToken 仍要过华为校验）；③ **别让用户去猜哪条链接**——`/callback` 是内部地址，手动打开必然报错，回调页上直接给出可点的登录页链接。判定抽成纯函数 `judgeCallback` 单测钉住 |
+| 82 | AGC 建证书回 `205389872 certificate number exceeds limit.`，明明"只想签个新包名" | **调试证书有数量上限（本账号实测 4 张），过期的照样占位**。`staleCertsOf` 只挑「已过期 **且** 名字以 `auto_debug_`/`auto_release_` 开头」的调用 `agcCertDelete` 腾位；**别去删用户手工建的证书**。删除端点是 **DELETE + 请求体** `{"certIds":[...]}`（放 query 一律回 `Body parameter is required.`），且请求体要带 Content-Length |
+| 83 | 证书名字对得上、`cert/list` 里也有，申请 profile 却被回 `The certList is invalid.` | **同名证书可能早已过期**（`status=2`、`expireTime` 过去）。可用性判据是**有效期**不是名字：`AgcCert.usable()` + `findUsableCert`。同理换了密钥对之后**不能**复用云端同名证书——它绑的是旧公钥，profile 里的证书会和 `.p12` 对不上（必须删旧建新，并重下本地 `.cer`） |
+| 84 | `⑦ 写回失败：工程里已经有非空的 signingConfigs，不做覆盖` —— 整条自动签名死在最后一步 | 复用同一 `.p12` 时 `.p7b/.cer` 会随证书换发而变，所以"已有配置"并不等于"配置是对的"。`replaceOwnSigningConfigs` 在**同一套材料（同一个 `.p12` 文件名）**时就地更新，换材料仍拒绝。定位数组要**按深度配对并跳过 json5 字符串**，别"遇到第一个 `]` 就停"（那只在空数组上成立） |
+| 85 | hvigor 报 `00303242 Signature material verification failed, as: Unsupported state or unable to authenticate data`；`sign --reencrypt` 报 `GCM tag mismatch` | **`.p12` 的口令没人知道**（材料是拷来的 / `material/` 重建过）→ 旧密文解不开，也就没法用本机 workKey 重加密。`GCM tag mismatch` 就是"这份密文与本机 material 不配套"的可判定证据。处置是 `--newKeys`：旧材料**改名留底**后重生成，自己掌口令、自己加密。**别猜口令、别把旧密文硬写回去** |
+| 86 | 加了 `--newKeys` 却"什么都不做"（既不报错也不换材料），排查一小时 | 拼材料路径时手抄模板**漏了 `=` 分隔**（DevEco 命名是 `<base>=` + 后缀）→ `exists()` 全 false，一个文件都没被挪走。**同一组路径只能有一个构造点**（本项目收成 `matPrefix`），凡是"静默不生效"的开关先打印它读到的值再怀疑逻辑 |
+| 87 | `hdc install` 报 `9568332 install sign info inconsistent` | 同包名**已装过另一套签名**的版本（重签后必然撞上）。调试机上正解是先 `bm uninstall -n <bundle>` 再装——`deploy` 已自动做一次并记进证据。反之 `10106102` 是**锁屏**（开发者模式禁止自动解锁），处置是"解锁后重试"，**不是** ability 名写错 |
+
+---
 
 ## 5. 文档与提交
 
