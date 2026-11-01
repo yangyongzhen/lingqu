@@ -5,6 +5,43 @@
 
 ---
 
+## [0.39.14] - 2026-11-02
+
+**主题**：路线 A 的**登录环节**落地——OAuth loopback（本机回调 + 防伪 code + Host 白名单）→
+tempToken→JWT → JWT 校验 → 令牌加密落盘 → 团队列表。第一次需要人在浏览器里点一次授权。
+
+### 自测证据（本机实测，无需账号即可验证链路）
+
+    # 起服务后 /callback 的三条路径
+    错误 code（伪造回调）  → 400 "Bad code"（客户端报「回调 code 与本机生成的不一致」，并终止）
+    未知路径 /nope          → 404
+    正确 code（假 tempToken）→ 302 跳 loginSuccess；随后客户端去打
+                              https://cn.devecostudio.huawei.com/authrouter/auth/api/temptoken/check
+                              返回 200 但响应不是 JWT → 我们按"不是 JWT"如实拦住：
+                              「换 JWT 失败：HTTP 200，响应不是 JWT」
+    端口获取：`port(0)` 由系统分配，必须 `afterBind` + SyncCounter 等绑定完成再读，
+              一开始就读会拿到 0（实测踩到，已按此改）
+
+### Added
+
+- `src/compiler/sign_login.cj`：
+  - `agcLogin(timeoutSec, openBrowser)`：阻塞式登录（起服务 → 打印/打开登录页 → 等回调 → 换 JWT →
+    校验 → 拉团队），返回 `AgcLoginOutcome`（含 `port` 与逐步 error，排障一眼看出卡在哪）
+  - `LoginCallbackHandler`：只认 `/callback`；Host 白名单 `127.0.0.1:<port>` / `localhost:<port>`；
+    `code` 必须与本机一致；`siteId != "1"` 拒绝（只支持大陆站点）；`quit` 走失败页
+  - `randomHex32` / `loginPageHtml` / `openUrlInBrowser`（Windows `cmd /c start`）
+  - 令牌加密落盘：`~/.lingqu/agc/{keys/kek.bin, token.enc}`，AES-128-GCM（复用 0.39.13 的实现），
+    信封 `{version, algorithm, iv, ciphertext, tag}` 全 hex；`loadAgcToken` 解不开就返回 None（要求重登）
+  - `agcTeamList`：默认取第一个团队（与 flutter 的 `teams.first.id` 一致）
+- `t2h:sign` 新增 `--login`（或 `LINGQU_SIGN_LOGIN=1`）：只做登录并落盘令牌，不走体检；
+  探针 `LINGQU_SIGN_LOGIN_CODE`（自测时固定 32 位 code）、`--noBrowser`、`--timeout`。
+- CLI 增加 `lingqu-cli sign --login` 的用法说明与调用路径。
+- 4 例新单测（code 形态与随机性、成功/失败页文案、用户摘要不含 token），合计 **311 例**。
+
+### 说明（仍未验证）
+
+真实账号的登录**尚未完成**（本轮起好了服务并给出登录链接，等人授权）。
+因此 jwtToken 校验、团队/设备/证书/profile 申请、以及 m3u8dl-tauri 的 `signed=true` 都还没发生。
 ## [0.39.13] - 2026-11-02
 
 **主题**：把「口令密文」这一环打通——**纯仓颉 AES-128-GCM + hvigor AesGcmKit 兼容**。

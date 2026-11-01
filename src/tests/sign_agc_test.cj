@@ -108,3 +108,37 @@ public func testAgcResponseJudging(): Unit {
     @Assert(agcErrorCode(JsonValue.fromStr("{}")), -1)
     @Assert(agcErrorMsg(JsonValue.fromStr("{}")), "")
 }
+
+// ============================================================
+// 0.39.14：登录层的纯函数（loopback 回调与页面文案）
+// ============================================================
+
+@Test
+public func testLoginPurePartsFromModule(): Unit {
+    // 32 位小写 hex（防伪 code 的形态）
+    let code = randomHex32()
+    @Assert(code.size, 32)
+    @Assert(fromHexLower(code).isSome(), true)
+    // 两次生成必须不同（随机源真的在动；同值说明拿到了固定种子）
+    @Assert(randomHex32() == randomHex32(), false)
+    // 成功/失败页文案：成功走绿色、失败走红色，都带"关闭此页"类提示
+    let okPage = loginPageHtml(true, "授权完成，可以关闭此页")
+    @Assert(okPage.contains("登录成功"), true)
+    @Assert(okPage.contains("#1f7a45"), true)
+    @Assert(okPage.contains("灵渠迁移台"), true)
+    let badPage = loginPageHtml(false, "只支持中国大陆站点账号")
+    @Assert(badPage.contains("登录未完成"), true)
+    @Assert(badPage.contains("#b03a2e"), true)
+    // 用户摘要串：不含任何 token，只放身份与团队
+    let o = AgcLoginOutcome()
+    o.userId = "u1"
+    o.userName = "张三"
+    o.countryCode = "CN"
+    o.teamId = "t1"
+    o.teamName = "我的团队"
+    o.teamCount = 1
+    let line = agcUserLine(o)
+    @Assert(line.contains("uid=u1"), true)
+    @Assert(line.contains("我的团队"), true)
+    @Assert(line.contains("token"), false)             // 摘要里绝不能出现 token 字样
+}

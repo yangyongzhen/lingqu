@@ -268,6 +268,31 @@ public class ScanCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -393,6 +418,31 @@ public class DecisionsCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -548,6 +598,31 @@ public class AiBriefCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -746,6 +821,31 @@ public class PortCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -972,6 +1072,31 @@ public class RevertCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -1083,6 +1208,31 @@ public class DepsCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -1478,6 +1628,31 @@ public class BuildCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -1801,6 +1976,31 @@ public class HapCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -2126,6 +2326,31 @@ public class SignCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -3650,6 +3875,31 @@ public class MigrateCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -3825,6 +4075,31 @@ public class AutoPortStartCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -4093,6 +4368,31 @@ public class AgentTraceCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
+        //
+        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
+        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
+            let timeoutSec = argInt(args, "timeout", 300)
+            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
+            let outc = agcLogin(timeoutSec, !noBrowser)
+            var res2 = JsonObject()
+            res2.put("ok", JsonBool(outc.ok))
+            res2.put("user", JsonString(agcUserLine(outc)))
+            res2.put("userId", JsonString(outc.userId))
+            res2.put("userName", JsonString(outc.userName))
+            res2.put("countryCode", JsonString(outc.countryCode))
+            res2.put("isRealName", JsonBool(outc.isRealName))
+            res2.put("teamId", JsonString(outc.teamId))
+            res2.put("teamName", JsonString(outc.teamName))
+            res2.put("teamCount", JsonInt(outc.teamCount))
+            res2.put("port", JsonInt(outc.port))
+            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
+            res2.put("error", JsonString(outc.error))
+            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
+                "teams=${outc.teamCount} err=${outc.error}")
+            return res2
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
