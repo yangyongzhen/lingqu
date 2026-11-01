@@ -111,6 +111,12 @@ public func bareLqRel(rel: String): String {
     if (p.startsWith(prefix)) {
         return p[prefix.size..p.size]
     }
+    // 反斜杠分支不绑 cjhPathSep()：Windows 反斜杠路径在 Linux 上也要能剥
+    // （§4-26 同纪律——取路径末段/剥前缀，两种分隔符都认；cjhPathSep 是"本平台
+    //  生成的路径用什么分隔符"，不是"能读到什么分隔符"）
+    if (p.startsWith(".lingqu\\")) {
+        return p[".lingqu\\".size..p.size]
+    }
     let prefix2 = ".lingqu" + cjhPathSep()
     if (p.startsWith(prefix2)) {
         return p[prefix2.size..p.size]
