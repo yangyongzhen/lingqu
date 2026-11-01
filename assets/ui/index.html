@@ -2569,11 +2569,26 @@ withBridge(function(tauri){
   /* ===== 引擎状态（三态，可轮询） ===== */
   var stateNames = { running: '已连接', ready: '可拉起', missing: '缺失' };
   var CJ_STATUS = {};
+  /* 状态轮询要不要断 WS —— 纯函数（0.39.38）
+   * 现象：界面在「WS 已连接 · 帧 N · 某会话」↔「未连接（等引擎就绪自动连）」之间反复横跳，
+   *   用户问"连接存在 bug？"。查因：**同一实例的状态轮询会短暂回 `missing`**——引擎忙于 SSE
+   *   流时 `/api/health` 超过 3s 超时即如此（0.39.37 探针日志里同一个窗口出现过
+   *   `cjhState:"running"` → `"missing"` → `"running"`，而 WS 帧一直在正常收）。
+   *   旧逻辑一收到 missing 就 `wsClose()`，800ms 后又连上 → 界面抽风。
+   * 判据：**一次判掉只是"疑似"**（grace），连续两次、且不在干活（无工具在跑、无回合气泡），
+   *   才允许真断（close）。干活中一律不断——正跑命令时误杀连接的代价最大。
+   * 返回 'keep' | 'grace' | 'close'。
+   */
+  function wsKeepDecision(running, streak, busy) {
+    if (running) { return 'keep'; }
+    if (streak >= 2 && !busy) { return 'close'; }
+    return 'grace';
+  }
+
   function renderStatus(s){
     s = s || {};
     CJ_STATUS = s;
-    var running = s.state === 'running';
-    setDot('dotCjh', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
+    var running = s.state === 'running';    setDot('dotCjh', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
     $('txtCjh').textContent = '引擎 ' + (stateNames[s.state] || '未知') + (running ? (' :' + s.port) : '');
     setDot('dotFoot', running ? 'ok' : (s.state === 'ready' ? 'warn' : 'err'));
     $('txtFoot').textContent = running ? ('已连接 ' + (s.apiUrl || '')) : (s.state === 'ready' ? '引擎待拉起' : '引擎缺失');
@@ -2600,12 +2615,26 @@ withBridge(function(tauri){
     $('setEndpoint').textContent = running ? (s.apiUrl + '　' + (s.wsUrl || '')) : (s.binPath || s.vendorDir || '（未就绪）');
 
     // 引擎就绪 → 建 WS 通道；引擎掉了 → 主动断开（不装作还连着）
+    // 0.39.38 修正：**一次 `missing` 不足以断开 WS**。实测（0.39.37 探针日志）同一个实例
+    // 在 WS 连通、工具还在跑的情况下，状态轮询会短暂回 `missing`（引擎忙于 SSE 流时
+    // `/api/health` 超过 3s 超时就会这样），旧逻辑立刻 `wsClose()` → 800ms 后再连上，
+    // 于是界面「已连接 → 连接断开 → 已连接」反复横跳（用户报的就是这个）。
+    // 现在要求**连续 2 次**判掉才断，且**回合进行中一律不断**（正干活时更不能误杀）。
     if (typeof CJ !== 'undefined') {
       if (running && s.port) {
         CJ.port = s.port;
+        CJ.statusMissStreak = 0;
         if (typeof wsConnect === 'function') { wsConnect(); }
       } else if (!running && (CJ.up || CJ.connecting)) {
-        if (typeof wsClose === 'function') { wsClose(); }
+        CJ.statusMissStreak = (CJ.statusMissStreak || 0) + 1;
+        var busy = (typeof TOOLRUN !== 'undefined' && TOOLRUN.startedAt > 0) || !!CJ.curBubble;
+        if (wsKeepDecision(false, CJ.statusMissStreak, busy) === 'close') {
+          CJ.statusFlaps = (CJ.statusFlaps || 0) + 1;
+          if (typeof wsClose === 'function') { wsClose('status-miss' + CJ.statusMissStreak); }
+        } else {
+          // 扛住了就记一笔：这是"横跳被吸收"的原始证据（回投 ui_report.statusFlapsSeen）
+          CJ.statusFlapsSeen = (CJ.statusFlapsSeen || 0) + 1;
+        }
       }
     }
 
@@ -3832,6 +3861,18 @@ withBridge(function(tauri){
     });
   }
 
+  /* ---------- WS 状态流水（0.39.38）----------
+   * 用户问过"为什么显示已连接又断开、又连上"。光看帧数和会话号答不了这个问题——
+   * 得知道**是谁**把连接动了：socket 自己断的、状态轮询判掉关的、还是我们主动关的。
+   * 这里只留最近 8 条事件（kind + 说明），随 ui_report 回投 `wsEventText`。
+   */
+  function noteWsEvent(kind, detail) {
+    CJ.wsEvents = CJ.wsEvents || [];
+    CJ.wsEvents.push({ k: String(kind), d: String(detail || '') });
+    while (CJ.wsEvents.length > 8) { CJ.wsEvents.shift(); }
+    CJ.wsEventText = CJ.wsEvents.map(function(e){ return e.d ? (e.k + '(' + e.d + ')') : e.k; }).join(' > ');
+  }
+
   function renderWsState() {
     var txt = CJ.up ? '已连接' : (CJ.connecting ? '连接中…' : '未连接');
     var cls = CJ.up ? 'ok' : (CJ.connecting ? 'warn' : 'err');
@@ -3842,9 +3883,19 @@ withBridge(function(tauri){
     }
     var foot = $('txtFoot');
     if (foot) {
-      foot.textContent = CJ.up
-        ? ('WS 已连接 · 帧 ' + CJ.frames + (CJ.session ? ' · ' + CJ.session : ''))
-        : '未连接（等引擎就绪自动连）';
+      // 0.39.38：断线/重连要有"第几次"，否则「未连接 ↔ 已连接」看着像界面在抽风；
+      // 会话被自愈弃用后也要说清（帧数后面空着会让人以为会话丢了）
+      if (CJ.up) {
+        var tail = CJ.session ? (' · ' + CJ.session)
+          : (CJ.sessionRetired ? (' · 新会话（旧会话 ' + CJ.sessionRetired + ' 已弃用）') : '');
+        foot.textContent = 'WS 已连接 · 帧 ' + CJ.frames + tail;
+      } else if (CJ.connecting) {
+        foot.textContent = '连接中…（第 ' + (((CJ.reconnects || 0) + 1)) + ' 次）';
+      } else if (CJ.retry) {
+        foot.textContent = '未连接 · 准备第 ' + (((CJ.reconnects || 0) + 1)) + ' 次重连';
+      } else {
+        foot.textContent = '未连接（等引擎就绪自动连）';
+      }
     }
   }
 
@@ -3873,8 +3924,12 @@ withBridge(function(tauri){
     });
   }
 
-  function wsClose() {
-    if (CJ.up || CJ.connecting) { invoke('ws:close').catch(function(){}); }
+  function wsClose(reason) {
+    // 谁把连接关了要留痕（0.39.38）：没有这条记录时，"已连接→断开→已连接"只能靠猜
+    if (CJ.up || CJ.connecting) {
+      noteWsEvent('close', reason || 'ask');
+      invoke('ws:close').catch(function(){});
+    }
     CJ.up = false; CJ.connecting = false;
     renderWsState();
   }
@@ -3961,6 +4016,7 @@ withBridge(function(tauri){
       if (emsg.indexOf('reasoning_content') >= 0 && (CJ.reasoningHeals || 0) < 3) {
         CJ.reasoningHeals = (CJ.reasoningHeals || 0) + 1;
         wsSend({ type: 'new_session' });
+        CJ.sessionRetired = CJ.session || CJ.sessionRetired || '';   // 页脚要能说清"旧会话被弃用"
         CJ.session = '';
         CJ.acc = ''; CJ.curBubble = null;
         addError('上一轮历史缺 `reasoning_content`（思考模式要求回传）——已**自动开新会话**（第 ' +
@@ -4078,11 +4134,13 @@ withBridge(function(tauri){
     var st = p && p.state ? p.state : '';
     if (st === 'connected') {
       CJ.up = true; CJ.connecting = false; CJ.retry = 0;
+      noteWsEvent('conn', '#' + (CJ.reconnects || 0));
       renderWsState();
       // 重连后接回原会话，避免每次断线都另起一个
       if (CJ.session) { wsSend({ type: 'resume_session', session_id: CJ.session }); }
     } else if (st === 'closed') {
       CJ.up = false; CJ.connecting = false;
+      noteWsEvent('closed', '帧' + CJ.frames);
       renderWsState();
       // 断开时不要把"可能不完整"当终点：下面会退避重连，连上后 cjh 会推 history_messages，
       // 我们按历史重建对话（renderHistory），所以这里只标一句"正在补"（0.39.33）。
@@ -5840,6 +5898,16 @@ withBridge(function(tauri){
       // 工具卡片折叠（0.39.37）：成功的工具调用不该占版面，但输出不能丢
       toolCardsOpen: CJ.toolCardsOpen || 0,
       toolResultChars: CJ.toolResultChars || 0,
+      // 引擎状态"横跳"证据（0.39.38）：seen=判掉 1 次但没断（日志里看到过、连接保住了）；
+      // closed=连续 2 次判掉且不在干活才真断（这两种要分开，否则看不出是"扛住了"还是"断了"）
+      statusFlapsSeen: CJ.statusFlapsSeen || 0,
+      statusFlaps: CJ.statusFlaps || 0,
+      sessionRetired: CJ.sessionRetired || '',
+      // 连接横跳判据的页内自检（0.39.38）：flapCases=断言条数，flapFail=失败明细（空=全过）
+      flapCases: CJ.flapCases || 0,
+      flapFail: CJ.flapFail || '',
+      // WS 状态流水（0.39.38）：最近 8 条「谁动了连接」，下次问"为什么断了"直接看这条
+      wsEventText: CJ.wsEventText || '',
       approvals: CJ.approvals,
       lastFrameType: CJ.lastType,
       replyPreview: (CJ.lastReply || '').slice(0, 120),
@@ -6296,6 +6364,30 @@ withBridge(function(tauri){
         ] });
       }, 1200);
       setTimeout(function(){ reportUi('history-restored'); }, 2600);
+      return;
+    }
+    // 连接横跳自检（LINGQU_UI_PROBE=flap，0.39.38）：断 WS 的判据是**纯函数** `wsKeepDecision`，
+    // 这里直接对它做表驱动断言（不去驱动 DOM —— 直接调 renderStatus 会在"缺失"分支里改页面，
+    // 探针要断的是判据本身）。判据四条：
+    //   ① 状态正常      → keep
+    //   ② 判掉 1 次      → grace（不许断！这就是横跳的源头）
+    //   ③ 判掉 2 次、空闲 → close（真掉了才断）
+    //   ④ 判掉 2 次、在干活 → grace（跑命令时误杀代价最大）
+    if (mode === 'flap') {
+      var cases = [
+        ['running', true, 0, false, 'keep'],
+        ['1kill', false, 1, false, 'grace'],
+        ['2kill', false, 2, false, 'close'],
+        ['2kill-busy', false, 2, true, 'grace']
+      ];
+      var fails = [];
+      cases.forEach(function(c){
+        var got = wsKeepDecision(c[1], c[2], c[3]);
+        if (got !== c[4]) { fails.push(c[0] + '=got:' + got + ',want:' + c[4]); }
+      });
+      CJ.flapCases = cases.length;
+      CJ.flapFail = fails.join(';');
+      setTimeout(function(){ reportUi('flap-cases'); }, 1200);
       return;
     }
     // 工具心跳自检（LINGQU_UI_PROBE=toolrun，0.39.32）：模拟一次 tool_start → 等 4 秒 → 回投

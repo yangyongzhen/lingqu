@@ -1368,6 +1368,15 @@ public class UiReportCommand <: CommandHandler {
         // chars=这轮工具输出总字数（说明"输出体量"与"占用版面"已经解耦）
         o.put("toolCardsOpen", JsonInt(argInt(args, "toolCardsOpen", 0)))
         o.put("toolResultChars", JsonInt(argInt(args, "toolResultChars", 0)))
+        // 引擎状态横跳证据（0.39.38）：seen=判掉 1 次但连接保住了；flaps=真的断了/关了
+        o.put("statusFlapsSeen", JsonInt(argInt(args, "statusFlapsSeen", 0)))
+        o.put("statusFlaps", JsonInt(argInt(args, "statusFlaps", 0)))
+        o.put("sessionRetired", JsonString(argStr(args, "sessionRetired", "")))
+        // 连接横跳判据的页内自检（0.39.38）：flapCases=断言条数，flapFail=失败明细（空=全过）
+        o.put("flapCases", JsonInt(argInt(args, "flapCases", 0)))
+        o.put("flapFail", JsonString(argStr(args, "flapFail", "")))
+        // WS 状态流水（0.39.38）：最近 8 条「谁动了连接」（conn / closed / close(原因)）
+        o.put("wsEventText", JsonString(argStr(args, "wsEventText", "")))
         o.put("approvals", JsonInt(argInt(args, "approvals", 0)))
         o.put("lastFrameType", JsonString(argStr(args, "lastFrameType", "")))
         o.put("replyPreview", JsonString(argStr(args, "replyPreview", "")))

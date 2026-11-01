@@ -5,6 +5,54 @@
 
 ---
 
+## [0.39.38] - 2026-11-02
+
+**主题**：「WS 已连接 ↔ 未连接」不再反复横跳 —— 一次状态误判不足以掐掉连接，且断开原因留痕。
+
+### 现象（用户实测）
+
+> 聊天窗口最下方又出现 `WS 已连接 · 帧 26 · s1793516546.122.109`，然后显示已断开，
+> 然后又 `WS 已连接 · 帧 27 ·`（会话号没了）——这是为啥？连接存在 bug 吗？
+
+### 根因（两处，都在我们这边）
+
+1. **状态轮询的一次误判会掐掉连接**：`renderStatus` 里只要 `t2h:cjh_status` 回
+   `state != running` 就立刻 `wsClose()`。而引擎忙于 SSE 流时 `/api/health` 会超过
+   3s 超时 → 判成 `missing` → 关连接 → 800ms 后又连上 ⇒ 界面抽风。
+   **证据**：0.39.37 的探针日志里同一个窗口出现过 `cjhState:"running"` → `"missing"`
+   → `"running"`，而 `wsState` 一直是 `connected`、工具帧正常在收。
+2. **会话号消失**是另一条链路：`reasoning_content` 自愈（0.39.36）会 `CJ.session=''`
+   → 页脚只剩 `帧 N`，看着像"会话丢了"。
+
+### 处置
+
+- 新增纯函数 `wsKeepDecision(running, streak, busy)`：`keep` / `grace` / `close`。
+  判据：**判掉 1 次只是疑似**（grace，不动连接）、连续 2 次**且不在干活**才 close；
+  有工具在跑或有回合气泡时一律不断（跑命令时误杀代价最大）。
+- 页脚把状态说清：`连接中…（第 N 次）` / `未连接 · 准备第 N 次重连` /
+  自愈后 `WS 已连接 · 帧 N · 新会话（旧会话 s… 已弃用）`。
+- 新增 WS 状态流水 `noteWsEvent()`（最近 8 条：`conn(#N)`、`closed(帧N)`、`close(status-miss2)`），
+  回投 `ui_report.wsEventText` —— 下次问"为什么断了"直接看这条，不用猜。
+- `ui_report` 新增 `statusFlapsSeen / statusFlaps / sessionRetired / flapCases / flapFail /
+  wsEventText`（白名单两处同时加）。
+- `LINGQU_UI_PROBE=flap`：对 `wsKeepDecision` 做表驱动断言（4 条，`flapFail` 为空才算过）。
+- 上游：`docs/上游回馈-cjh.md` 第 11 条（断开的 WS 套接字留 `CLOSE_WAIT` 不回收，实测 15 个）。
+
+### 证据（`LINGQU_UI_PROBE=flap` 实跑）
+
+```
+flap-cases | ws=connected | flapCases=4 | flapFail=[] | wsEvents=[conn(#0)]
+```
+
+四条判据全过、全程 `connected`、没有一次误断。
+
+### 说明
+
+- 当时现场还查到：**Chrome 里开着 cjh 自带网页 UI**（pid 21640 持有 4 条到 8765 的
+  ESTABLISHED），引擎日志里每 5 秒一条 `Agent.interrupt` 就是那个页面的断开/重连触发的
+  （cjh 的 disconnect 策略会取消在跑的回合）。**那不是灵渠的窗口**，用不着就关掉那个标签。
+- 断线期间点了「停止」或在跑工具时，现在**不会**再因为状态误判把连接掐掉。
+
 ## [0.39.37] - 2026-11-02
 
 **主题**：工具调用不再刷屏 —— 卡片**默认折叠**，标题行只留「工具 · 耗时 · exit · 行数」，点开看全文。
