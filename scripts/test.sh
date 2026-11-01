@@ -38,6 +38,9 @@ for arg in "$@"; do
 done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 注意：ROOT_WIN 必须**在** to_posix_rev_win 定义之后再算（见下方）。
+# bash 不会预解析函数，写在前面会「command not found」→ ROOT_WIN 空串 →
+# `Path.StartsWith('')` 恒为真 → 把 cjh 引擎也一起杀了（0.39.27 实测踩到）。
 
 # ---------- 平台探测 ----------
 case "$(uname -s)" in
@@ -66,6 +69,26 @@ to_posix() {
     *) printf '%s\n' "$1" ;;
   esac
 }
+
+# to_posix 的反向：`/e/test/x` → `E:\test\x`
+# 用途：让 Windows 侧的 PowerShell 能判断"这个 main.exe 是不是本仓的产物"
+# （`tasklist` 不给可执行路径，只能靠 PowerShell 的 Process.Path 比前缀）。
+to_posix_rev_win() {
+  case "$1" in
+    /[A-Za-z]/*)
+      local drive rest
+      drive="$(printf '%s' "${1:1:1}" | tr 'a-z' 'A-Z')"
+      rest="${1:2}"
+      # 注意：`${rest//\//\\}` 在不同 bash 上产出可能是两个反斜杠，
+      # 会让后面的 StartsWith 永远匹配不上（实测踩到：本该杀掉的应用被判成"不是本仓的"）。
+      # 这里用 tr 做一次性替换，结果是确定的单反斜杠。
+      printf '%s:%s\n' "$drive" "$(printf '%s' "$rest" | tr '/' '\\')"
+      ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+ROOT_WIN="$(to_posix_rev_win "$ROOT")"
 
 # ---------- 默认路径（环境变量优先） ----------
 if [ "$OS" = "windows" ]; then
@@ -125,6 +148,30 @@ run_capture() {
 }
 
 count_pattern() { printf '%s\n' "$TEXT" | grep -c -E "$1" || true; }
+
+# ---------- 只结束"本仓自己的" main.exe（别按进程名一刀切） ----------
+# 现象（0.39.27 实测）：dev 期间一边开着应用一边跑门禁，第 ④/⑤ 闸为了释放产物
+# 执行 `taskkill /F /IM main.exe` —— **按进程名一刀切**，于是把同样叫 main.exe 的
+# **cjh 引擎**也杀了（cjh 的可执行文件就叫 main.exe）。用户看到的是聊天面板
+# 「连接已断开——回复可能不完整」，然后再也连不回去。
+# 因此：只结束路径落在**本仓**下的 main.exe（targets/desktop 的产物、cli/ 的产物），
+# 绝不碰 cjh / cj-tauri 的 main.exe。
+kill_own_main_exe() {
+  if [ "$OS" != "windows" ]; then
+    return 0
+  fi
+  # 空串会让 StartsWith('') 恒真 → 等于回到"一刀切"，先拦住（§4-93）
+  if [ -z "$ROOT_WIN" ]; then
+    warn "[!] ROOT_WIN 为空，无法判定哪些 main.exe 属于本仓 —— 为免误杀 cjh 引擎，本次不结束任何进程"
+    return 1
+  fi
+  # 用 PowerShell 拿 Process.Path 过滤（tasklist 不给路径，做不到"只杀自己的"）
+  powershell -NoProfile -Command "
+    Get-Process main -ErrorAction SilentlyContinue |
+      Where-Object { \$_.Path -and (\$_.Path.StartsWith('$ROOT_WIN', [System.StringComparison]::OrdinalIgnoreCase)) } |
+      ForEach-Object { Write-Host ('  [kill] ' + \$_.Id + '  ' + \$_.Path); \$_.Kill() }
+  " 2>/dev/null || true
+}
 
 # 失败时打印捕获日志的尾部：失败原因往往既不含 FAILED 也不含 error:（而是崩溃/链接错），
 # 只 grep 关键词会把真正原因藏起来。
@@ -220,11 +267,11 @@ else
   fi
   # 产物被占用是最常见的假失败：上一版窗口还开着，链接器报 Permission denied
   if [ "$OS" = "windows" ]; then
-    tasklist 2>/dev/null | grep -qi '^main\.exe' && {
-      warn "[!] 上一版 main.exe 仍在运行，先结束它以释放产物"
-      taskkill //F //IM main.exe >/dev/null 2>&1 || true
+    if tasklist 2>/dev/null | grep -qi '^main\.exe'; then
+      warn "[!] 上一版 main.exe 仍在运行，先结束**本仓的**那些（不碰 cjh 引擎，见 §4-92）"
+      kill_own_main_exe
       sleep 1
-    }
+    fi
   else
     pgrep -x main >/dev/null 2>&1 && {
       warn "[!] 上一版 lingqu 仍在运行，先结束它以释放产物"
@@ -252,11 +299,11 @@ if [ ! -d "$CLIDIR" ]; then
   RESULTS+=("build-cli:FAIL")
 else
   if [ "$OS" = "windows" ]; then
-    tasklist 2>/dev/null | grep -qi '^main\.exe' && {
-      warn "[!] 上一版 main.exe 仍在运行，先结束它以释放产物"
-      taskkill //F //IM main.exe >/dev/null 2>&1 || true
+    if tasklist 2>/dev/null | grep -qi '^main\.exe'; then
+      warn "[!] 上一版 main.exe 仍在运行，先结束**本仓的**那些（不碰 cjh 引擎，见 §4-92）"
+      kill_own_main_exe
       sleep 1
-    }
+    fi
   fi
   run_capture "$CLIDIR" cjpm build
   WARN="$(count_pattern '^[[:space:]]*warning:')"

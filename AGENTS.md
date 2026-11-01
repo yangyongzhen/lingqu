@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.26**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.27**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -245,6 +245,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 89 | 当目录**已存在**时调 `Directory.create(Path(p), recursive: true)` 抛 `FSException: The input path ... is already exists`（第二次克隆同名仓库时撞到，报的是"建不了父目录"） | **`recursive: true` 只保证"路径中间的父级会建出来"，不保证"已存在也返回成功"**——与 `mkdir -p` 语义不同。要先 `if (!exists(Path(p)))` 再 create。§4-76 那条讲的是"父级不存在"要怎么建，这条讲的是"已经存在"不能被当成错误（0.39.25 实测） |
 | 90 | 最大化窗口后**底部空一大截**（内容不拉伸到底），而小窗口看着正常 | `.app` 原来是 `display:grid;grid-template-rows:48px auto 1fr`，而第二行那个面板（克隆条）默认 `display:none` —— **`display:none` 的子元素不再是 grid item**，于是 `.body` 落进第 2 行（`auto`），第 3 行的 `1fr` 空着没人占。判据：`.app` 底边 − `.body` 底边 必须 ≈0（`ui_report.layoutGapBottom`）。修法：外层改**纵向 flex**（`.body{flex:1 1 auto;min-height:0}`），隐藏项自然不占位；若坚持 grid，就把隐藏项写成 `height:0;overflow:hidden` 而不是 `display:none` |
 | 91 | 窄窗口适配的媒体查询**完全不生效**，元素该缩的时候不缩 | 元素上带着**行内 `style="...min-width:260px"`** —— 行内样式优先级高于样式表，媒体查询压不住它。**尺寸策略只写在样式表里**；行内 style 只用于一次性的定位微调。实测：`#projPath` 的行内 `min-width:260px` 让 `@media(max-width:1300px){min-width:80px}` 形同虚设，1264 宽时顶栏仍被撑爆（0.39.26） |
+| 92 | 一边开着应用一边跑 `scripts/test.sh`，回来发现聊天面板「连接已断开——回复可能不完整」，点「立即拉起」也回不来 | **门禁第 ④/⑤ 闸为了释放产物执行 `taskkill /F /IM main.exe` —— 按进程名一刀切，而 cjh 引擎的可执行文件也叫 `main.exe`**，于是把引擎一起杀了。现在改成 `kill_own_main_exe`：用 PowerShell 取 `Process.Path`，**只结束路径落在本仓下的** main.exe（`targets/desktop` 与 `cli/` 的产物），cjh 与 cj-tauri 的 main.exe 一律不碰。实测：杀前有应用 6804 + 引擎 6628，执行后只剩引擎且 `/api/health` 仍 200（0.39.27）。**第二条教训**：`t2h:cjh_deploy`（界面「立即拉起」）原先**忽略 `LINGQU_CJH`**，直接拉起随包/已部署的 `cjh.exe` 旧副本 → 引擎起来了但页面连不上；现在部署路径与 `cjhBinPath()` 同一优先级（`LINGQU_CJH` 最先） |
+| 93 | 「只杀自己的进程」写好了却**还是把引擎杀了**：日志打出 `[kill] 6628 E:\...\cjh\target\release\bin\main.exe` | **bash 不预解析函数**——`ROOT_WIN="$(to_posix_rev_win "$ROOT")"` 写在 `to_posix_rev_win()` 定义**之前**，调用时报 `command not found`（被 `2>/dev/null` 或命令替换吞掉），`ROOT_WIN` 变成**空串**；而 `Path.StartsWith('')` **恒为真** → 过滤条件失效，等于回到"一刀切"。两条处置：① 赋值**挪到**函数定义之后；② **对过滤依据加空值守卫**，为空时拒绝结束任何进程并告警（宁可留一个占着产物的进程让人手动关，也不能误杀）。通用判据：**凡是"按某个值筛选/过滤"的破坏性操作，先断言那个值非空**——空值常常等于"全部匹配"（0.39.27 实测） |
 ---
 
 ## 5. 文档与提交

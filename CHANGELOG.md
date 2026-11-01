@@ -5,6 +5,63 @@
 
 ---
 
+## [0.39.27] - 2026-11-02
+
+**主题**：**门禁不再误杀 cjh 引擎**，且「立即拉起」拉的是**当前该用的那个** cjh —— 两处都是"器官被自己掰断"的错误。
+
+### 现象（用户实测）
+
+> 「连接已断开——回复可能不完整」弹出了「立即拉起」界面，点了之后聊天窗口又没任何反应。
+
+即：一边开着应用一边跑门禁，回来聊天面板就断了；点「立即拉起」也无法恢复。
+
+### 根因（两条，缺一不可）
+
+1. **门禁第 ④/⑤ 闸按进程名一刀切**：`scripts/test.sh` 为了释放 `targets/desktop` 的产物执行
+   `taskkill /F /IM main.exe` —— 而 **cjh 引擎的可执行文件也叫 `main.exe`**，于是把 `127.0.0.1:8765`
+   上的引擎一起杀了。这与 §2.3「复用优先、不抢不杀」的托管语义直接冲突：本来是"别人的进程不碰"，
+   我们自己的门禁反倒把用户正在用的引擎打断。
+2. **`t2h:cjh_deploy`（界面「立即拉起」）忽略 `LINGQU_CJH`**：它直接拉起 vendored / 部署目录里的
+   `cjh.exe` 旧副本（本机是 v1.6.1），而正主是 `LINGQU_CJH` 指向的开发构建（v1.6.3）。
+   端口被旧副本占住后，页面连上去行为不对 —— 「拉起来了」但「页面没反应」。
+
+### 处置
+
+- `scripts/test.sh` 新增 `kill_own_main_exe()`：用 PowerShell 取 `Process.Path`，
+  **只结束路径落在本仓根（`ROOT_WIN`）之下的** `main.exe`（即 `targets/desktop` 与 `cli/` 的产物）。
+  cjh / cj-tauri 的 `main.exe` 一律不碰；一并去掉两处 `taskkill //F //IM main.exe`。
+  （`to_posix_rev_win()` 把 `/e/x` 还原成 `E:\x` 供 Windows 侧比较用。）
+- `src/cjh_host.cj` 的 `cjhDeployAndStart()` 增加步骤 ⓪：`LINGQU_CJH` 已设且可读 → 直接用它拉起，
+  与 `cjhBinPath()` 保持**同一优先级顺序**；都没有才走 vendor / 部署副本的老路径。
+
+### 证据（本机实测，2026-11-02）
+
+**① 端到端：引擎在跑的时候跑完整五道闸**
+
+| 时刻 | `Get-Process main` | `/api/health` |
+|---|---|---|
+| 跑门禁前 | 16548（`E:\test\harmonyos\test\cjh\target\release\bin\main.exe`） | 200 `{"status":"ok","version":"1.6.3"}` |
+| 门禁第 ④/⑤ 闸打印「上一版 main.exe 仍在运行，先结束**本仓的**那些」两遍后 | 仍是 16548（**一条 `[kill]` 都没有**） | 200，仍 v1.6.3 |
+
+`门禁全绿：build-biz:PASS test:PASS check:PASS build-app:PASS build-cli:PASS`（`EXITCODE=0`，338 例单测）。
+
+**② 隔离性：只杀本仓的那份**
+
+| 时刻 | `Get-Process main` | 结果 |
+|---|---|---|
+| 执行前 | 6804（`targets\desktop\...\main.exe`）、6628（引擎） | — |
+| `kill_own_main_exe` 后 | 只剩 6628（引擎） | 产物的占用被释放、引擎照活 |
+
+**③ 中间踩到的坑（已修，值得记住）**：第一版把 `ROOT_WIN` 的赋值写在 `to_posix_rev_win()` 定义**之前**，
+调用报 `command not found` → `ROOT_WIN` 空串 → `Path.StartsWith('')` 恒真 →
+**日志里出现 `[kill] 6628 ...\cjh\...\main.exe`，引擎照样被杀**。现在赋值挪到函数之后，
+并给过滤依据加了空值守卫（空就拒绝结束任何进程）。
+
+### 坑
+
+AGENTS §4-92（门禁 `taskkill /IM main.exe` 会杀掉 cjh 引擎 + 「立即拉起」忽略 `LINGQU_CJH`）、
+§4-93（bash 不预解析函数 → 路径变量空串 → 过滤条件退化成"全部匹配"）。
+
 ## [0.39.26] - 2026-11-02
 
 **主题**：顶栏在**非最大化窗口**下不再折行/溢出，且**最大化后底部能拉伸对齐**——两个都是布局口径的

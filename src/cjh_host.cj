@@ -827,6 +827,26 @@ func cjhDeployAndStart(): JsonObject {
         return obj
     }
 
+    // ⓪ 显式指定（`LINGQU_CJH`）最优先：开发期跑的是**自己构建的 cjh**，
+    //    不该被"部署随包引擎"顶掉。0.39.27 实测教训：门禁把引擎杀了之后，用户点
+    //    「立即拉起」→ 这里直接跳到 vendor / 已部署目录，拉起了 `%LOCALAPPDATA%\lingqu\cjh\cjh.exe`
+    //    （旧副本），于是页面一直停在「连接已断开」，点几次都回不来。
+    //    顺序与 `cjhBinPath()` 保持一致，避免"能拉起"和"拉起了谁"两套口径。
+    let fromEnv = firstNonEmptyEnv(["LINGQU_CJH"])
+    if (fromEnv.size > 0 && fileReadable(fromEnv)) {
+        if (spawnCjhWeb(fromEnv)) {
+            obj.put("ok", JsonBool(true))
+            obj.put("reused", JsonBool(false))
+            obj.put("deployed", JsonString(fromEnv))
+            putEndpoints(obj, port)
+            obj.put("detail", JsonString("已按 LINGQU_CJH 拉起 cjh（${fromEnv}）"))
+            return obj
+        }
+        obj.put("ok", JsonBool(false))
+        obj.put("error", JsonString("按 LINGQU_CJH 拉起 ${fromEnv} 失败——${cjhStartFailHint()}"))
+        return obj
+    }
+
     // ① 仓内 vendor（已解包形态）：校验通过就直接拉起，无需部署
     let vendor = cjhVendorDir()
     if (cjhVendorVerified(vendor)) {
