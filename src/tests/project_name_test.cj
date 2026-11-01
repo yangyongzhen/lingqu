@@ -1,6 +1,5 @@
 package lingqu.tests
 
-import lingqu.*
 import lingqu.scanner.*
 
 /*

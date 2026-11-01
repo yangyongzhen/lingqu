@@ -2,7 +2,6 @@ package lingqu.tests
 
 import std.collection.*
 import lingqu.compiler.*
-import lingqu.port.*
 
 /*
  * T5-5 单测：hdc 输出解析（纯函数，D-009）。

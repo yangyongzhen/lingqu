@@ -49,3 +49,16 @@ public func testLastProjectOfEmptyValue(): Unit {
     // 上次报告时其实也没选工程（currentProject 是空串）→ 仍然空串，别把它当路径
     @Expect(lastProjectOf("{\"currentProject\":\"\"}"), "")
 }
+
+@Test
+public func testShouldRestoreLastProjectChecksExistence(): Unit {
+    // 0.39.48：带回之前必须判"它还在不在"——
+    // 用户实测场景就是"上次的工程目录已被删"，带回来等于把「路径不存在」甩给用户
+    @Expect(shouldRestoreLastProject("C:/work/demo", true), true)
+    @Expect(shouldRestoreLastProject("C:/work/demo", false), false)
+    // 空 / 只有空白：不带回（别把空串当工程）
+    @Expect(shouldRestoreLastProject("", true), false)
+    @Expect(shouldRestoreLastProject("   ", true), false)
+    // 反例：磁盘上没有就一律不带（哪怕路径写得再正确）
+    @Expect(shouldRestoreLastProject("E:\\deleted\\proj", false), false)
+}

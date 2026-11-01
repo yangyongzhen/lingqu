@@ -699,6 +699,8 @@ public let BAK_TOOLCHAIN = "rust-toolchain.toml.bak"
 public let BAK_CARGO_CONFIG = "cargo-config.toml.bak"
 public let BAK_LIBRS = "lib.rs.bak"
 public let BAK_INDEX = "index.html.bak"
+/** R2-PORT-015：gen/ohos/entry/hvigorfile.ts 的备份名（0.39.53） */
+public let BAK_HVIGORFILE = "hvigorfile.ts.bak"
 
 /** 一个回滚单元：备份文件名 + 工程内相对目标路径（空串 = 由命令层按工程结构解析） */
 public class RevertPair {
@@ -732,6 +734,8 @@ public func revertPairs(): ArrayList<RevertPair> {
     out.add(RevertPair(BAK_CARGO_CONFIG, "src-tauri/.cargo/config.toml"))
     out.add(RevertPair(BAK_LIBRS, "src-tauri/src/lib.rs"))
     out.add(RevertPair(BAK_INDEX, "index.html"))
+    // R2-PORT-015（0.39.53）：回滚时把 hvigorfile.ts 还原成带 tauri 钩子的原样
+    out.add(RevertPair(BAK_HVIGORFILE, "src-tauri/gen/ohos/entry/hvigorfile.ts"))
     out.add(RevertPair(BAK_CARGO, ""))
     return out
 }

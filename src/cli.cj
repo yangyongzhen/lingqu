@@ -25,7 +25,7 @@ import stdx.encoding.json.*
 /** CLI 支持的命令（与注册表一致；GUI 专属的 quit/cjh_* 不开放） */
 public let CLI_COMMANDS: Array<String> = [
     "migrate", "scan", "deps", "port", "revert", "decisions", "diagnose", "build", "hap", "sign",
-    "deploy", "verify", "report", "batch", "resume", "env", "skill", "agent_context", "git_clone"
+    "deploy", "verify", "report", "batch", "resume", "env", "skill", "agent_context", "git_clone", "notes"
 ]
 
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
@@ -468,6 +468,9 @@ func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcCont
     }
     if (cmd == "env") {
         return EnvCommand().handle(fullName, args, ctx)
+    }
+    if (cmd == "notes") {
+        return NotesCommand().handle(fullName, args, ctx)
     }
     if (cmd == "git_clone") {
         return GitCloneCommand().handle(fullName, args, ctx)

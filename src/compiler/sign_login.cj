@@ -318,7 +318,7 @@ public func openUrlInBrowser(url: String): String {
     try {
         let (code, _, errOut) = executeWithOutput(cmd, args.toArray())
         if (code != 0) {
-            return "打开浏览器失败（exit=${code}）：${String.fromUtf8(errOut)}"
+            return "打开浏览器失败（exit=${code}）：${lenientUtf8(errOut)}"
         }
         return ""
     } catch (e: Exception) {

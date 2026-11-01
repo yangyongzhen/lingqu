@@ -82,6 +82,37 @@ public func gitUrlRejectReason(url: String): String {
     return "只认 https / ssh / git@host:path 形式的地址"
 }
 
+/**
+ * 纯函数：这个字符串**像不像一个 Git 地址**（0.39.48）。
+ *
+ * 与 `gitUrlRejectReason` 分开：那个判"能不能拉"，这个判"是不是地址"。
+ * 用途只有一个：用户把 `https://…` 填进"工程路径"时，给一句人话提示
+ * （用户实测原话：「点迁移画像，提示扫描失败：路径不存在：https://gitcode.com/…」）。
+ */
+public func looksLikeGitUrl(s: String): Bool {
+    let v = asciiLowerOf(s).trimAscii()
+    if (v == "") {
+        return false
+    }
+    if (v.startsWith("http://") || v.startsWith("https://") || v.startsWith("ssh://") ||
+        v.startsWith("git://") || v.startsWith("file://")) {
+        return true
+    }
+    // scp 形态 `git@host:path`：`@` 必须在第一个 `:` 之前。
+    // 注意 `C:\work\x` 这种盘符路径会命中冒号但不命中 `@`，所以不会被误判成地址。
+    var atIdx: Int64 = -1
+    match (v.indexOf("@")) {
+        case Some(i) => atIdx = i
+        case None => ()
+    }
+    var colonIdx: Int64 = -1
+    match (v.indexOf(":")) {
+        case Some(i) => colonIdx = i
+        case None => ()
+    }
+    return atIdx > 0 && colonIdx > atIdx
+}
+
 /** 从地址里取仓库目录名（去掉 `.git`，净化成合法目录名；取不到给 "repo"） */
 public func repoDirNameOf(url: String): String {
     var u = url.trimAscii()
@@ -136,8 +167,7 @@ public func repoDirNameOf(url: String): String {
     return name
 }
 
-/** 克隆到 `<root>/<repo名>`；冲突时的候选名（第 n 次尝试） */
-public func cloneDirNameAt(name: String, attempt: Int64): String {
+/** 克隆到 `<root>/<repo名>`；冲突时的候选名（第 n 次尝试） */public func cloneDirNameAt(name: String, attempt: Int64): String {
     if (attempt <= 1) {
         return name
     }

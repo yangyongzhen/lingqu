@@ -1,6 +1,5 @@
 package lingqu.tests
 
-import std.collection.*
 import lingqu.*
 
 /*
@@ -89,4 +88,41 @@ public func testGitCloneRejectsBadUrlBeforeSpawningGit(): Unit {
     let r2 = gitCloneProject("", "", 1)
     @Assert(r2.ok, false)
     @Assert(r2.error != "", true)
+}
+
+@Test
+public func testLooksLikeGitUrlSeparatesUrlFromPath(): Unit {
+    // 0.39.48：用户就是把地址填进了「工程路径」，于是 ② 屏只回一句「路径不存在：https://…」
+    @Assert(looksLikeGitUrl("https://gitcode.com/qq8864/juCang"), true)
+    @Assert(looksLikeGitUrl("http://10.0.0.2/x.git"), true)
+    @Assert(looksLikeGitUrl("ssh://git@host:2222/org/repo.git"), true)
+    @Assert(looksLikeGitUrl("git://host/org/repo.git"), true)
+    @Assert(looksLikeGitUrl("file:///E:/test/rust/habit-tree"), true)
+    @Assert(looksLikeGitUrl("git@atomgit.com:qq8864/lingqu.git"), true)
+    @Assert(looksLikeGitUrl("  HTTPS://Host/X  "), true)
+    // 本地路径绝不能被当成地址（`C:\` 有冒号但没 @；反斜杠与相对路径同理）
+    @Assert(looksLikeGitUrl("E:\\test\\rust\\habit-tree"), false)
+    @Assert(looksLikeGitUrl("C:/work/demo"), false)
+    @Assert(looksLikeGitUrl("habit-tree"), false)
+    @Assert(looksLikeGitUrl("./demo"), false)
+    @Assert(looksLikeGitUrl(""), false)
+    @Assert(looksLikeGitUrl("   "), false)
+    // 只是一个 @，没有 `@` 在 `:` 之前的情况，不算地址
+    @Assert(looksLikeGitUrl("x@y"), false)
+}
+
+@Test
+public func testProjectPathRejectReasonExplainsUrlCase(): Unit {
+    // 空路径不在这里判（各命令自己有"需要参数 path"的文案）
+    @Assert(projectPathRejectReason(""), "")
+    @Assert(projectPathRejectReason("   "), "")
+    // 地址：要说"先克隆"，不能只说"路径不存在"（用户实测的那句原话）
+    let urlReason = projectPathRejectReason("https://gitcode.com/qq8864/juCang")
+    @Assert(urlReason.contains("Git 地址"), true)
+    @Assert(urlReason.contains("克隆"), true)
+    @Assert(urlReason.contains("路径不存在"), false)
+    // 真不存在的路径：仍然如实说"路径不存在"
+    @Assert(projectPathRejectReason("E:\\no\\such\\dir\\lingqu-probe").contains("路径不存在"), true)
+    // 存在的路径：放行（测试 CWD 就是仓根）
+    @Assert(projectPathRejectReason("."), "")
 }

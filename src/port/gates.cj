@@ -279,5 +279,15 @@ public func hapSignHint(logText: String): String {
             "build-profile.json5 的 signingConfigs 指向的 .p12/.cer/.p7b 已被删除或换机器丢了；" +
             "先跑「签名体检」看材料是否齐全，缺就重新自动签名一次"
     }
+    // 00308018 / dev-eco-studio-script（0.39.51，juCang 实测）：与签名、代码都无关——
+    // hvigorfile 里的 tauri 钩子要读 dev server 的 addr 文件，非 dev 场景必 panic。
+    if (logText.contains("dev-eco-studio-script") || logText.contains("server-addr") ||
+        logText.contains("00308018")) {
+        return "HAP 闸：hvigor 的 tauri 钩子失败（00308018）——它在跑 `cargo tauri ohos dev-eco-studio-script`，" +
+            "而那条脚本要读 **dev server** 的 addr 文件（%TEMP%\\<包名>-server-addr）；" +
+            "非 dev 场景没有这个文件，tauri-cli 直接 panic。" +
+            "正解：让 gen/ohos/entry/hvigorfile.ts 不再跑这个钩子（本工具 t2h:hap 已把 lib<模块>.so 装配进 libs/arm64-v8a，" +
+            "不依赖它编 Rust）；或先 `cargo tauri ohos dev` 起 dev server 再装配"
+    }
     return ""
 }

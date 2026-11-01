@@ -100,6 +100,44 @@ func addCheck(arr: JsonArray, id: String, label: String, found: String, hint: St
  * `depth`（默认 1：浅克隆，够跑迁移；要完整历史传 0）。
  * 回投：`ok / target / hint（像不像 Tauri 工程）/ outputTail / error`。
  */
+/**
+ * 纯函数：「上次用过的工程」要不要在启动时带回来（0.39.48）。
+ *
+ * 0.39.44 只把路径带回来、**没校验存在性**，于是"上次工程被删/移走/换机器"时顶层仍显示旧路径、
+ * 左栏徽标全「未开始」，用户点下去只得到「路径不存在」——正是 0.39.44 文档里如实记下的那个缺口。
+ * 存在性由调用方查（页面没有文件系统能力），这里只做判定，便于单测。
+ */
+public func shouldRestoreLastProject(last: String, existsOnDisk: Bool): Bool {
+    if (last.trimAscii() == "") {
+        return false
+    }
+    return existsOnDisk
+}
+
+/**
+ * 纯函数：工程路径参数的前置校验（scan / port / deps 共用，0.39.48）。
+ *
+ * 为什么单拎出来：这三条命令各自复制过同一段判断，而用户最常犯的错——**把 Git 地址填进工程路径**——
+ * 它们只会回一句「路径不存在：https://…」。文案没错但等于没说（用户实测原话：
+ * 「点迁移画像，提示扫描失败：路径不存在：https://gitcode.com/qq8864/juCang」）。
+ * 现在先认"这是地址"，直接告诉他该点哪个按钮。
+ *
+ * 返回 "" = 可用；否则是给人看的原因（空串不判：空路径由各命令自己的文案处理）。
+ */
+public func projectPathRejectReason(path: String): String {
+    let p = path.trimAscii()
+    if (p == "") {
+        return ""
+    }
+    if (looksLikeGitUrl(p)) {
+        return "这是 Git 地址，不是本地工程目录：${p}\n先点顶部「克隆…」把它拉下来（拉完会自动设为当前工程），或用「打开工程」选已有目录"
+    }
+    if (!exists(Path(p))) {
+        return "路径不存在：${p}"
+    }
+    return ""
+}
+
 public class GitCloneCommand <: CommandHandler {
     public init() {}
 
@@ -226,8 +264,21 @@ public class EnvCommand <: CommandHandler {
         // 上次用过的工程（0.39.44）：页面启动时用它把工程带回来（localStorage 不可用，
         // 见 lastProjectOf 的注释与 `LINGQU_UI_PROBE=store` 自检）。
         res.put("lastProject", JsonString(lastProjectFromReport()))
+        // 上次工程还在不在（0.39.48）：0.39.44 只带回路径、不校验存在性，于是"上次工程被删/移走"
+        // 时顶层仍显示旧路径、徽标全「未开始」，用户点下去只会得到「路径不存在」。
+        // 这里让后端判一次（页面没有文件系统能力），带不回来就当没有。
+        let lp = lastProjectFromReport()
+        var lpOk = false
+        if (lp.trimAscii() != "") {
+            lpOk = exists(Path(hostPath(lp)))
+        }
+        res.put("lastProjectOk", JsonBool(shouldRestoreLastProject(lp, lpOk)))
         // 扫描探针：给了路径就在启动时跑一次 t2h:scan，把指标回投到 ui_report（无视觉也能验扫描器）
         res.put("scanPath", JsonString(envOr("LINGQU_SCAN_PATH", "")))
+        // 克隆探针（0.39.48）：`LINGQU_UI_PROBE=clone` 时页面用这个地址跑一遍"填地址→被拦→真克隆"，
+        // 不设就用默认的公开仓库；`LINGQU_CLONE_DIR` 可指定父目录（默认工作区根）
+        res.put("cloneUrl", JsonString(envOr("LINGQU_CLONE_URL", "")))
+        res.put("cloneDir", JsonString(envOr("LINGQU_CLONE_DIR", "")))
         // 编译探针（T5-1）：置 LINGQU_BUILD_PATH 就在启动时跑一次 t2h:build（交叉编译），
         // 结果与指纹命中回投 ui_report。**耗时以分钟计**，只在显式设置时才跑。
         res.put("buildPath", JsonString(envOr("LINGQU_BUILD_PATH", "")))
@@ -373,9 +424,11 @@ public class ScanCommand <: CommandHandler {
             res.put("error", JsonString("t2h:scan 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
             return res
         }
-        if (!exists(Path(path))) {
+        // 路径校验收成一处（0.39.48）：URL 误填进工程路径时要说"先克隆"，别只说"路径不存在"
+        let badPath = projectPathRejectReason(path)
+        if (badPath != "") {
             res.put("ok", JsonBool(false))
-            res.put("error", JsonString("路径不存在：${path}"))
+            res.put("error", JsonString(badPath))
             return res
         }
 
@@ -821,6 +874,21 @@ public class DiagnoseCommand <: CommandHandler {
         }
 
         let items = diagnoseLog(logText)
+        // 0.39.55：**未命中也要落档**——否则"这条错误没人认识"这件事不留痕，下个样本又从零开始。
+        // 只在 items 为空时记；同签名累加次数，攒到阈值就提示"该补指纹"。
+        var missInfo = JsonObject()
+        if (items.size == 0) {
+            let sig = missSignatureOf(logText)
+            if (sig.size > 0) {
+                let projDir = argStr(args, "path", ".")
+                let missRec = recordDiagnoseMiss(projDir, sig, logText)
+                missInfo.put("missed", JsonBool(true))
+                missInfo.put("missSig", JsonString(sig))
+                missInfo.put("missCount", JsonInt(missRec[0]))
+                missInfo.put("missHint", JsonString(missCandidateHint(missRec[0])))
+                missInfo.put("missLedger", JsonString(missRec[1]))
+            }
+        }
         let proposals = patchProposalsFromDiagnosis(items)
         let rounds = argInt(args, "rounds", 0)
         let sameFails = argInt(args, "sameFingerprintFails", 0)
@@ -836,6 +904,10 @@ public class DiagnoseCommand <: CommandHandler {
         }
 
         res.put("ok", JsonBool(true))
+        // 未命中攒候选（0.39.55）：missed / missSig / missCount / missHint / missLedger
+        for ((k, v) in missInfo.getFields()) {
+            res.put(k, v)
+        }
         let dj = diagnosisJson(items)
         res.put("diagnosis", dj)
         res.put("proposals", proposalsArr)
@@ -925,9 +997,10 @@ public class PortCommand <: CommandHandler {
             res.put("error", JsonString("t2h:port 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
             return res
         }
-        if (!exists(Path(path))) {
+        let badPortPath = projectPathRejectReason(path)
+        if (badPortPath != "") {
             res.put("ok", JsonBool(false))
-            res.put("error", JsonString("路径不存在：${path}"))
+            res.put("error", JsonString(badPortPath))
             return res
         }
         let tomlPath = cargoTomlPathOf(path)
@@ -979,6 +1052,9 @@ public class PortCommand <: CommandHandler {
         for (g in guides) {
             result.outcomes.add(g)
         }
+        // R2-PORT-015（0.39.53）：hvigorfile.ts 里的 tauri Rust 钩子会 panic（hvigor 00308018）——
+        // 本工具的 t2h:hap 自己装配 .so，不需要它，命中就注掉（有备份、可回滚、幂等）
+        result.outcomes.add(hvigorHookOutcome("${srcTauriDir}/gen/ohos/entry/hvigorfile.ts"))
         // 未设 SDK 路径时 008 没法生成可用链接器配置——降级为提示（不写坏文件）
         if (sdkNative.size == 0) {
             for (o in result.outcomes) {
@@ -1048,6 +1124,15 @@ public class PortCommand <: CommandHandler {
                         let old = String.fromUtf8(File.readFrom(p))
                         File.writeTo(p, applySetupWiring(old).toArray())
                         wroteAny = true
+                    }
+                    if (o.id == "R2-PORT-015" && o.applied) {
+                        // hvigorfile.ts：备份原文件 → 整份写回（注掉 tauri 钩子的版本）
+                        let p = "${srcTauriDir}/gen/ohos/entry/hvigorfile.ts"
+                        if (exists(Path(p)) && o.after != "") {
+                            backupFile(p, "${backupPath}/${BAK_HVIGORFILE}")
+                            File.writeTo(p, o.after.toArray())
+                            wroteAny = true
+                        }
                     }
                     if (o.id == "R2-PORT-014" && o.applied) {
                         let jsPath = "${frontend}/lingqu-dialog.js"
@@ -1312,9 +1397,10 @@ public class DepsCommand <: CommandHandler {
             res.put("error", JsonString("t2h:deps 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
             return res
         }
-        if (!exists(Path(path))) {
+        let badDepsPath = projectPathRejectReason(path)
+        if (badDepsPath != "") {
             res.put("ok", JsonBool(false))
-            res.put("error", JsonString("路径不存在：${path}"))
+            res.put("error", JsonString(badDepsPath))
             return res
         }
 
@@ -1703,6 +1789,48 @@ public class UiReportCommand <: CommandHandler {
         o.put("reportMd", JsonString(argStr(args, "reportMd", "")))
         o.put("reportConclusion", JsonString(argStr(args, "reportConclusion", "")))
         o.put("reportRows", JsonInt(argInt(args, "reportRows", 0)))
+        // 风险分级（0.39.47）：总体级别 / 标签 / 条数 / 高风险条数——白名单两处都要加（§4-60）
+        o.put("reportRisk", JsonString(argStr(args, "reportRisk", "")))
+        o.put("reportRiskLabel", JsonString(argStr(args, "reportRiskLabel", "")))
+        o.put("reportRiskRows", JsonInt(argInt(args, "reportRiskRows", 0)))
+        o.put("reportRiskHi", JsonInt(argInt(args, "reportRiskHi", 0)))
+        o.put("reportRiskSum", JsonString(argStr(args, "reportRiskSum", "")))
+        // 卡片顺序与矩阵标题（0.39.47）：断言"迁移矩阵在风险等级下面"且标题不含「5 样本」「T7-3」
+        o.put("reportOrder", JsonString(argStr(args, "reportOrder", "")))
+        o.put("reportMatrixTitle", JsonString(argStr(args, "reportMatrixTitle", "")))
+        // 克隆链路的可观测性（0.39.48）：以前"点了没反应"现场只有 uiErr=3 这么个数字，
+        // 现在把面板原文 / 是否在跑 / 克隆到哪 / 地址被拦次数 / **异常原文**都收进来
+        o.put("cloneNote", JsonString(argStr(args, "cloneNote", "")))
+        o.put("cloneBusy", JsonBool(argBool(args, "cloneBusy", false)))
+        o.put("cloneTarget", JsonString(argStr(args, "cloneTarget", "")))
+        o.put("gitUrlGuard", JsonInt(argInt(args, "gitUrlGuard", 0)))
+        o.put("uiErrText", JsonString(argStr(args, "uiErrText", "")))
+        // 上次工程不存在而未被带回（0.39.48）：空 = 没发生；有值 = 那条路径已不在
+        o.put("projRestoreSkipped", JsonString(argStr(args, "projRestoreSkipped", "")))
+        // 假数据清账（0.39.49）：mockLeft=页面上还剩几块「占位示意」（必须是 0）；
+        // execLogLines/execLogLast=执行日志是真记的；pipeline=⑤ 屏五格的真实态
+        o.put("mockLeft", JsonInt(argInt(args, "mockLeft", 0)))
+        // 假数据回归闸（0.39.49）：页面里还剩几个"示例串"（必须是 0）
+        o.put("fakeLeft", JsonInt(argInt(args, "fakeLeft", 0)))
+        // ① 屏「最近项目」：行数与来源（行数 0 且无错 = 确实没有迁过的工程，不是没实现）
+        o.put("projRows", JsonInt(argInt(args, "projRows", -1)))
+        o.put("projListSrc", JsonString(argStr(args, "projListSrc", "")))
+        o.put("projListErr", JsonString(argStr(args, "projListErr", "")))
+        // ① 屏「AI 过程消息」（0.39.52）：条数与最后一条原文（空 = AI 还没说话，不是没实现）
+        o.put("migAiLines", JsonInt(argInt(args, "migAiLines", 0)))
+        o.put("migAiLast", JsonString(argStr(args, "migAiLast", "")))
+        // 回合结束的"为什么停"（0.39.51）：用户实测"回合结束了界面什么都不说，就这么停在这了"
+        o.put("turnEndReason", JsonString(argStr(args, "turnEndReason", "")))
+        o.put("lastToolErr", JsonString(argStr(args, "lastToolErr", "")))
+        o.put("lastToolErrName", JsonString(argStr(args, "lastToolErrName", "")))
+        // AI 跑完自动出报告（0.39.54）：done=真出了；path=md 落档；risk=风险总体；err=失败原因
+        o.put("autoReportDone", JsonBool(argBool(args, "autoReportDone", false)))
+        o.put("autoReportPath", JsonString(argStr(args, "autoReportPath", "")))
+        o.put("autoReportRisk", JsonString(argStr(args, "autoReportRisk", "")))
+        o.put("autoReportErr", JsonString(argStr(args, "autoReportErr", "")))
+        o.put("execLogLines", JsonInt(argInt(args, "execLogLines", 0)))
+        o.put("execLogLast", JsonString(argStr(args, "execLogLast", "")))
+        o.put("pipeline", JsonString(argStr(args, "pipeline", "")))
         // T7-3 批量矩阵（t2h:batch 回投）：样本数 / 已验证数 / 平均可用率 / A4 判定
         o.put("batchOk", JsonBool(argBool(args, "batchOk", false)))
         o.put("batchSamples", JsonInt(argInt(args, "batchSamples", 0)))
@@ -2004,7 +2132,7 @@ func resolveCargoBin(): String {
     }
     try {
         let (code, out, _) = executeWithOutput("cargo", ["--version"])
-        if (code == 0 && String.fromUtf8(out).contains("cargo")) {
+        if (code == 0 && lenientUtf8(out).contains("cargo")) {
             return "cargo"
         }
     } catch (e: Exception) {
@@ -2238,10 +2366,10 @@ public class HapCommand <: CommandHandler {
             }
             try {
                 let (code, out, errOut) = executeWithOutput(ohpm, ["install", "--all"], workingDirectory: Path(ohosDir))
-                phaseLog += "[ohpm install] exit=${code}\n" + String.fromUtf8(out) + "\n" + String.fromUtf8(errOut) + "\n"
+                phaseLog += "[ohpm install] exit=${code}\n" + lenientUtf8(out) + "\n" + lenientUtf8(errOut) + "\n"
                 installedDeps = code == 0
                 if (code != 0) {
-                    errMsg = "ohpm install 失败（exit=${code}）：${firstLines(String.fromUtf8(errOut), 3)}"
+                    errMsg = "ohpm install 失败（exit=${code}）：${firstLines(lenientUtf8(errOut), 3)}"
                 }
             } catch (e: Exception) {
                 errMsg = "ohpm install 起不来：${e}"
@@ -2346,7 +2474,7 @@ public class HapCommand <: CommandHandler {
                 // --mode 当成自己的选项（实测 `bad option: --mode`，exit=9）
                 let argv = [hvigorJs, "--mode", "module", "-p", "product=default", "assembleHap", "--no-daemon"]
                 let (code, out, errOut) = executeWithOutput(node, argv, workingDirectory: Path(ohosDir))
-                hvigorText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                hvigorText = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
                 phaseLog += "[hvigor] exit=${code}\n"
             } catch (e: Exception) {
                 errMsg = "hvigor 起不来：${e}"
@@ -2710,7 +2838,7 @@ public class SignCommand <: CommandHandler {
             if (udid == "") {
                 try {
                     let (_, out, errOut) = executeWithOutput(hdc, ["shell", "bm", "get", "--udid"])
-                    udid = parseUdid(String.fromUtf8(out) + "\n" + String.fromUtf8(errOut))
+                    udid = parseUdid(lenientUtf8(out) + "\n" + lenientUtf8(errOut))
                 } catch (e: Exception) {
                     let _ = e
                 }
@@ -2788,7 +2916,7 @@ public class SignCommand <: CommandHandler {
         } else {
             try {
                 let (code, out, errOut) = executeWithOutput(hdc, ["shell", "bm", "get", "--udid"])
-                let text = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                let text = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
                 hdcLog = "[hdc shell bm get --udid] ${hdc} exit=${code}\n${text}"
                 // 注意：hdc 失败时退出码仍是 0（AGENTS §4-40），UDID 只能按输出文本判
                 udid = parseUdid(text)
@@ -3533,6 +3661,24 @@ public class ReportCommand <: CommandHandler {
         res.put("html", JsonString(outHtml))
         res.put("json", JsonString(outJson))
         res.put("artifacts", artArr)
+        // 风险分级（0.39.47）：需求原文要的"支持风险分级"，随报告一起回投，界面直接渲染
+        var riskArr = JsonArray()
+        for (it in doc.risk.items) {
+            var ro = JsonObject()
+            ro.put("title", JsonString(it.title))
+            ro.put("level", JsonString(it.level))
+            ro.put("levelLabel", JsonString(riskLevelLabel(it.level)))
+            ro.put("impact", JsonString(it.impact))
+            ro.put("action", JsonString(it.action))
+            riskArr.add(ro)
+        }
+        res.put("riskLevel", JsonString(doc.risk.overallLevel()))
+        res.put("riskLabel", JsonString(riskLevelLabel(doc.risk.overallLevel())))
+        res.put("riskSummary", JsonString(riskSummaryLine(doc.risk)))
+        res.put("riskHigh", JsonInt(doc.risk.countOf(RISK_HIGH)))
+        res.put("riskMid", JsonInt(doc.risk.countOf(RISK_MID)))
+        res.put("riskLow", JsonInt(doc.risk.countOf(RISK_LOW)))
+        res.put("riskItems", riskArr)
         res.put("error", JsonString(outError))
         eprintln("[lingqu][report] ${projName} → ${outHtml}｜${doc.conclusion}")
         return res
@@ -3568,6 +3714,26 @@ func reportJson(doc: ReportDoc, facts: MigrationFacts, outMd: String, outHtml: S
         arts.add(ao)
     }
     root.put("artifacts", arts)
+    // 风险分级（0.39.47）：加在 lingqu/report/v1 里属于**新增字段**（旧读取方忽略即可，不改 schema 名）
+    var riskObj = JsonObject()
+    riskObj.put("level", JsonString(doc.risk.overallLevel()))
+    riskObj.put("label", JsonString(riskLevelLabel(doc.risk.overallLevel())))
+    riskObj.put("summary", JsonString(riskSummaryLine(doc.risk)))
+    riskObj.put("high", JsonInt(doc.risk.countOf(RISK_HIGH)))
+    riskObj.put("mid", JsonInt(doc.risk.countOf(RISK_MID)))
+    riskObj.put("low", JsonInt(doc.risk.countOf(RISK_LOW)))
+    var riskItemsJson = JsonArray()
+    for (it in doc.risk.items) {
+        var ro = JsonObject()
+        ro.put("title", JsonString(it.title))
+        ro.put("level", JsonString(it.level))
+        ro.put("levelLabel", JsonString(riskLevelLabel(it.level)))
+        ro.put("impact", JsonString(it.impact))
+        ro.put("action", JsonString(it.action))
+        riskItemsJson.add(ro)
+    }
+    riskObj.put("items", riskItemsJson)
+    root.put("risk", riskObj)
     var stats = JsonObject()
     stats.put("stepDone", JsonInt(facts.stepDone))
     stats.put("stepTotal", JsonInt(facts.stepTotal))
@@ -4105,7 +4271,7 @@ func migrateHasDevice(): Bool {    let hdc = hdcPathOr()
     try {
         let (code, out, errOut) = executeWithOutput(hdc, ["list", "targets", "-v"])
         let _ = code
-        let listText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+        let listText = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
         return parseHdcTargets(listText).size > 0
     } catch (e: Exception) {
         eprintln("[lingqu][migrate] 查设备失败：${e}")
@@ -4657,6 +4823,11 @@ public class AutoPortStartCommand <: CommandHandler {
         // 页面重连一次就把整轮 40+ 次工具调用作废，代价太大（0.39.7 实测）。
         // 这条配置不该让用户手改，启动时补上；结果回投给界面便于断言。
         let keepRunning = ensureCjhKeepRunning(userHomeDir())
+        // 轮次预算（0.39.53）：整应用迁移实测 41 轮就撞上 cjh 默认的 max_iterations=40，
+        // 回合被截断、agent 没机会收尾（juCang 现场就是这样停住的）。
+        // 开跑前抬到 AUTOPORT_MIN_ITERATIONS：先 live（POST /api/settings），不通才落文件并注明需重启。
+        let iterBudget = ensureCjhIterationBudget(userHomeDir(), AUTOPORT_MIN_ITERATIONS)
+        eprintln("[lingqu][autoport] 轮次预算：${iterBudget}")
         let inp = AutoPortInput()
         inp.project = name
         inp.projectDir = path
@@ -4705,6 +4876,7 @@ public class AutoPortStartCommand <: CommandHandler {
         res2.put("directive", JsonString(directive))
         res2.put("directiveChars", JsonInt(Int64(directive.size)))
         res2.put("keepRunningOnDisconnect", JsonString(keepRunning))
+        res2.put("iterationBudget", JsonString(iterBudget))
         res2.put("directivePath", JsonString(directivePath))
         res2.put("directiveError", JsonString(directiveErr))
         // 真正要发出去的是这条短消息（任务书靠 agent 自己 read）
@@ -5050,7 +5222,7 @@ public class DeployCommand <: CommandHandler {
         var listText = ""
         try {
             let (code, out, errOut) = executeWithOutput(hdc, ["list", "targets", "-v"])
-            listText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+            listText = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
             let _ = code
         } catch (e: Exception) {
             listText = "hdc 起不来：${e}"
@@ -5085,7 +5257,7 @@ public class DeployCommand <: CommandHandler {
             } else {
                 try {
                     let (code, out, errOut) = executeWithOutput(hdc, ["-t", serial, "install", "-r", hapPath])
-                    installText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                    installText = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
                     installStep = parseInstallResult(installText, code)
                     // `9568332 install sign info inconsistent`：同包名已装过**另一套签名**的版本。
                     // 自动签名会换材料（旧证书过期后必须换），重签后再装必然撞这个码 →
@@ -5126,7 +5298,7 @@ public class DeployCommand <: CommandHandler {
                 try {
                     let (code, out, errOut) = executeWithOutput(hdc,
                         ["-t", serial, "shell", "aa", "start", "-a", ability, "-b", bundleName])
-                    startText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                    startText = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
                     startStep = parseStartResult(startText, code)
                 } catch (e: Exception) {
                     startStep = DeployStep("start", false, "aa start 起不来：${e}", 0)
@@ -5140,7 +5312,7 @@ public class DeployCommand <: CommandHandler {
         if (serialOk && startStep.ok) {
             try {
                 let (code, out, errOut) = executeWithOutput(hdc, ["-t", serial, "shell", "hilog", "-x"])
-                hilogText = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+                hilogText = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
                 let _ = code
                 healthy = hilogLooksHealthy(hilogText)
             } catch (e: Exception) {
@@ -5478,6 +5650,7 @@ public func build(): AppSpec {
             app.register("t2h:revert", RevertCommand())
             app.register("t2h:decisions", DecisionsCommand())
             app.register("t2h:diagnose", DiagnoseCommand())
+    app.register("t2h:notes", NotesCommand())
         app.register("t2h:build", BuildCommand())
         app.register("t2h:hap", HapCommand())
         app.register("t2h:sign", SignCommand())
@@ -5525,4 +5698,168 @@ public func build(): AppSpec {
                 }
             }
         })
+}
+
+/**
+ * t2h:notes —— 本地经验的读写（0.39.55）。
+ *
+ * 为什么给 agent 一条命令而不是只让它写文件：**落档形状要一致**（四段 + 次数），
+ * 而且要能去重、能读回、能进报告；agent 自己拼 markdown 迟早拼歪。
+ *
+ * action：
+ *   · `list`（默认）：列出已有经验 + 一句话摘要
+ *   · `append`：写一条（`title` / `symptom` / `cause` / `repro` / `fix`，或 `--body <json 文件>`）——**同标题只累加次数**
+ *   · `export`：整份 markdown（给报告/人看）
+ *   · `suggest`：**筛候选**（次数 ≥2 + 四段齐全 + 未入库）→ 写 `<工程>-candidates.md` + 逐条 PR 正文草稿；
+ *     未命中台账里同签名 ≥3 次的也一并列出来（0.39.56）
+ *   · `archive`：把已入库（`- 入库：…`）的经验移出候选池；台账到 `MISS_ROLL_MIN_LINES` 行就整体归档（0.39.56）
+ */
+public class NotesCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        let rawAction = argStr(args, "action", "")
+        let action = if (rawAction.size == 0) { "list" } else { rawAction }
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        if (path.size == 0) {
+            path = "."
+        }
+        let projName = sanitizeFileName(projectNameOf(path))
+        var res = JsonObject()
+        if (action == "append") {
+            let n = LessonNote()
+            // `--body <文件>`：内容走文件（**中文参数在 Windows 上过不了 argv**，见 AGENTS §4-119）
+            let bodyPath = argStr(args, "body", "")
+            var bodyUsed = false
+            if (bodyPath.size > 0) {
+                var bodyText = ""
+                var readErr = ""
+                try {
+                    bodyText = lenientUtf8(File.readFrom(bodyPath))
+                } catch (e: Exception) {
+                    readErr = "${e}"
+                }
+                if (readErr.size > 0) {
+                    res.put("ok", JsonBool(false))
+                    res.put("result", JsonString("error:读不了 --body 文件：${readErr}"))
+                    res.put("path", JsonString(notesPathOf(path, projName)))
+                    putLessonsInto(res, loadLessons(path, projName))
+                    return res
+                }
+                let fromBody = parseLessonBody(bodyText)
+                n.title = fromBody.title
+                n.symptom = fromBody.symptom
+                n.cause = fromBody.cause
+                n.repro = fromBody.repro
+                n.fix = fromBody.fix
+                bodyUsed = true
+            } else {
+                n.title = argStr(args, "title", "")
+                n.symptom = argStr(args, "symptom", "")
+                n.cause = argStr(args, "cause", "")
+                n.repro = argStr(args, "repro", "")
+                n.fix = argStr(args, "fix", "")
+            }
+            n.project = projName
+            n.at = nowText()
+            let r = appendLesson(path, projName, n)
+            res.put("ok", JsonBool(!r.startsWith("error:")))
+            res.put("result", JsonString(r))
+            res.put("project", JsonString(projName))
+            res.put("path", JsonString(notesPathOf(path, projName)))
+            res.put("bodyUsed", JsonBool(bodyUsed))
+            putLessonsInto(res, loadLessons(path, projName))
+            eprintln("[lingqu][notes] ${r}")
+            return res
+        }
+        // suggest（0.39.56）：筛候选 + 出 PR 正文草稿（**机器提议，人裁决**）
+        if (action == "suggest") {
+            let all = loadLessons(path, projName)
+            let cands = candidateLessons(all)
+            var ledgerText = ""
+            if (exists(Path(diagMissLedgerPath(path)))) {
+                try {
+                    ledgerText = lenientUtf8(File.readFrom(diagMissLedgerPath(path)))
+                } catch (e: Exception) {
+                    let _ = e
+                }
+            }
+            let sigs = ArrayList<String>()
+            let times = ArrayList<Int64>()
+            for (sig in missSignatureList(ledgerText)) {
+                let t = missCountOf(ledgerText, sig)
+                if (t >= 3) {
+                    sigs.add(sig)
+                    times.add(t)
+                }
+            }
+            let outPath = argStr(args, "out", "")
+            let w = writeCandidates(path, projName, cands, sigs, times, outPath)
+            res.put("ok", JsonBool(!w.startsWith("error:")))
+            res.put("project", JsonString(projName))
+            res.put("result", JsonString(w))
+            res.put("out", JsonString(if (w.startsWith("ok:")) { w[3..] } else { "" }))
+            res.put("candidateCount", JsonInt(Int64(cands.size)))
+            res.put("missCandidateCount", JsonInt(Int64(sigs.size)))
+            res.put("lessonTotal", JsonInt(Int64(all.size)))
+            res.put("missLedgerLines", JsonInt(missLedgerLineCount(ledgerText)))
+            var titles = JsonArray()
+            for (n in cands) {
+                titles.add(JsonString(n.title))
+            }
+            res.put("candidates", titles)
+            var sigArr = JsonArray()
+            var i: Int64 = 0
+            while (i < Int64(sigs.size) && i < Int64(times.size)) {
+                var o = JsonObject()
+                o.put("sig", JsonString(sigs[i]))
+                o.put("times", JsonInt(times[i]))
+                sigArr.add(o)
+                i += 1
+            }
+            res.put("missCandidates", sigArr)
+            eprintln("[lingqu][notes] suggest → ${w}（经验候选 ${cands.size} / 指纹候选 ${sigs.size}）")
+            return res
+        }
+        // archive（0.39.56）：已入库的经验移出候选池 + 台账到量滚动
+        if (action == "archive") {
+            let ar = archiveLessons(path, projName)
+            let (missLines, missPath, missNote) = rollMissesLedger(path, nowText(), MISS_ROLL_MIN_LINES)
+            res.put("ok", JsonBool(!ar.note.startsWith("error:")))
+            res.put("project", JsonString(projName))
+            res.put("archivedNotes", JsonInt(ar.archived))
+            res.put("keptNotes", JsonInt(ar.kept))
+            res.put("archivePath", JsonString(ar.archivePath))
+            res.put("notesNote", JsonString(ar.note))
+            res.put("missLedgerLines", JsonInt(missLines))
+            res.put("missArchivePath", JsonString(missPath))
+            res.put("missNote", JsonString(missNote))
+            putLessonsInto(res, loadLessons(path, projName))
+            eprintln("[lingqu][notes] archive: ${ar.note}｜${missNote}")
+            return res
+        }
+        let lessons = loadLessons(path, projName)
+        res.put("ok", JsonBool(true))
+        res.put("project", JsonString(projName))
+        res.put("path", JsonString(notesPathOf(path, projName)))
+        res.put("summary", JsonString(lessonsSummaryLine(lessons)))
+        if (action == "export") {
+            res.put("markdown", JsonString(renderLessonsMd(projName, lessons)))
+        }
+        putLessonsInto(res, lessons)
+        return res
+    }
+}
+
+/** 把经验列表塞进回包（count + lessons 数组） */
+func putLessonsInto(res: JsonObject, lessons: ArrayList<LessonNote>): Unit {
+    var arr = JsonArray()
+    for (n in lessons) {
+        arr.add(lessonToJson(n))
+    }
+    res.put("count", JsonInt(Int64(lessons.size)))
+    res.put("lessons", arr)
 }

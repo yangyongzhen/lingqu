@@ -12,6 +12,7 @@
     "t2h:revert",
     "t2h:decisions",
     "t2h:diagnose",
+    "t2h:notes",
     "t2h:build",
     "t2h:hap",
     "t2h:sign",

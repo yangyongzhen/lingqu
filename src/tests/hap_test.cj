@@ -221,3 +221,53 @@ public func testHapSignHintMissingMaterial(): Unit {
     let both = hapSignHint(log + "\n00303074 Configuration Error")
     @Assert(both.contains("00303074"), true)
 }
+
+/*
+ * 0.39.51：命令行输出解码必须**永不抛异常**。
+ *
+ * 事故现场（2026-11-01 20:42，juCang）：agent 跑 `t2h:hap` →
+ * `IllegalArgumentException: Invalid utf8 byte sequence` → 落档写成「HAP 0 字节」，
+ * 整条迁移停住。根因是 `stripAnsi` 里逐字节 `String.fromUtf8([bytes[i]])`：
+ * 中文/GBK 的一个字节本身不是合法 UTF-8。
+ */
+
+@Test
+public func testLenientUtf8KeepsValidTextIntact(): Unit {
+    // ASCII 与合法中文都原样保留（别把好数据也改坏）
+    @Assert(lenientUtf8("hello".toArray()), "hello")
+    @Assert(lenientUtf8("中文测试".toArray()), "中文测试")
+    @Assert(lenientUtf8("编译成功 BUILD SUCCESSFUL".toArray()), "编译成功 BUILD SUCCESSFUL")
+    @Assert(lenientUtf8(Array<Byte>()), "")
+}
+
+@Test
+public func testLenientUtf8ReplacesInvalidBytes(): Unit {
+    // 单个 0xFF：非法首字节 → '?'（以前这里直接抛 IllegalArgumentException）
+    let one: Array<Byte> = [UInt8(255)]
+    @Assert(lenientUtf8(one), "?")
+    // GBK 的「中」= D6 D0：两个字节都不是合法 UTF-8 起点 → 两个 '?'
+    let gbk: Array<Byte> = [UInt8(214), UInt8(208)]
+    @Assert(lenientUtf8(gbk), "??")
+    // 合法三字节序列被中间一个坏字节破坏：E4 FF AD → "???"
+    var broken = "中".toArray()
+    broken[1] = UInt8(255)
+    @Assert(lenientUtf8(broken), "???")
+    // 截断（只剩前两字节）：不会越界，也不会抛
+    var trunc = "中".toArray()
+    let cut: Array<Byte> = [trunc[0], trunc[1]]
+    @Assert(lenientUtf8(cut), "??")
+}
+
+@Test
+public func testStripAnsiSurvivesChineseAndGbk(): Unit {
+    // hvigor 带色输出里混中文：剥掉 ESC 序列后中文必须原样留下
+    let esc32 = String.fromUtf8([UInt8(27), UInt8(91), UInt8(51), UInt8(50), UInt8(109)])   // ESC[32m
+    let esc0 = String.fromUtf8([UInt8(27), UInt8(91), UInt8(51), UInt8(57), UInt8(109)])    // ESC[39m
+    let colored = esc32 + "编译成功" + esc0
+    @Assert(stripAnsi(colored), "编译成功")
+    // 纯 ASCII 也照旧
+    @Assert(stripAnsi(esc32 + "BUILD SUCCESSFUL" + esc0), "BUILD SUCCESSFUL")
+    // 没有转义时原样返回
+    @Assert(stripAnsi("普通一行"), "普通一行")
+    @Assert(stripAnsi(""), "")
+}

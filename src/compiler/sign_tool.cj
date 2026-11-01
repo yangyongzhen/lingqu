@@ -208,7 +208,7 @@ public func runSignTool(javaPath: String, jarPath: String, args: ArrayList<Strin
     try {
         let (code, out, errOut) = executeWithOutput(javaPath, argv.toArray(),
             workingDirectory: Path(workingDir))
-        let log = String.fromUtf8(out) + "\n" + String.fromUtf8(errOut)
+        let log = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
         if (code != 0) {
             r.error = "hap-sign-tool 失败（exit=${code}）：${tailOf(log, 400)}"
             return r

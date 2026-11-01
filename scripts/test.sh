@@ -252,6 +252,53 @@ else
   fi
 fi
 
+# ---------- ③ 页面脚本语法（0.39.52）----------
+# 起因：改 index.html 时用"行范围替换"误留了一个多余的 `}`，页面**整块 JS 都跑不起来**——
+# 表现是窗口照起、界面全空、ui-report.log 都不生成（又一个"点了没反应"）。
+# 这种错误 `cjpm build` 与 `cj-tauri check` 都看不见，只能用解析器查：有 node 就查，没有就跳过并说明。
+if command -v node >/dev/null 2>&1; then
+  info "[3b/5] 页面脚本语法（node --check 抽取 index.html 的 <script> 块）..."
+  JS_TMP="$(mktemp -d)"
+  node -e '
+const fs = require("fs");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const out = process.argv[2];
+const re = /<script>([\s\S]*?)<\/script>/g;
+let m, i = 0, files = [];
+while ((m = re.exec(src)) !== null) {
+  i += 1;
+  const f = out + "/blk" + i + ".js";
+  fs.writeFileSync(f, m[1]);
+  files.push(f);
+}
+console.log(files.join("\n"));
+' "$ROOT/assets/ui/index.html" "$JS_TMP" > "$JS_TMP/list.txt" 2>&1
+  JS_FAIL=0
+  if [ -s "$JS_TMP/list.txt" ]; then
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      if ! OUT="$(node --check "$f" 2>&1)"; then
+        JS_FAIL=1
+        warn "语法错误：$(basename "$f")"
+        printf '%s\n' "$OUT" | head -8 | while IFS= read -r l; do [ -n "$l" ] && warn "  $l"; done
+      fi
+    done < "$JS_TMP/list.txt"
+  else
+    JS_FAIL=1
+    warn "抽取 <script> 失败：$(head -3 "$JS_TMP/list.txt")"
+  fi
+  rm -rf "$JS_TMP"
+  if [ "$JS_FAIL" -eq 0 ]; then
+    pass "页面脚本语法"
+    RESULTS+=("js-syntax:PASS")
+  else
+    fail "页面脚本语法（有语法错误的页面整块 JS 不执行，界面会像'点了没反应'）"
+    RESULTS+=("js-syntax:FAIL")
+  fi
+else
+  warn "[3b/5] 没找到 node，跳过页面脚本语法检查（不影响其它闸）"
+fi
+
 # ---------- ④ 桌面产物构建 ----------
 info "[4/5] 桌面产物 cjpm build（targets/desktop）..."
 APPDIR="$ROOT/targets/desktop"

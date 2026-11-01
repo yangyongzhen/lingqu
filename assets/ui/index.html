@@ -286,7 +286,7 @@ tbody tr:hover td{background:var(--panel2)}
 .signsteps b{color:var(--fg);font-weight:600}
 .signsteps .n{display:inline-block;min-width:16px;color:var(--acc)}
 
-/* 5 样本矩阵（T7-3）：12 列，横向滚动而不是压缩列宽——
+/* 迁移矩阵（T7-3，原「5 样本迁移矩阵」）：12 列，横向滚动而不是压缩列宽——
    压窄会让"未跑/未达标"这类判定看不清，宁可让人横向拖（同 verify 清单的排版纪律） */
 .batchtable{width:100%;border-collapse:collapse;font-size:11.5px;min-width:900px}
 .batchtable th,.batchtable td{border-bottom:1px solid rgba(38,44,59,.55);padding:5px 7px;
@@ -297,6 +297,18 @@ tbody tr:hover td{background:var(--panel2)}
 .batchtable .v-na{color:var(--dim)}
 .batchtable .v-warn{color:var(--warn)}
 .batchtable .v-err{color:var(--err)}
+
+/* 风险分级（0.39.47）：四列 = 项 / 级别 / 影响面 / 处置；级别用胶囊染色，扫一眼就知道哪条要管 */
+.risktable{width:100%;border-collapse:collapse;font-size:11.5px}
+.risktable th,.risktable td{border-bottom:1px solid rgba(38,44,59,.55);padding:5px 7px;
+  text-align:left;vertical-align:top}
+.risktable th{color:var(--dim);font-weight:600;font-size:11px}
+.risktable tr:last-child td{border-bottom:0}
+.risktable td.rk-act{color:var(--dim)}
+.risktable .lv{display:inline-block;padding:1px 7px;border-radius:9px;border:1px solid;font-size:10.5px}
+.risktable .lv-ok{color:var(--ok);border-color:rgba(126,226,168,.38);background:var(--oksoft)}
+.risktable .lv-mid{color:var(--warn);border-color:rgba(255,184,107,.38);background:var(--warnsoft)}
+.risktable .lv-high{color:var(--err);border-color:rgba(255,122,122,.42);background:rgba(255,122,122,.12)}
 
 .note{font-size:11.5px;color:var(--dim);background:var(--panel2);border:1px dashed var(--line);
   border-radius:10px;padding:10px 13px;margin-top:13px}
@@ -642,6 +654,16 @@ body.ai-hidden .ai-show{display:block}
           <div id="migrateRows" class="migrows"></div>
         </div>
 
+        <!-- AI 过程消息（0.39.52）：用户反馈「进度下面那块迁移过程日志看着没用，我以为能显示 AI 的响应」。
+             上一版记的是"每步状态变化"，而上方进度条已经把 8 步状态全列了——重复信息，确实没用。
+             现在这里显示**AI 真正说的话**（流式增量），外加"工具失败"这类你必须知道的一行；
+             确定性流程（不走 AI）时就如实说明它不产生 AI 消息。 -->
+        <div class="card" style="margin-top:12px" id="migrateLogCard">
+          <div class="card-h"><h3>AI 过程消息</h3><span class="right" id="migLogN">—</span></div>
+          <div class="sethint" id="migLogNote" style="margin:0 0 6px">这里是**AI 在迁移过程中说的话**（流式增量，随回合实时出现），以及工具失败的摘要；成功的工具调用与 bash 原文仍在右栏对话里。</div>
+          <div id="migrateLog" class="log" style="max-height:260px;overflow:auto"><span class="muted">还没有开始。点「🤖 开始 AI 自动迁移」后，AI 的叙述会实时出现在这里。</span></div>
+        </div>
+
         <div class="card" style="margin-top:12px;display:none" id="migrateResultCard">
           <div class="card-h"><h3>结果</h3><span class="right mono small" id="migrateVerdictShort"></span></div>
           <div class="migresult" id="migrateResult"></div>
@@ -666,18 +688,14 @@ body.ai-hidden .ai-show{display:block}
 
         <div class="grid2" style="margin-top:13px">
           <div class="card" style="margin-top:0">
-            <div class="card-h"><h3>最近项目</h3><span class="right">5 个样本</span></div>
+            <div class="card-h"><h3>最近项目</h3><span class="right" id="projCount">—</span></div>
             <table>
               <thead><tr><th>项目</th><th>评分</th><th>进度</th></tr></thead>
-              <tbody>
-                <tr><td><b>habit-tree</b><div class="muted small mono">com.grove.habittrees</div></td><td><span class="pill ok">86</span></td><td><span class="muted small">⑦ 已完成</span></td></tr>
-                <tr><td><b>cc-switch</b><div class="muted small mono">com.jiujiang.ccswitch</div></td><td><span class="pill info">72</span></td><td><span class="muted small">④ 改造执行</span></td></tr>
-                <tr><td><b>tauri-mqtt-client</b></td><td><span class="pill warn">64</span></td><td><span class="muted small">② 画像</span></td></tr>
-                <tr><td><b>m3u8dl-tauri</b></td><td><span class="pill warn">58</span></td><td><span class="muted small">① 已选</span></td></tr>
-                <tr><td><b>tauri/examples</b></td><td><span class="pill ok">91</span></td><td><span class="muted small">⑦ 已完成</span></td></tr>
+              <tbody id="projRows">
+                <tr><td colspan="3" class="muted">正在按落档发现工程…</td></tr>
               </tbody>
             </table>
-            <div class="note">示意数据。<b>扫描器（t2h:scan）接入后</b>这一栏就是真实评分与进度。</div>
+            <div class="note" id="projNote">这里只列**真的有 `.lingqu` 落档**的工程：评分 = 扫描评分，进度 = 8 步，可用率 = 真机验证结果。一个都没扫过时它就该是空的——空着比编五行假数据诚实。</div>
           </div>
 
           <div class="card" style="margin-top:0">
@@ -729,7 +747,7 @@ body.ai-hidden .ai-show{display:block}
         <div class="whead">
           <div><h1>迁移画像</h1><p>五类清单 + 可迁移度评分。每一项都有处置结论；覆盖率 C1 = 有结论 ÷ 识别（口径见 <span class="mono">docs/P2-scan-口径草案.md</span>）。</p></div>
           <div class="acts">
-            <div style="width:240px;flex:0 0 auto"><input class="setinput" id="scanPath" placeholder="Tauri 工程路径，如 E:/test/rust/habit-tree"></div>
+            <div style="width:240px;flex:0 0 auto"><input class="setinput" id="scanPath" placeholder="Tauri 工程路径，如 D:/work/my-tauri-app"></div>
             <button class="btn primary" id="btnScan">扫描</button>
           </div>
         </div>
@@ -870,20 +888,9 @@ body.ai-hidden .ai-show{display:block}
               <div class="muted small">尚无记录。刷新断点后这里会显示：勾选 / 步骤 / 落档证据 + 判定，行尾可「从这步重来」。</div>
             </div>
           </div>
-          <div class="card placeholder" style="margin-top:0">
-            <div class="card-h"><h3>实时日志<span class="placeholder-badge">占位示意 · P5 接真数据</span></h3><span class="right">占位示意</span></div>
-            <div class="log" style="max-height:290px"><span class="ts">15:42:01</span> <span class="ok">[R1-002]</span> 生成 src-tauri/rust-toolchain.toml（gnullvm + aarch64-unknown-linux-ohos）
-<span class="ts">15:42:02</span> <span class="ok">[R2-001]</span> Cargo.toml：tauri/wry/tao/openharmony-ability → patch
-<span class="ts">15:42:03</span> <span class="cmd">$ cargo metadata --format-version 1</span>
-<span class="ts">15:42:06</span> <span class="ok">[verify]</span> tauri.source = feat/open-harmony ✔
-<span class="ts">15:42:07</span> <span class="ok">[R3-001]</span> lib.rs：resolve_app_data_dir() 注入
-<span class="ts">15:42:09</span> <span class="ok">[R5-001]</span> index.html：localStorage 透明桥注入
-<span class="ts">15:42:11</span> <span class="ok">[R5-002]</span> ui/*.ts：confirm/prompt → promiseDialog（5 处）
-<span class="ts">15:42:14</span> <span class="ag">[agent]</span> 检测到 3 处 input[type=color]，正在应用 R5-005…
-<span class="ts">15:42:16</span> <span class="warn">[warn]</span> ColorPicker.vue：隐藏仍参与合成层 → 改为 remove()
-<span class="ts">15:42:18</span> <span class="cmd">$ cargo check --target aarch64-unknown-linux-ohos</span>
-<span class="ts">15:42:24</span> <span class="ok">[verify]</span> 0 error / 2 warning（已归类入库）
-<span class="ts">15:42:25</span> <span class="warn">[HITL]</span> 第 3 处人工决策：rfd 是否改走应用内目录树？</div>
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><h3>执行日志</h3><span class="right"><button class="btn ghost" id="btnLogClear" title="只清空界面上的日志，不改任何落档">清空</button></span></div>
+            <div id="execLog" class="log" style="max-height:290px;overflow:auto"><span class="muted">还没有执行任何步骤——上面的按钮（或①/②/③/⑤/⑥ 屏的命令）跑过一次后，这里会按时间记下真实轨迹：命令 / 退出码 / 命中指纹 / 产物路径 / 耗时。</span></div>
           </div>
         </div>
       </section>
@@ -942,32 +949,26 @@ body.ai-hidden .ai-show{display:block}
           <div class="signsteps" id="signSwitch"></div>
         </div>
         <div class="card">
-          <div class="card-h"><h3>流水线</h3><span class="right">占位示意</span></div>
+          <div class="card-h"><h3>流水线</h3><span class="right" id="pipeNote">按本次运行 / 落档实时更新</span></div>
           <div class="stages">
-            <div class="stage ok"><div class="k"><i class="dot ok"></i>交叉编译</div><div class="v">3m12s</div></div>
-            <div class="stage ok"><div class="k"><i class="dot ok"></i>前端指纹</div><div class="v">匹配 ✔</div></div>
-            <div class="stage ok"><div class="k"><i class="dot ok"></i>HAP 装配</div><div class="v">1m05s</div></div>
-            <div class="stage run"><div class="k"><i class="dot info"></i>签名</div><div class="v">debug</div></div>
-            <div class="stage"><div class="k"><i class="dot"></i>安装</div><div class="v">—</div></div>
+            <div class="stage" id="stBuild"><div class="k"><i class="dot"></i>交叉编译</div><div class="v" id="stBuildV">—</div></div>
+            <div class="stage" id="stAsset"><div class="k"><i class="dot"></i>前端指纹</div><div class="v" id="stAssetV">—</div></div>
+            <div class="stage" id="stHap"><div class="k"><i class="dot"></i>HAP 装配</div><div class="v" id="stHapV">—</div></div>
+            <div class="stage" id="stSign"><div class="k"><i class="dot"></i>签名</div><div class="v" id="stSignV">—</div></div>
+            <div class="stage" id="stInstall"><div class="k"><i class="dot"></i>安装</div><div class="v" id="stInstallV">—</div></div>
           </div>
         </div>
         <div class="grid3">
           <div class="card" style="margin-top:0"><div class="card-h"><h3>产物 · .so</h3></div>
-            <div class="mono small" style="line-height:2">libgrove_lib.so<br><span class="muted">4.71 MB</span><br><span class="muted">AssetKey：</span><span style="color:var(--ok)">ui-9f3a.js ✔</span></div></div>
+            <div class="mono small" style="line-height:2" id="artSo"><span class="muted">还没跑交叉编译</span></div></div>
           <div class="card" style="margin-top:0"><div class="card-h"><h3>产物 · HAP</h3></div>
-            <div class="mono small" style="line-height:2">entry-default-signed.hap<br><span class="muted">12.4 MB · v1.2.0</span><br><span class="muted">无死资源 rawfile ✔</span></div></div>
+            <div class="mono small" style="line-height:2" id="artHap"><span class="muted">还没装配 HAP</span></div></div>
           <div class="card" style="margin-top:0"><div class="card-h"><h3>真机</h3></div>
-            <div class="mono small" style="line-height:2">2in1 · HarmonyOS 5.0.0(12)<br><span class="muted">hdc 已连接</span><br><span style="color:var(--warn)">签名 debug（device-id 白名单）</span></div></div>
+            <div class="mono small" style="line-height:2" id="artDev"><span class="muted">还没部署</span></div></div>
         </div>
         <div class="card">
-          <div class="card-h"><h3>构建输出</h3><span class="right">结构化诊断将归一化为错误指纹</span></div>
-          <div class="log"><span class="ts">15:49:30</span> <span class="cmd">$ cargo build --release --target aarch64-unknown-linux-ohos --message-format=json</span>
-<span class="ts">15:52:42</span> <span class="ok">Finished release profile</span> in 3m 12s
-<span class="ts">15:52:42</span> <span class="ok">[artifact]</span> libgrove_lib.so  4,938,240 bytes
-<span class="ts">15:52:44</span> <span class="ok">[verify]</span> grep AssetKey → ui-9f3a.js ✔（与 dist/ 一致）
-<span class="ts">15:53:49</span> <span class="cmd">$ hvigorw assembleHap --mode module -p product=default</span>
-<span class="ts">15:54:49</span> <span class="ok">BUILD SUCCESSFUL</span> · entry-default-signed.hap  13,002,342 bytes
-<span class="ts">15:54:51</span> <span class="ok">[verify]</span> zipfile: 无 rawfile ✔ · versionName=1.2.0 ✔</div>
+          <div class="card-h"><h3>构建输出</h3><span class="right">结构化诊断已归一化为错误指纹</span></div>
+          <div class="log" id="buildLogTail" style="max-height:220px;overflow:auto"><span class="muted">还没跑交叉编译。</span></div>
         </div>
       </section>
 
@@ -1057,18 +1058,21 @@ body.ai-hidden .ai-show{display:block}
             <div class="small" style="line-height:1.9" id="rpNeed"><span class="muted">还没生成</span></div>
           </div>
         </div>
-        <div class="card">
-          <div class="card-h"><h3>导出与证据索引</h3><span class="right" id="rpTime">—</span></div>
-          <div class="sethint" id="rpPaths">还没导出——点「生成迁移报告」会同时写 MD / HTML / JSON 三份。</div>
-          <div class="mono small" style="margin-top:8px;line-height:1.9" id="rpArtifacts"></div>
+        <div class="card" id="rpRiskCard">
+          <div class="card-h"><h3>风险分级</h3><span class="right" id="rpRiskSum">—</span></div>
+          <div class="sethint" id="rpRiskNote" style="margin:0 0 7px">「迁移成功」不等于「没有风险」：下表逐条由落档判定（编译 / 装配 / 部署、清单三类、签名态、前端指纹、人工介入）。<b>没有落档的步骤只写「无法评估」，不会被当成没问题。</b></div>
+          <table class="risktable">
+            <thead><tr><th style="width:34%">项</th><th style="width:56px">级别</th><th>影响面</th><th style="width:30%">处置</th></tr></thead>
+            <tbody id="rpRiskRows"><tr><td colspan="4" class="muted">还没生成——点「生成迁移报告」</td></tr></tbody>
+          </table>
         </div>
         <div class="card">
           <div class="card-h">
-            <h3>5 样本迁移矩阵（T7-3）</h3>
-            <span class="right"><button class="btn primary" id="btnBatch" title="按每个样本自己的 .lingqu 落档并排出矩阵 → .lingqu/batch/matrix.{md,html,json}">生成矩阵</button></span>
+            <h3>迁移矩阵</h3>
+            <span class="right"><button class="btn primary" id="btnBatch" title="按每个样本自己的 .lingqu 落档并排出矩阵 → .lingqu/batch/matrix.{md,html,json}">生成迁移矩阵</button></span>
           </div>
           <div class="acts-row" style="margin:0 0 8px">
-            <input id="batchSamples" class="mono" placeholder="5 个样本路径，用 | 分隔（留空 = 用 .lingqu 里出现过的工程）" style="flex:1 1 320px;min-width:220px">
+            <input id="batchSamples" class="mono" placeholder="样本工程路径，用 | 分隔（留空 = 用 .lingqu 里出现过的工程）" style="flex:1 1 320px;min-width:220px">
           </div>
           <div class="sethint" id="batchSum">还没生成——每个样本先各自跑一遍流程才有数据；没跑的样本会显示「未跑」且不参与平均。</div>
           <div style="overflow-x:auto;margin-top:8px">
@@ -1078,11 +1082,16 @@ body.ai-hidden .ai-show{display:block}
                 <th>签名态</th><th>部署</th><th>可用率（通过/分母）</th><th>8 步</th><th>人工介入</th><th>判定</th>
               </tr></thead>
               <tbody id="batchRows">
-                <tr><td colspan="12" class="muted">还没有数据——点「生成矩阵」。</td></tr>
+                <tr><td colspan="12" class="muted">还没有数据——点「生成迁移矩阵」。</td></tr>
               </tbody>
             </table>
           </div>
           <div class="mono small" style="margin-top:8px" id="batchPaths"></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>导出与证据索引</h3><span class="right" id="rpTime">—</span></div>
+          <div class="sethint" id="rpPaths">还没导出——点「生成迁移报告」会同时写 MD / HTML / JSON 三份。</div>
+          <div class="mono small" style="margin-top:8px;line-height:1.9" id="rpArtifacts"></div>
         </div>
       </section>
 
@@ -1108,19 +1117,14 @@ body.ai-hidden .ai-show{display:block}
 
       <!-- 对话视图 -->
       <div class="chat" id="aiChat">
-        <div class="msg"><div class="av ai">AI</div><div class="b">
-          <div class="who">灵渠 · cjh</div>
-          <div class="bubble" id="aiGreet">引擎就绪后我就能接手迁移分析：先扫工程出画像，再按规则改代码、跑构建、盯真机。要不要先从 <span class="mono">t2h:scan</span> 开始？</div>
-        </div></div>
-        <div class="msg me"><div class="av">你</div><div class="b"><div class="who">我</div>
-          <div class="bubble">先看一眼环境体检的结果。</div></div></div>
-        <div class="msg"><div class="av ai">AI</div><div class="b"><div class="who">灵渠 · cjh</div>
-          <div class="tool"><div class="th"><span class="dot ok"></span><span class="nm">t2h:env</span><span class="st">完成</span></div>
-            <div class="tb">8 项体检 → 就绪 7 / 缺失 1
-  ✘ llvm-mingw 不在 PATH
-    → 影响：gnullvm 链接（Windows 前提）
-    → 修法：装 llvm-mingw 并把 bin 加进 PATH</div></div>
-        </div></div>
+        <!-- 空状态（0.39.49）：这里原来是**三块写死的示例对话**（一句"先看一眼环境体检的结果"、
+             一段"8 项体检 → 就绪 7 / 缺失 1 ✘ llvm-mingw…"的假工具卡），看着跟真会话一模一样。
+             现在只留一张"怎么开始"的提示卡：#aiGreet 是说明文案，不是消息气泡；
+             一来历史/新消息它就被清掉（renderHistory 会整块替换）。 -->
+        <div class="hintcard" id="aiGreetCard">
+          <div class="bubble" id="aiGreet">对话还没开始。引擎就绪后我可以接手整条迁移：先扫工程出画像，再按规则改代码、跑构建、盯真机。<br>
+            直接从下面输入问题就行（例如「扫一下当前工程」），或者让我先跑 <span class="mono">t2h:env</span> 看看这台机器缺什么。</div>
+        </div>
         <div id="aiHint" style="display:none"><div class="hintcard" id="aiHintBody"></div></div>
       </div>
 
@@ -2568,6 +2572,103 @@ withBridge(function(tauri){
   var invoke = function(cmd, args){ return tauri.invoke(cmd, args || {}); };
 
   /* ===== 环境体检 ===== */
+  /* ===== 执行日志（0.39.49）：只记"真发生过的事" =====
+   * 起因（用户实测）：「实时日志 · 占位示意 · P5 接真数据」——那块日志是**写死的 14 行示例**，
+   * 一个字节都没接后端，用户一句就问穿了：「这是假的展示？没有数据吗还是没有做啊？」
+   * 处置：记真事（谁跑的 / 结果 / 关键数字 / 命中的指纹 / 产物路径），没跑过就明说"还没执行"。
+   * 一块空白，比一段假日志诚实（AGENTS §4-94）。
+   */
+  var SESSION_LOG = [];
+  function logLine(kind, text){
+    if (!text) { return; }
+    var d = new Date();
+    var hh = ('0' + d.getHours()).slice(-2);
+    var mm = ('0' + d.getMinutes()).slice(-2);
+    var ss = ('0' + d.getSeconds()).slice(-2);
+    SESSION_LOG.push({ ts: hh + ':' + mm + ':' + ss, kind: String(kind || 'log'), text: String(text) });
+    if (SESSION_LOG.length > 200) { SESSION_LOG = SESSION_LOG.slice(SESSION_LOG.length - 200); }
+    renderExecLog();
+  }
+  function renderExecLog(){
+    var el = document.getElementById('execLog');
+    if (!el) { return; }
+    if (!SESSION_LOG.length) {
+      el.innerHTML = '<span class="muted">还没有执行任何步骤——上面的按钮（或其它屏的命令）跑过一次后，这里会按时间记下真实轨迹。</span>';
+      return;
+    }
+    var out = '';
+    for (var i = 0; i < SESSION_LOG.length; i++) {
+      var l = SESSION_LOG[i];
+      out += '<div><span class="ts">' + l.ts + '</span> <span class="' + l.kind + '">[' + l.kind + ']</span> '
+        + esc(l.text) + '</div>';
+    }
+    el.innerHTML = out;
+    el.scrollTop = el.scrollHeight;
+  }
+  window.__execLog = function(){ return SESSION_LOG; };
+  // 同一个渲染函数会被"切屏重绘"再调一次（④ 屏就是），那种调用不该重复记日志。
+  // 规矩：**命令处理器**先置位 LOG_ONCE.xxx=true，render 里消费一次就清掉。
+  var LOG_ONCE = {};
+  function logOnce(key, kind, text){
+    if (!LOG_ONCE[key]) { return; }
+    LOG_ONCE[key] = false;
+    logLine(kind, text);
+  }
+  (function initExecLogClear(){
+    var b = document.getElementById('btnLogClear');
+    if (b) {
+      b.onclick = function(){ SESSION_LOG = []; renderExecLog(); reportUi('exec-log-clear'); };
+    }
+  })();
+
+  /* ===== ① 屏「最近项目」：按落档发现（0.39.49）=====
+   * 这块原来是一张**写死的 5 行表**（habit-tree 86 / cc-switch 72 / …），旁边注着
+   * 「示意数据。扫描器接入后这一栏就是真实评分与进度」——而扫描器早就在用了，
+   * 于是那句注释本身就是过期话术（AGENTS §4-94）。
+   * 现在直接复用 `t2h:batch` 的发现结果：**只有真的有 `.lingqu` 落档的工程**才会出现。
+   */
+  var PROJ_LIST = { rows: 0, src: '', err: '' };
+  function renderRecentProjects(r){
+    r = r || {};
+    var rows = (r.rows && r.rows.length) ? r.rows : [];
+    PROJ_LIST = { rows: rows.length, src: String(r.sampleSource || ''), err: String(r.error || '') };
+    var tb = $('projRows');
+    if (!tb) { return; }
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="3" class="muted">还没有迁移过的工程——在 ② 迁移画像对一个工程扫一次，它就会出现在这里（本卡片只列真的有 .lingqu 落档的工程）。</td></tr>';
+    } else {
+      var html = '';
+      rows.forEach(function(x){
+        var score = '';
+        if (typeof x.scanScore === 'number' && x.scanScore > 0) {
+          var cls = x.scanScore >= 80 ? 'ok' : (x.scanScore >= 60 ? 'info' : 'warn');
+          score = '<span class="pill ' + cls + '">' + x.scanScore + '</span>';
+        } else {
+          score = '<span class="muted">未扫描</span>';
+        }
+        var rate = (typeof x.verifyRate === 'number' && x.verifyRate >= 0) ? (x.verifyRate + '%') : '—';
+        html += '<tr><td><b>' + esc(x.project || '?') + '</b>'
+          + '<div class="muted small mono" title="' + esc(x.path || '') + '">' + esc(x.path || '') + '</div></td>'
+          + '<td>' + score + '</td>'
+          + '<td><span class="muted small">' + (x.stepDone || 0) + '/' + (x.stepTotal || 8)
+          + ' 步 · 可用率 ' + rate + ' · ' + esc(x.verdict || '—') + '</span></td></tr>';
+      });
+      tb.innerHTML = html;
+    }
+    var cnt = $('projCount');
+    if (cnt) {
+      cnt.textContent = rows.length ? (rows.length + ' 个（有落档）') : '0 个';
+      cnt.title = '样本来源：' + (PROJ_LIST.src || '—');
+    }
+    reportUi('proj-list');
+  }
+  function loadRecentProjects(){
+    invoke('t2h:batch', {}).then(function(r){ renderRecentProjects(r || {}); }).catch(function(e){
+      renderRecentProjects({ error: e && e.message ? e.message : 'invoke error' });
+    });
+  }
+  window.__loadRecentProjects = loadRecentProjects;
+
   function renderEnv(d){
     var list = $('envList'); list.innerHTML = '';
     var ok = 0, miss = 0;
@@ -2596,7 +2697,12 @@ withBridge(function(tauri){
       // 它就是上一次 `t2h:ui_report` 落档里的 currentProject（`t2h:env` 的 lastProject）。
       if (d && d.lastProject) {
         var cur = (typeof PROJECT !== 'undefined') ? String(PROJECT.path || '') : '';
-        if (!cur) {
+        // 0.39.48：上次那个工程**已经不在了**（被删/移走/换了机器）就别带回来——
+        // 带回来等于把"路径不存在"直接甩给用户（后端用 exists 判的，页面没这能力）
+        if (d.lastProjectOk === false) {
+          window.__projRestore = { path: String(d.lastProject), source: 'backend-missing' };
+          window.__projRestoreSkipped = String(d.lastProject);
+        } else if (!cur) {
           window.__projRestore = { path: String(d.lastProject), source: 'backend' };
           setCurrentProject(String(d.lastProject));
         }
@@ -2604,9 +2710,13 @@ withBridge(function(tauri){
       // 环境体检回包里带 uiProbe 标志：非空则自动跑一轮界面自检序列。
       // 这样「版面对不对、通道通不通」不再依赖肉眼看截图，CI / 无视觉能力场景也能验证。
       if (d && d.uiProbe) { window.__uiProbeMode = String(d.uiProbe); runUiProbe(); }
+      // 克隆探针（0.39.48）：LINGQU_CLONE_URL / LINGQU_CLONE_DIR 透传给页面自检用
+      if (d && d.cloneUrl) { window.__cloneProbeUrl = String(d.cloneUrl); }
+      if (d && d.cloneDir) { window.__cloneProbeDir = String(d.cloneDir); }
       // 扫描探针：后端把 LINGQU_SCAN_PATH 透传下来，就在启动时跑一次 t2h:scan
       if (d && d.scanPath) {
         // 「一键迁移」屏的路径框跟着带上，省得再手填一遍（一键迁移的主入口）
+        window.__scanPath = String(d.scanPath);   // 探针要能拿到"环境里指定的工程"（0.39.54）
         if (!String((typeof PROJECT !== 'undefined' ? PROJECT.path : '') || '').trim() && d.scanPath) { setCurrentProject(String(d.scanPath)); }
         runScanProbe(String(d.scanPath));
       }
@@ -2669,8 +2779,10 @@ withBridge(function(tauri){
       setDot('dotEnv', 'err'); $('txtEnv').textContent = '体检失败';
     });
   }
-  $('btnEnv').onclick = loadEnv;
+  $('btnEnv').onclick = function(){ loadEnv(); loadRecentProjects(); };
   loadEnv();
+  // ① 屏「最近项目」：等当前工程定下来之后再按落档发现（否则会先列一份"没工程"的清单）
+  setTimeout(function(){ loadRecentProjects(); }, 2500);
 
   /* ===== 引擎状态（三态，可轮询） ===== */
   var stateNames = { running: '已连接', ready: '可拉起', missing: '缺失' };
@@ -2938,6 +3050,8 @@ withBridge(function(tauri){
       $('setTemp').value = (typeof c.temperature === 'number') ? c.temperature : '';
       $('setMaxTok').value = c.maxTokens || '';
       $('setMaxIter').value = c.maxIterations || '';
+    // 回合结束时要用真实预算解释"为什么停"（0.39.51）：cjh 的 max_iterations 就是轮次上限
+    if (typeof c.maxIterations === 'number' && c.maxIterations > 0) { CJ.maxIterations = c.maxIterations; }
       $('setKey').value = '';   // 密钥永不回填
       $('setKeyHint').textContent = c.apiKey ? ('当前已保存：' + c.apiKey + '（留空则不修改）') : '当前：未设置';
       loadModels();              // 配置到手后重画模型列表：让「当前」与配置一致
@@ -3016,7 +3130,25 @@ withBridge(function(tauri){
     var d = new Date();
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
   }
-  function insertNode(node) { chatBox().insertBefore(node, $('aiHint')); atBottom(); return node; }
+  /** 空状态提示卡（0.39.49）：只在**一条消息都没有**时存在；有真消息就撤掉，别让它挂在对话上面装成一条消息 */
+  function ensureGreetCard(){
+    var box = chatBox();
+    if (!box || $('aiGreetCard')) { return; }
+    var g = mkEl('<div class="hintcard" id="aiGreetCard">'
+      + '<div class="bubble">对话还没开始。引擎就绪后我可以接手整条迁移：先扫工程出画像，再按规则改代码、跑构建、盯真机。<br>'
+      + '直接从下面输入问题就行（例如「扫一下当前工程」），或者让我先跑 <span class="mono">t2h:env</span> 看看这台机器缺什么。</div></div>');
+    if (g) { chatBox().insertBefore(g, $('aiHint')); }
+  }
+  function dropGreetCard(){
+    var g = $('aiGreetCard');
+    if (g && g.parentNode) { g.parentNode.removeChild(g); }
+  }
+  function insertNode(node) {
+    dropGreetCard();
+    chatBox().insertBefore(node, $('aiHint'));
+    atBottom();
+    return node;
+  }
 
   function addMsg(role, html) {    return insertNode(mkEl('<div class="msg' + (role === 'me' ? ' me' : '') + '">' +
       '<div class="av' + (role === 'me' ? '' : ' ai') + '">' + (role === 'me' ? '你' : 'AI') + '</div>' +
@@ -3028,6 +3160,7 @@ withBridge(function(tauri){
     var bubble = addMsg('ai', '');
     CJ.curBubble = bubble;
     CJ.acc = '';
+    CJ.lastToolErr = '';   // 新回合开始：清掉上一回合的工具错误（0.39.51）
     return bubble;
   }
 
@@ -3040,6 +3173,39 @@ withBridge(function(tauri){
   function scheduleFlush() {
     if (CJ.flushTimer) return;
     CJ.flushTimer = setTimeout(flushStream, 90);
+  }
+
+  /**
+   * 回合结束但"不解释为什么"是用户实测打回来的问题（0.39.51）：
+   * 「回合结束 · 轮次 41 · 工具 54 · 157.5s，移植中途失败了，ai 也不反馈个信息提示吗？就这么停在这了」
+   *
+   * 这里把停的原因判定出来上屏，并且**只要最后一条工具结果是错误，就把首行贴出来**——
+   * 现场那次真因就是 `t2h:hap` 的 `Invalid utf8 byte sequence`，界面上却一个字都没有。
+   */
+  function noteTurnEnded(s, finishReason){
+    s = s || {};
+    var rounds = (typeof s.rounds === 'number') ? s.rounds : -1;
+    var budget = (CJ.maxIterations || 40);           // 来自设置（未读到就按 cjh 默认 40）
+    var reasons = [];
+    if (rounds >= budget && budget > 0) {
+      reasons.push('轮次预算用完（' + rounds + '/' + budget + '，cjh 的 max_iterations）');
+    }
+    if (finishReason === 'length') { reasons.push('上下文/长度上限'); }
+    if (finishReason === 'error') { reasons.push('回合异常'); }
+    var lastErr = String(CJ.lastToolErr || '');
+    var done = (typeof AIP !== 'undefined' && AIP && (AIP.finished === true));
+    var active = (typeof AIP !== 'undefined' && AIP && AIP.active === true);
+    // 只有"确实还没迁完"才提醒（已全部有结论就别再喊，§4-41 那课的同类）
+    if (!done) {
+      if (reasons.length === 0) { reasons.push('模型自己结束了这一轮（它认为无法再推进）'); }
+      var errName = String(CJ.lastToolErrName || '');
+      var msg = '为什么停：' + reasons.join('；') + '。迁移还没完成'
+        + (active ? '（监管态仍在跑，可点「停止」收尾）' : '——可以点 ① 屏的「继续」让它接着干')
+        + (lastErr ? ('\n最后一条工具报错' + (errName ? ('（' + errName + '）') : '') + '：' + lastErr.slice(0, 200)) : '')
+        + (lastErr ? '' : '（没有工具报错——那就是轮次/模型侧的原因，不是命令失败）');
+      window.__turnEnd = { reason: reasons.join('；'), lastErr: lastErr.slice(0, 200), tool: errName };
+      addError(msg, 'turn_budget');
+    }
   }
 
   function finishTurn(note) {
@@ -3415,6 +3581,78 @@ withBridge(function(tauri){
     return '未连接真机（无部署记录）';
   }
 
+  /* ===== ① 屏「AI 过程消息」（0.39.52）=====
+   * 上一版这块记的是「每步状态变化」——而上方进度条已经把 8 步状态全列出来了，重复信息，
+   * 用户一句"看着没有什么用"就否掉了。他要的是「AI 在说什么」。
+   * 现在只放两样：① **AI 真的说的话**（delta 流式增量，随回合实时出现）；
+   *              ② 工具失败的摘要（成功的不放；bash 原文与工具卡仍在右栏）。
+   * 确定性流程（t2h:migrate）不经过 AI，这种情况就明说，别让人对着空白猜。
+   */
+  var MIG_AI = [];          // { ts, kind: 'say'|'err'|'mark', text }
+  var MIG_AI_CUR = null;    // 正在增长的那条 say（流式增量合并成一段）
+  var MIG_AI_TIMER = null;
+  var MIG_WAS_RUNNING = false;
+
+  function migAiActive(){
+    var aip = (typeof AIP !== 'undefined' && AIP) ? (AIP.active === true) : false;
+    var mig = (typeof MIG !== 'undefined' && MIG) ? (MIG.running === true) : false;
+    return aip || mig;
+  }
+  function migAiTs(){
+    var d = new Date();
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+  function migAiReset(){
+    MIG_AI = [];
+    MIG_AI_CUR = null;
+    renderMigAi(true);
+  }
+  function migAiBreak(){ MIG_AI_CUR = null; }
+  function migAiDelta(text){
+    if (!text) { return; }
+    if (!MIG_AI_CUR) {
+      MIG_AI_CUR = { ts: migAiTs(), kind: 'say', text: '' };
+      MIG_AI.push(MIG_AI_CUR);
+      if (MIG_AI.length > 400) { MIG_AI = MIG_AI.slice(MIG_AI.length - 400); }
+    }
+    MIG_AI_CUR.text += String(text);
+    renderMigAi(false);
+  }
+  function migAiPush(kind, text){
+    if (!text) { return; }
+    migAiBreak();
+    MIG_AI.push({ ts: migAiTs(), kind: String(kind || 'mark'), text: String(text) });
+    if (MIG_AI.length > 400) { MIG_AI = MIG_AI.slice(MIG_AI.length - 400); }
+    renderMigAi(true);
+  }
+  function renderMigAi(force){
+    // 流式时按 120ms 合并重绘：每条 delta 都刷 DOM 会明显卡顿
+    if (!force) {
+      if (MIG_AI_TIMER) { return; }
+      MIG_AI_TIMER = setTimeout(function(){ MIG_AI_TIMER = null; renderMigAi(true); }, 120);
+      return;
+    }
+    var el = document.getElementById('migrateLog');
+    var n = document.getElementById('migLogN');
+    if (n) { n.textContent = MIG_AI.length ? (MIG_AI.length + ' 条') : '—'; }
+    if (!el) { return; }
+    if (!MIG_AI.length) {
+      el.innerHTML = '<span class="muted">还没有开始。点「🤖 开始 AI 自动迁移」后，AI 的叙述会实时出现在这里。</span>';
+      return;
+    }
+    var out = '';
+    for (var i = 0; i < MIG_AI.length; i++) {
+      var l = MIG_AI[i];
+      var body = (l.kind === 'say') ? renderMd(l.text) : esc(l.text);
+      var mark = (l.kind === 'err') ? '<span class="err">✘ </span>'
+        : ((l.kind === 'mark') ? '<span class="warn">· </span>' : '');
+      out += '<div><span class="ts">' + esc(l.ts) + '</span> ' + mark + body + '</div>';
+    }
+    el.innerHTML = out;
+    el.scrollTop = el.scrollHeight;
+  }
+  window.__migAi = function(){ return MIG_AI; };
+
   function renderMigrate(st){
     st = st || {};
     var running = (st.running === true) || (st.active === true);
@@ -3458,6 +3696,9 @@ withBridge(function(tauri){
         + '<span class="mnote" title="' + esc(detail) + '">' + esc(detail) + '</span></div>';
     });
     if ($('migrateRows')) { $('migrateRows').innerHTML = html; }
+    // 新一轮开始就把 AI 消息面板清空（它只属于本次运行，不跨轮混看）
+    if (running && !MIG_WAS_RUNNING) { migAiReset(); }
+    MIG_WAS_RUNNING = running;
   }
 
   function stopMigratePolling(){
@@ -3588,7 +3829,7 @@ withBridge(function(tauri){
    *   ② 把任务书发过去（走已有 WS 通道，流式回复直接给人看）
    *   ③ 盯落档（t2h:autoport_status）：进度、停滞、预算；要人定的用确认卡
    * 判定只认落档：AI 说"迁好了"，时间轴没变就是没变。 */
-  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0, finished: false };
+  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0, finished: false, autoReported: false };
 
   /** scope → 中文档位文案（全自动 / 半自动「只做这一步」） */
   function autoPortScopeLabel(scope){
@@ -3616,6 +3857,49 @@ withBridge(function(tauri){
     if ($('btnAiPortContinue')) {
       $('btnAiPortContinue').style.display = (AIP.active || String(st.verdict || '').indexOf('通过') >= 0) ? 'none' : 'inline-block';
     }
+    // 0.39.54：**AI 跑完（8 步全部有结论）就自动出一次报告**。
+    // 确定性流程 `t2h:migrate` 收尾是**无条件**出报告的（0.36.0），AI 这条路以前漏了——
+    // 于是"8 步全绿、finished=true，但 .lingqu/report/ 是空的"，A1 要的"每应用一份报告"全靠人记得点。
+    if (AIP.finished && !AIP.autoReported) {
+      AIP.autoReported = true;
+      autoReportAfterAi(String(st.path || '') || migratePathValue());
+    }
+  }
+
+  /**
+   * AI 自动迁移收尾：出报告（三段式 + 风险分级），并把结论补进 ① 屏的 AI 过程消息。
+   * 幂等由 `AIP.autoReported` 保证；出报告只读落档，不采证不改工程，失败了也只留一行说明。
+   */
+  function autoReportAfterAi(path){
+    var arg = {};
+    if (path) { arg.path = path; }
+    if ($('reportPath')) { $('reportPath').value = path || ''; }   // ⑦ 屏指向同一工程
+    invoke('t2h:report', arg).then(function(r){
+      r = r || {};
+      var ok = (r.ok === true);
+      window.__autoReport = {
+        ok: ok,
+        md: String(r.md || ''),
+        html: String(r.html || ''),
+        conclusion: String(r.conclusion || ''),
+        risk: String(r.riskLabel || ''),
+        err: String(r.error || '')
+      };
+      migAiPush(ok ? 'ok' : 'err', ok
+        ? ('已自动生成迁移报告：' + String(r.md || '') + '　结论：' + String(r.conclusion || '')
+           + (r.riskLabel ? ('　风险：' + String(r.riskLabel)) : ''))
+        : ('自动出报告失败：' + String(r.error || '未知原因')));
+      logLine(ok ? 'ok' : 'err', '自动出报告 ' + (ok ? String(r.md || '') : ('失败：' + String(r.error || ''))));
+      if (ok) {
+        try { renderReport(r); } catch (e) { /* ⑦ 屏不在前台也不影响 */ }
+      }
+      reportUi(ok ? 'auto-report-ok' : 'auto-report-fail');
+    }).catch(function(e){
+      window.__autoReport = { ok: false, md: '', html: '', conclusion: '', risk: '',
+        err: String(e && e.message ? e.message : e) };
+      migAiPush('err', '自动出报告调用失败：' + (e && e.message ? e.message : e));
+      reportUi('auto-report-fail');
+    });
   }
 
   function aiPortElapsedMin(){
@@ -3671,6 +3955,8 @@ withBridge(function(tauri){
     if ($('migrateResultCard')) { $('migrateResultCard').style.display = 'none'; }
     aiPortNote('准备现场（技能 / 工程上下文 / 工具路径）…');
     AIP.started = Date.now();
+    AIP.autoReported = false;   // 新一轮开始：自动出报告要重新触发（0.39.54）
+    window.__autoReport = null;
     var budget = 40;
     invoke('t2h:autoport_start', { path: p, budget: budget, minutes: 40, scope: scope }).then(function(r){
       r = r || {};
@@ -3929,6 +4215,16 @@ withBridge(function(tauri){
   }
 
   function fillToolResult(name, content, isError) {
+    // 0.39.51：**最后一条工具错误**要在回合结束时能贴出来。现场（juCang 20:42）就是
+    // `t2h:hap` 抛 `Invalid utf8 byte sequence`，界面只显示"回合结束"，没人知道真因。
+    if (isError) {
+      CJ.lastToolErr = String(content == null ? '' : content).replace(/\s+/g, ' ').trim();
+      CJ.lastToolErrName = String(name || '');
+      // ① 屏也要看见"哪条命令挂了"（0.39.52）：成功的工具不记（右栏有），失败必须进来说一句
+      if (migAiActive()) {
+        migAiPush('err', '工具 ' + String(name || '?') + ' 失败：' + CJ.lastToolErr.slice(0, 160));
+      }
+    }
     var cards = chatBox().querySelectorAll('.tool');
     var target = null;
     for (var i = cards.length - 1; i >= 0; i--) {
@@ -4226,6 +4522,8 @@ withBridge(function(tauri){
     if (t === 'delta') {
       if (!CJ.curBubble) newAssistantTurn();
       CJ.acc += (m.text || '');
+      // ① 屏「AI 过程消息」（0.39.52）：把同一段流式增量也喂过来，迁移时不用盯着右栏
+      if (migAiActive()) { migAiDelta(m.text || ''); }
       scheduleFlush();
     } else if (t === 'tool_start') {
       addToolCard(m.name || 'tool', m.args);
@@ -4243,6 +4541,18 @@ withBridge(function(tauri){
       if (fr === 'cancelled') { finishTurn('已中断'); }
       else if (fr === 'error') { finishTurn('回合异常收尾（细节见上方工具结果）'); }
       else { finishTurn(tail.length ? ('回合结束 · ' + tail.join(' · ')) : ''); }
+      // 0.39.51（用户实测）：「回合结束 · 轮次 41 · 工具 54 · 157.5s，移植中途失败了，ai 也不反馈个信息提示吗？」
+      // 以前这里只写一句"回合结束"，**不解释为什么停**。现在把原因摊开：
+      //   ① 轮次预算用完（cjh 的 max_iterations，默认 40）——最常见；
+      //   ② 上下文/长度上限；③ 回合异常；④ 模型自己停了；
+      //   ⑤ 不管哪种，只要最后一条工具结果是错误，就把它的首行贴出来（那往往就是真因）。
+      noteTurnEnded(s, fr);
+      // ① 屏也留一行"回合结束 + 原因"（0.39.52）：不然那块 AI 消息会停在半句话上
+      migAiBreak();
+      if (migAiActive() || (window.__turnEnd && window.__turnEnd.reason)) {
+        migAiPush('mark', '回合结束' + ((window.__turnEnd && window.__turnEnd.reason)
+          ? ('：' + window.__turnEnd.reason) : '（本轮没给出结论）'));
+      }
     } else if (t === 'error') {
       finishTurn('');
       addError(cjhErrText(m), m.code);
@@ -4344,6 +4654,15 @@ withBridge(function(tauri){
       shown += 1;
     });
     if (lastAssistant) { CJ.lastReply = lastAssistant; }
+    // 0.39.49：历史是空的（新会话 / 首次打开）就保留"怎么开始"的空状态卡，别插一句
+    // 「已重建 0 条」的废话
+    if (shown === 0) {
+      ensureGreetCard();
+      CJ.historyIn = list.length;
+      CJ.historyShown = 0;
+      atBottom();
+      return;
+    }
     insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
       '<div class="small muted">↻ 已按会话历史重建对话（' + shown + ' 条）——断线期间的产出也在这里</div></div></div>'));
     // 给 ui_report 留可断言位（断线恢复到底"补回了几条"）
@@ -4822,11 +5141,17 @@ withBridge(function(tauri){
     invoke('t2h:scan', { path: p }).then(function(r){
       $('btnScan').disabled = false;
       renderScan(r);
+      logLine((r && r.error) ? 'err' : 'ok', '扫描 ' + ((window.__scan && window.__scan.path) || p)
+        + '：R=' + ((window.__scan && window.__scan.R) || 0)
+        + ' C1=' + ((window.__scan && window.__scan.C1 !== undefined) ? window.__scan.C1 : '—')
+        + ' total=' + ((window.__scan && window.__scan.total) || 0)
+        + (r && r.error ? (' 失败=' + r.error) : ''));
       reportUi('scan-manual');
     }).catch(function(e){
       $('btnScan').disabled = false;
       note.style.color = 'var(--err)';
       note.textContent = '调用失败：' + (e && e.message ? e.message : e);
+      logLine('err', '扫描调用失败：' + (e && e.message ? e.message : e));
       reportUi('scan-manual-error');
     });
   };
@@ -4917,10 +5242,15 @@ withBridge(function(tauri){
     $('depsNote').textContent = '扫描中：' + p;
     invoke('t2h:deps', { path: p }).then(function(r){
       renderDeps(r || {});
+      logLine((r && r.error) ? 'err' : 'ok', '依赖扫描：total=' + ((r && r.metrics && r.metrics.total) || 0)
+        + ' 不可用=' + ((r && r.metrics && r.metrics.unavailable) || 0)
+        + ' patch=' + ((r && r.metrics && r.metrics.patch) || 0)
+        + (r && r.error ? (' 失败=' + r.error) : ''));
       reportUi('deps-manual');
     }).catch(function(e){
       DEPS.error = e && e.message ? e.message : 'invoke error';
       renderDeps({});
+      logLine('err', '依赖扫描调用失败：' + DEPS.error);
       reportUi('deps-manual-error');
     });
   });
@@ -5069,6 +5399,20 @@ withBridge(function(tauri){
     window.__port = { applied: (r && r.applied) || 0, rules: rules.length, rulesRaw: rules, idempotent: !!(r && r.idempotent),
       auto: c.auto || 0, guide: c.guide || 0, toml: (r && r.toml) || '',
       backup: (r && r.backup) || '', error: (r && (r.outError || r.error)) || '' };
+    // 执行日志（0.39.49）：④ 屏的"实时日志"以前是写死的示例，现在把**真跑过的规则逐条**记下来
+    // （只在命令跑完时记一次：切屏会把 renderPort 再调一遍，那不该重复刷日志）
+    var perr = (r && (r.outError || r.error)) || '';
+    if (perr) {
+      logOnce('port', 'err', '规则改造失败：' + String(perr).split('\n')[0]);
+    } else if (rules.length) {
+      logOnce('port', 'cmd', '规则改造 applied=' + ((r && r.applied) || 0) + ' / 共 ' + rules.length + ' 条'
+        + '（auto ' + (c.auto || 0) + '，guide ' + (c.guide || 0) + (guidePending ? ('，待你确认 ' + guidePending) : '') + '）');
+      rules.forEach(function(it){
+        var tag = it.applied ? 'ok' : (isHuman(it) ? 'warn' : '');
+        logOnce('port', tag, (it.id || '?') + ' ' + (it.applied ? '已改' : (isHuman(it) ? '需人工判断' : '跳过'))
+          + (it.path ? (' · ' + it.path) : '') + (it.note ? (' · ' + it.note) : ''));
+      });
+    }
   }
   function lingquDecide(rule, decision){ recordDecision(rule, decision); }
   window.lingquDecide = lingquDecide;
@@ -5108,6 +5452,7 @@ withBridge(function(tauri){
     var p = ($('portPath').value || '').trim();
     if (!p) { $('portNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_SCAN_PATH）。'; return; }
     $('portNote').textContent = apply ? '应用中：' + p : '预览中：' + p;
+    LOG_ONCE.port = true;   // 只有"命令跑完"这一次才记执行日志（切屏重绘不记）
     invoke('t2h:port', { path: p, apply: apply }).then(function(r){
       renderPort(r || {});
       // 先读完决策再回投：以前 reportUi 在前，portDecided 发的是加载前的旧值
@@ -5179,6 +5524,10 @@ withBridge(function(tauri){
     });
     invoke('t2h:scan', { path: path }).then(function(r){
       renderScan(r || {});
+      logLine((r && r.error) ? 'err' : 'ok', '扫描(探针) ' + ((window.__scan && window.__scan.path) || path)
+        + '：R=' + ((window.__scan && window.__scan.R) || 0)
+        + ' total=' + ((window.__scan && window.__scan.total) || 0)
+        + (r && r.error ? (' 失败=' + r.error) : ''));
       reportUi('scan-done');
       // 五类页签逐个切一遍：每次切完回投一行（scanKind + scanRows），
       // 这样「页签真的在换数据源」也是可断言的，而不只是「命令列表画出来了」
@@ -5196,6 +5545,114 @@ withBridge(function(tauri){
   }
 
   /* ===== ⑤ 构建打包：T5-1 交叉编译 + 结构化诊断（真数据） ===== */
+  /* ===== ⑤ 屏：流水线阶段条 + 产物卡（0.39.49，全部真实数据）=====
+   * 这三块之前是写死的示例：stages 带「3m12s / 匹配 ✔ / debug」、产物卡写着
+   * 「libgrove_lib.so 4.71 MB」「entry-default-signed.hap 12.4 MB · v1.2.0」「hdc 已连接」。
+   * 它们长得跟真数据一模一样，用户自然会当成真的（AGENTS §4-94 那一课）。
+   * 现在只从本次运行结果（BUILD / HAP / SIGN / DEPLOY）渲染，没跑过就写「—」。
+   */
+  function setStage(id, valueId, state, text){
+    var el = document.getElementById(id);
+    if (el) {
+      el.className = 'stage' + (state ? ' ' + state : '');
+      var k = el.querySelector('.k i');
+      if (k) { k.className = 'dot' + (state === 'ok' ? ' ok' : (state === 'run' ? ' info' : '')); }
+    }
+    var v = document.getElementById(valueId);
+    if (v) { v.textContent = text || '—'; }
+  }
+  function mb(n){ return (n > 0) ? (Math.round(n / 1024 / 1024 * 100) / 100 + ' MB') : ''; }
+  function renderPipeline(){
+    var b = (typeof BUILD !== 'undefined' && BUILD) ? BUILD : {};
+    var h = (typeof HAP !== 'undefined' && HAP) ? HAP : {};
+    var s = (typeof SIGN !== 'undefined' && SIGN) ? SIGN : {};
+    var dp = (typeof DEPLOY !== 'undefined' && DEPLOY) ? DEPLOY : {};
+
+    if (b.exit === undefined || b.exit < 0) {
+      setStage('stBuild', 'stBuildV', '', '—');
+    } else if (b.exit === 0) {
+      setStage('stBuild', 'stBuildV', 'ok', 'exit=0 · ' + b.errors + ' err');
+    } else {
+      setStage('stBuild', 'stBuildV', 'err', 'exit=' + b.exit + ' · ' + b.errors + ' err');
+    }
+
+    if (b.assetOk === true) {
+      setStage('stAsset', 'stAssetV', 'ok', '一致（' + (b.assetMatched || 0) + '）');
+    } else if ((b.assetStale || 0) + (b.assetMissing || 0) > 0) {
+      setStage('stAsset', 'stAssetV', 'err', '不一致 · stale ' + b.assetStale + ' / missing ' + b.assetMissing);
+    } else {
+      setStage('stAsset', 'stAssetV', '', '—');
+    }
+
+    if (h.built === true) {
+      setStage('stHap', 'stHapV', 'ok', mb(h.bytes) || '已装配');
+    } else if (h.ok === false && h.built === false) {
+      setStage('stHap', 'stHapV', 'err', '装配失败');
+    } else {
+      setStage('stHap', 'stHapV', '', '—');
+    }
+
+    if (s.ok === true) {
+      setStage('stSign', 'stSignV', s.mode === 'debug' ? 'run' : 'ok', s.modeLabel || '通过');
+    } else if (s.ok === false) {
+      setStage('stSign', 'stSignV', 'err', '体检未通过');
+    } else {
+      setStage('stSign', 'stSignV', '', '—');
+    }
+
+    if (dp.started === true) {
+      setStage('stInstall', 'stInstallV', 'ok', '已启动');
+    } else if (dp.installed === true) {
+      setStage('stInstall', 'stInstallV', 'run', '已安装（未启动）');
+    } else if (dp.ok === false) {
+      setStage('stInstall', 'stInstallV', 'err', '安装失败');
+    } else {
+      setStage('stInstall', 'stInstallV', '', '—');
+    }
+  }
+  function renderArtifacts(){
+    var b = (typeof BUILD !== 'undefined' && BUILD) ? BUILD : {};
+    var h = (typeof HAP !== 'undefined' && HAP) ? HAP : {};
+    var dp = (typeof DEPLOY !== 'undefined' && DEPLOY) ? DEPLOY : {};
+    var s = (typeof SIGN !== 'undefined' && SIGN) ? SIGN : {};
+
+    var so = document.getElementById('artSo');
+    if (so) {
+      if (b.so) {
+        so.innerHTML = esc(b.so) + '<br><span class="muted">编译 exit=' + b.exit + ' · ' + b.errors + ' err / '
+          + b.warns + ' warn</span><br><span class="muted">前端指纹：</span>'
+          + (b.assetOk ? '<span style="color:var(--ok)">一致（' + (b.assetMatched || 0) + ' 个 AssetKey）</span>'
+                       : '<span style="color:var(--err)">未比对/不一致</span>');
+      } else {
+        so.innerHTML = '<span class="muted">还没跑交叉编译</span>';
+      }
+    }
+
+    var hap = document.getElementById('artHap');
+    if (hap) {
+      if (h.built === true) {
+        hap.innerHTML = (h.path ? esc(h.path) : 'entry-default-signed.hap')
+          + '<br><span class="muted">' + (mb(h.bytes) || '—') + (h.signed ? ' · 已签名' : ' · 未签名')
+          + '</span><br><span class="muted">rawfile 死资源：</span>'
+          + (h.rawfile > 0 ? '<span style="color:var(--err)">' + h.rawfile + ' 个（应清掉）</span>'
+                           : '<span style="color:var(--ok)">0</span>');
+      } else {
+        hap.innerHTML = '<span class="muted">还没装配 HAP</span>';
+      }
+    }
+
+    var dev = document.getElementById('artDev');
+    if (dev) {
+      if (dp.serial) {
+        dev.innerHTML = esc(dp.serial) + '<br><span class="muted">安装：' + (dp.installed ? '成功' : '未成功')
+          + ' · 启动：' + (dp.started ? '成功' : '未启动') + '</span><br><span class="muted">签名态：</span>'
+          + (s.modeLabel ? esc(s.modeLabel) : '<span class="muted">未体检</span>');
+      } else {
+        dev.innerHTML = '<span class="muted">还没部署（设备在线时点 ⑥ 屏「安装并启动」）</span>';
+      }
+    }
+  }
+
   var BUILD = {};   // 最近一次 t2h:build 的结果摘要（回投 ui_report 用）
   function renderBuild(r){
     r = r || {};
@@ -5282,6 +5739,35 @@ withBridge(function(tauri){
       });
     }
     $('buildDiags').innerHTML = html;
+    // 构建输出（0.39.49）：原来是写死的 7 行示例日志，现在只显示**本次真实**输出尾部
+    var tailEl = document.getElementById('buildLogTail');
+    if (tailEl) {
+      var tail = String(r.stderrTail || '').trim();
+      if (!tail && dj && dj.items && dj.items.length) {
+        var lines = [];
+        dj.items.forEach(function(it){
+          var fp = it.fingerprint || {};
+          lines.push('[' + (fp.id || '?') + '] ' + (fp.rootCause || ''));
+        });
+        tail = lines.join('\n');
+      }
+      if (tail) {
+        var rows = tail.split('\n').slice(-24);
+        tailEl.innerHTML = rows.map(function(t){ return '<div>' + esc(t) + '</div>'; }).join('');
+      } else if (ok) {
+        tailEl.innerHTML = '<div class="ok">编译通过（exit=0，' + BUILD.errors + ' err / ' + BUILD.warns + ' warn）；'
+          + '产物：' + esc(BUILD.so || '—') + '</div>';
+      } else if (r.error) {
+        tailEl.innerHTML = '<div class="err">' + esc(String(r.error).split('\n')[0]) + '</div>';
+      } else {
+        tailEl.innerHTML = '<span class="muted">还没跑交叉编译。</span>';
+      }
+    }
+    renderPipeline();
+    renderArtifacts();
+    logLine(ok ? 'ok' : 'err', '交叉编译 exit=' + BUILD.exit + ' errors=' + BUILD.errors + ' warns=' + BUILD.warns
+      + ' 指纹=' + (BUILD.assetOk ? ('一致(' + (BUILD.assetMatched || 0) + ')') : '未比对/不一致')
+      + (BUILD.fp > 0 ? (' 指纹命中=' + BUILD.fp) : '') + (BUILD.so ? (' 产物=' + BUILD.so) : ''));
   }
   function runBuild(path, verifyOnly){
     var note = $('buildNote');
@@ -5314,7 +5800,9 @@ withBridge(function(tauri){
       signed: r.signed === true,
       rawfile: (typeof ent.rawfileCount === 'number') ? ent.rawfileCount : 0,
       arm64: ent.hasArm64So === true,
-      gate: (g.passed === true) ? 'pass' : ((g.passed === false) ? 'fail' : '')
+      gate: (g.passed === true) ? 'pass' : ((g.passed === false) ? 'fail' : ''),
+      // 0.39.49：产物卡要显示真实 HAP 路径（原来那张卡写死 entry-default-signed.hap）
+      path: String(r.hapPath || '')
     };
     $('hapBuilt').textContent = HAP.built ? '成功' : '失败';
     $('hapBuilt').style.color = HAP.built ? 'var(--ok)' : 'var(--err)';
@@ -5356,6 +5844,10 @@ withBridge(function(tauri){
       }
     }
     window.__hapOhosDir = od;
+    renderPipeline();
+    renderArtifacts();
+    logLine(HAP.built ? 'ok' : 'err', 'HAP 装配 built=' + HAP.built + ' signed=' + HAP.signed
+      + ' bytes=' + HAP.bytes + ' rawfile=' + HAP.rawfile + (g.passed === false && (g.failures || []).length ? (' 闸失败=' + (g.failures[0] || '')) : ''));
   }
   function runHap(path){
     var note = $('hapNote');
@@ -5472,6 +5964,12 @@ withBridge(function(tauri){
         note.textContent = String(r.applyError);
       }
     }
+    renderPipeline();
+    renderArtifacts();
+    logLine(SIGN.ok ? 'ok' : 'err', '签名体检 ok=' + SIGN.ok + ' mode=' + (SIGN.modeLabel || '—')
+      + ' canInstall=' + SIGN.canInstall + ' releaseReady=' + SIGN.releaseReady
+      + ' 候选材料=' + SIGN.candCount + (SIGN.bundleMatch ? '' : '（包名不符）')
+      + (r.applied === true ? ' 已写回签名配置' : ''));
   }
   function runSign(path, apply){
     var note = $('signNote');
@@ -5538,6 +6036,11 @@ withBridge(function(tauri){
     note.style.color = DEPLOY.ok ? 'var(--ok)' : 'var(--err)';
     note.textContent = (r.reason || r.error || '尚未部署。') + (r.nextStep ? ('　下一步：' + r.nextStep) : '');
     if (r.error && !r.reason) { note.textContent = String(r.error).split('\n')[0]; }
+    renderPipeline();
+    renderArtifacts();
+    logLine(DEPLOY.ok ? 'ok' : 'err', '真机部署 serial=' + (DEPLOY.serial || '无') + ' installed=' + DEPLOY.installed
+      + ' started=' + DEPLOY.started + ' hilog=' + (DEPLOY.hilogOk ? ('正常(' + (r.hilogLines || 0) + '行)') : '异常')
+      + (DEPLOY.error ? (' 错误=' + String(DEPLOY.error).split('\n')[0]) : ''));
   }
   function runDeploy(path, start){
     var note = $('depNote');
@@ -5624,6 +6127,9 @@ withBridge(function(tauri){
     $('btnVerify').disabled = true;
     invoke('t2h:verify', { path: path || '', screenshot: true }).then(function(r){
       renderVerify(r || {});
+      logLine((r && r.ok) ? 'ok' : 'err', '真机验证：可用率=' + ((r && typeof r.ratePercent === 'number') ? (r.ratePercent + '%') : '—')
+        + ' 通过=' + ((r && r.pass) || 0) + ' 失败=' + ((r && r.fail) || 0) + ' 限制=' + ((r && r.limit) || 0)
+        + ' 未验证=' + ((r && r.unknown) || 0));
       reportUi('verify-done');
       autoDiag('verify');
     }).catch(function(e){
@@ -5784,7 +6290,8 @@ withBridge(function(tauri){
    * 「导出 Markdown / JSON / HTML」三个按钮走同一条命令：三份文件一起写，
    * 按钮的区别只是把哪一份的路径高亮出来（不假装"只导出一种格式"）。 */
   var REPORT = { ok: false, project: '', did: [], undone: [], need: [], stats: {},
-                 paths: {}, conclusion: '', artifacts: [], error: '' };
+                 paths: {}, conclusion: '', artifacts: [], error: '',
+                 risk: { level: '', label: '', summary: '', hi: 0, items: [] } };
 
   function reportPathValue(){
     var p = ($('reportPath') && $('reportPath').value ? $('reportPath').value : '').trim();
@@ -5815,7 +6322,15 @@ withBridge(function(tauri){
       paths: { md: String(r.md || ''), html: String(r.html || ''), json: String(r.json || '') },
       conclusion: String(r.conclusion || ''),
       artifacts: (r.artifacts && r.artifacts.length) ? r.artifacts : [],
-      error: String(r.error || '')
+      error: String(r.error || ''),
+      // 风险分级（0.39.47）：字段名与 t2h:report 的返回一一对应（riskLevel/riskItems…）
+      risk: {
+        level: String(r.riskLevel || ''),
+        label: String(r.riskLabel || ''),
+        summary: String(r.riskSummary || ''),
+        hi: (typeof r.riskHigh === 'number') ? r.riskHigh : 0,
+        items: (r.riskItems && r.riskItems.length) ? r.riskItems : []
+      }
     };
     $('rpProject').textContent = REPORT.project || '—';
     $('rpSteps').innerHTML = (typeof st.stepDone === 'number')
@@ -5836,6 +6351,26 @@ withBridge(function(tauri){
     $('rpDidN').textContent = REPORT.did.length + ' 条';
     $('rpUndoneN').textContent = REPORT.undone.length + ' 条';
     $('rpNeedN').textContent = REPORT.need.length + ' 条';
+    // 风险分级（0.39.47）：总体胶囊 + 逐条四列。级别词只认 high/mid/low 三个字面量（与后端同一套）
+    $('rpRiskSum').textContent = REPORT.risk.summary || '—';
+    $('rpRiskSum').style.color = REPORT.risk.level === 'high' ? 'var(--err)'
+      : (REPORT.risk.level === 'mid' ? 'var(--warn)' : (REPORT.risk.level ? 'var(--ok)' : ''));
+    var rkBody = $('rpRiskRows');
+    rkBody.innerHTML = '';
+    if (!REPORT.risk.items.length) {
+      rkBody.innerHTML = '<tr><td colspan="4" class="muted">没有可判定的风险项（没落档的步骤无法评估，不等于没问题）</td></tr>';
+    } else {
+      REPORT.risk.items.forEach(function(it){
+        var tr = document.createElement('tr');
+        var lv = String(it.level || 'low');
+        var lvCls = lv === 'high' ? 'lv-high' : (lv === 'mid' ? 'lv-mid' : 'lv-ok');
+        tr.innerHTML = '<td>' + esc(String(it.title || '')) + '</td>'
+          + '<td><span class="lv ' + lvCls + '">' + esc(String(it.levelLabel || '')) + '</span></td>'
+          + '<td>' + esc(String(it.impact || '')) + '</td>'
+          + '<td class="rk-act">' + esc(String(it.action || '')) + '</td>';
+        rkBody.appendChild(tr);
+      });
+    }
     $('rpTime').textContent = r.generatedAt ? ('生成于 ' + String(r.generatedAt)) : '—';
     if (REPORT.error) {
       $('rpNote').style.color = 'var(--err)';
@@ -5857,6 +6392,9 @@ withBridge(function(tauri){
       d.textContent = '· ' + String(a.label || '') + '：' + String(a.path || '');
       art.appendChild(d);
     });
+    logLine(REPORT.ok ? 'ok' : 'err', '迁移报告：' + (REPORT.conclusion || REPORT.error || '')
+      + (REPORT.risk.items.length ? (' ｜ 风险=' + (REPORT.risk.label || REPORT.risk.level) + '（' + REPORT.risk.items.length + ' 条，高 ' + (REPORT.risk.hi || 0) + '）') : '')
+      + (REPORT.paths.md ? (' ｜ ' + REPORT.paths.md) : ''));
     reportUi('report-done');
   }
 
@@ -5992,6 +6530,9 @@ withBridge(function(tauri){
     p.textContent = BATCH.paths.html
       ? ('已导出：' + BATCH.paths.md + ' ｜ ' + BATCH.paths.html + ' ｜ ' + BATCH.paths.json)
       : '';
+    logLine(BATCH.ok ? 'ok' : 'err', '迁移矩阵：样本 ' + BATCH.samples + ' 个（已验证 ' + BATCH.verified
+      + '）平均可用率 ' + (BATCH.avgRate < 0 ? '—' : (BATCH.avgRate + '%'))
+      + (BATCH.paths.md ? (' ｜ ' + BATCH.paths.md) : ''));
     reportUi('batch-done');
   }
 
@@ -6032,6 +6573,8 @@ withBridge(function(tauri){
   // 而不是让人先猜"要不要点某个按钮"。只自动跑一次，之后仍可手动刷新。
   var BATCH_AUTO = { done: 0 };
   window.__onScreen = function(name){
+    // ① 项目/环境：进屏就按落档刷新「最近项目」（0.39.49，原来那张表是写死的）
+    if (name === 'env' && typeof window.__loadRecentProjects === 'function') { window.__loadRecentProjects(); }
     if (name !== 'report' || BATCH_AUTO.done) { return; }
     BATCH_AUTO.done = 1;
     if (!$('batchSamples') || $('batchSamples').value) { return; }
@@ -6157,6 +6700,13 @@ withBridge(function(tauri){
   $('btnAgentRemove').addEventListener('click', function(){ runAgent('remove'); });
 
   /* ===== 界面自检上报 ===== */
+  // 0.39.48（AGENTS §4-107 同一课）：`reportUi` 与 `invoke` 都定义在**这一层作用域**里，
+  // 而「克隆」那组处理器在顶层 `initProjectBar` 里——外层直接调 `reportUi(...)` 会抛
+  // `ReferenceError: reportUi is not defined`，**只落 window.onerror**，调用方与 promise 都看不见。
+  // 实测后果：用户点「开始克隆」什么都不发生（那一行之后的 `invoke('t2h:git_clone')` 从未执行到）。
+  // 处置：把这两个能力挂到 window，外层用同名薄包装转进来（见文件末尾的 outer 包装）。
+  window.__reportUi = reportUi;
+  window.__invoke = invoke;
   function reportUi(tag){
     var body = document.querySelector('.body');
     var cols = body ? getComputedStyle(body).gridTemplateColumns : '?';
@@ -6360,6 +6910,8 @@ withBridge(function(tauri){
       // 启动带回上次工程（0.39.44）：saved＝记着的当前工程 / recent＝最近列表兜底 / none＝真没有
       projRestored: (typeof window !== 'undefined' && window.__projRestore) ? String(window.__projRestore.source || '') : '',
       projRestorePath: (typeof window !== 'undefined' && window.__projRestore) ? String(window.__projRestore.path || '') : '',
+      // 0.39.48：上次工程"不存在"而**没有**被带回来的那条路径（空 = 没发生这件事）
+      projRestoreSkipped: String(window.__projRestoreSkipped || ''),
       restoreFail: (typeof window !== 'undefined' && window.__restore) ? String(window.__restore.fail || '') : '',
       // 存储自检（0.39.44）：before|after + 读回的值 + 抛错名，用来判定 localStorage 能否持久化
       storeProbe: (typeof window !== 'undefined' && window.__store)
@@ -6388,6 +6940,11 @@ withBridge(function(tauri){
       pickerLastPath: (typeof PICK !== 'undefined') ? String(PICK.lastPath || '') : '',
       clonePanelOpen: !!(document.getElementById('clonePanel') && document.getElementById('clonePanel').classList.contains('open')),
       cloneUrlFilled: !!((document.getElementById('cloneUrl') || {}).value),
+      // 克隆过程是否"看得见"（0.39.48）：面板提示原文 / 是否在跑 / 克隆到哪 / 地址被拦次数
+      cloneNote: (function(){ var n = document.getElementById('cloneNote'); return n ? String(n.textContent || '') : ''; })(),
+      cloneBusy: !!(window.__cloneState && window.__cloneState.busy),
+      cloneTarget: (window.__cloneState && window.__cloneState.target) ? String(window.__cloneState.target) : '',
+      gitUrlGuard: (typeof window.__gitUrlGuard === 'number') ? window.__gitUrlGuard : 0,
       // 顶栏版面（0.39.26）：非最大化窗口下最容易坏的就是这一条 48px 的横条。
       // 判据：titlebarOverflow 必须 false（没有内容溢出把标题挤花）、
       //       projNoteLines 必须是 1（红字不许折行）、topbarH 必须等于 48。
@@ -6611,6 +7168,27 @@ withBridge(function(tauri){
       reportRows: (function(){
         return document.querySelectorAll("#rpDid div, #rpUndone div, #rpNeed div").length;
       })(),
+      // 风险分级（0.39.47）：总体级别 / 标签 / 明细条数 / 高风险条数 / 汇总句（界面到底显示了什么）
+      reportRisk: REPORT.risk.level || '',
+      reportRiskLabel: REPORT.risk.label || '',
+      reportRiskRows: (function(){ return document.querySelectorAll("#rpRiskRows tr").length; })(),
+      reportRiskHi: (typeof REPORT.risk.hi === 'number') ? REPORT.risk.hi : 0,
+      reportRiskSum: REPORT.risk.summary || '',
+      // 卡片顺序与标题（0.39.47）：用户要求"迁移矩阵显示在风险等级下面"，标题就叫「迁移矩阵」——
+      // 这两条都要能被断言，否则下次谁把卡片挪上去、把名字改回去，没人发现
+      reportOrder: (function(){
+        var rc = document.getElementById('rpRiskCard');
+        var bt = document.querySelector('.batchtable');
+        if (!rc || !bt) { return ''; }
+        return (rc.compareDocumentPosition(bt) & Node.DOCUMENT_POSITION_FOLLOWING) ? 'risk<matrix' : 'matrix<risk';
+      })(),
+      reportMatrixTitle: (function(){
+        var bt = document.querySelector('.batchtable');
+        if (!bt) { return ''; }
+        var card = bt.closest ? bt.closest('.card') : null;
+        var h = card ? card.querySelector('.card-h h3') : null;
+        return h ? String(h.textContent || '').trim() : '';
+      })(),
       // T7-3 5 样本矩阵：样本数 / 已验证数 / 平均可用率 / A1·A4 判定 / 表格行数
       batchOk: BATCH.ok === true,
       batchSamples: (typeof BATCH.samples === "number") ? BATCH.samples : 0,
@@ -6639,6 +7217,60 @@ withBridge(function(tauri){
       deployHilogOk: DEPLOY.hilogOk === true,
       deployError: DEPLOY.error || "",
       errorCount: window.__uiErrors.length,
+      // 异常原文（0.39.48）：以前只报条数，等于"知道出事了但不知道什么事"——
+      // 用户那次"点克隆没反应"现场就是 uiErr=3 却查不到原因（AGENTS §4-107 的同一课）
+      uiErrText: (window.__uiErrors || []).slice(0, 3).join(' ; ').slice(0, 300),
+      // 假数据清账（0.39.49）：`mockLeft` 必须是 0——页面上不该再有任何「占位示意」的假块；
+      // `execLogLines/execLogLast` 证明执行日志是**真记下来的**（不是写死的示例）；
+      // `pipeline` 是 ⑤ 屏五格的真实状态（idle/ok/run/err），由本次运行结果推出。
+      mockLeft: document.querySelectorAll('.placeholder, .placeholder-badge').length,
+      // 假数据回归闸（0.39.49）：把"绝不可能出现在真实界面里"的示例串列出来，扫整页文本。
+      // 只要有人把示例数据又贴回界面，`fakeLeft` 就不再是 0（这条比"靠人眼复查"靠谱）。
+      fakeLeft: (function(){
+        var bad = ['libgrove', 'ui-9f3a', 'ColorPicker.vue', 'com.grove.habittrees',
+                   'tauri/examples', '3m12s', '1m05s', '2in1 · HarmonyOS', '就绪 7 / 缺失 1'];
+        var body = document.body;
+        var txt = body ? String(body.innerText || body.textContent || '') : '';
+        var n = 0;
+        for (var i = 0; i < bad.length; i++) { if (txt.indexOf(bad[i]) >= 0) { n += 1; } }
+        return n;
+      })(),
+      // ① 屏「最近项目」：行数 + 数据来源（空 = 真的一个迁过的工程都没有，而不是没实现）
+      projRows: (typeof PROJ_LIST !== 'undefined' && PROJ_LIST) ? PROJ_LIST.rows : -1,
+      projListSrc: (typeof PROJ_LIST !== 'undefined' && PROJ_LIST) ? String(PROJ_LIST.src || '') : '',
+      projListErr: (typeof PROJ_LIST !== 'undefined' && PROJ_LIST) ? String(PROJ_LIST.err || '') : '',
+      // ① 屏「迁移过程日志」（0.39.50）：条数与最后一条原文——证明过程是真的记下来的
+      migAiLines: (typeof MIG_AI !== 'undefined' && MIG_AI) ? MIG_AI.length : 0,
+      migAiLast: (function(){
+        if (typeof MIG_AI === 'undefined' || !MIG_AI || !MIG_AI.length) { return ''; }
+        var l = MIG_AI[MIG_AI.length - 1];
+        return l.kind + ' ' + String(l.text || '').slice(0, 200);
+      })(),
+      // 回合结束的解释（0.39.51）：turnEndReason=为什么停；lastToolErr=最后一条工具报错
+      turnEndReason: (window.__turnEnd && window.__turnEnd.reason) ? String(window.__turnEnd.reason) : '',
+      lastToolErr: (window.__turnEnd && window.__turnEnd.lastErr) ? String(window.__turnEnd.lastErr) : '',
+      lastToolErrName: (window.__turnEnd && window.__turnEnd.tool) ? String(window.__turnEnd.tool) : '',
+      // AI 跑完自动出报告（0.39.54）：done/路径/结论/风险——空 = 还没触发过
+      autoReportDone: !!(window.__autoReport && window.__autoReport.ok === true),
+      autoReportPath: (window.__autoReport && window.__autoReport.md) ? String(window.__autoReport.md) : '',
+      autoReportRisk: (window.__autoReport && window.__autoReport.risk) ? String(window.__autoReport.risk) : '',
+      autoReportErr: (window.__autoReport && window.__autoReport.err) ? String(window.__autoReport.err) : '',
+      execLogLines: (typeof SESSION_LOG !== 'undefined' && SESSION_LOG) ? SESSION_LOG.length : 0,
+      execLogLast: (function(){
+        if (typeof SESSION_LOG === 'undefined' || !SESSION_LOG || !SESSION_LOG.length) { return ''; }
+        var l = SESSION_LOG[SESSION_LOG.length - 1];
+        return l.kind + ' ' + l.text;
+      })(),
+      pipeline: (function(){
+        function st(id){
+          var e = document.getElementById(id);
+          if (!e) { return 'missing'; }
+          var c = String(e.className || '').replace('stage', '').trim();
+          return c || 'idle';
+        }
+        return 'build=' + st('stBuild') + ',asset=' + st('stAsset') + ',hap=' + st('stHap')
+          + ',sign=' + st('stSign') + ',install=' + st('stInstall');
+      })(),
       // tag / ts 让落盘序列可判定（以前 tag 只进 console.log，快照之间无法区分）
       tag: String(tag || ''),
       ts: Date.now()
@@ -6679,6 +7311,75 @@ withBridge(function(tauri){
       setTimeout(function(){ setCurrentProject('E:/test/rust/m3u8dl-tauri'); }, 900);
       setTimeout(function(){ switchScreen('report'); }, 1200);
       setTimeout(function(){ reportUi('batch-auto'); }, 4500);
+      return;
+    }
+    // 克隆全流程自检（LINGQU_UI_PROBE=clone，0.39.48）：先验"地址填进工程路径会被拦"，
+    // 再走真实克隆（LINGQU_CLONE_URL 指定地址，默认公开仓库；LINGQU_CLONE_DIR 指定父目录）。
+    // 判据：gitUrlGuard=1 且 currentProject 不含 "://"（没被当工程）、cloneBusy 由 true→false、
+    //       cloneTarget 非空、cloneNote 里写着"已克隆到"、errorCount=0。
+    if (mode === 'clone') {
+      var curl = String(window.__cloneProbeUrl || 'https://gitcode.com/qq8864/juCang');
+      // 默认克隆到**仓内**的 `.lingqu/clone-probe`：探针不该往用户工作区里堆克隆副本
+      var cdir = String(window.__cloneProbeDir || '.lingqu/clone-probe');
+      setTimeout(function(){
+        if (cdir && $('cloneDir')) { $('cloneDir').value = cdir; $('cloneDir').readOnly = false; }
+        setCurrentProject(curl);      // ① 故意把地址当工程 → 应该被拦住并打开克隆面板
+      }, 1000);
+      setTimeout(function(){ reportUi('clone-url-guard'); }, 1700);
+      setTimeout(function(){
+        if ($('cloneUrl') && !String($('cloneUrl').value || '').trim() && $('cloneUrl')) { $('cloneUrl').value = curl; }
+        if ($('btnCloneGo')) { $('btnCloneGo').onclick(); }
+      }, 2600);
+      setTimeout(function(){ reportUi('clone-running'); }, 4200);
+      setTimeout(function(){ reportUi('clone-done'); }, 30000);
+      setTimeout(function(){ reportUi('clone-after'); }, 37000);
+      return;
+    }
+    // AI 过程消息自检（LINGQU_UI_PROBE=miglog，0.39.52）：喂三帧 delta（夹具文本）+ 一条工具失败，
+    // 断言 ① 屏「AI 过程消息」真的把 AI 的话显示出来了。
+    // 判据：migAiLines ≥ 2，且 migAiLast 里能查到夹具句子；errorCount=0。
+    if (mode === 'miglog') {
+      setTimeout(function(){ switchScreen('migrate'); }, 800);
+      setTimeout(function(){
+        AIP.active = true;   // 探针要让面板认为"迁移在跑"，否则 delta 不会进来
+        onFrame({ type: 'delta', text: '我先扫一遍工程，看看有哪些 Tauri 命令与前端资源。' });
+      }, 1200);
+      setTimeout(function(){
+        onFrame({ type: 'delta', text: '\n\n扫描完成：32 个单元。接下来跑依赖矩阵。' });
+      }, 1800);
+      setTimeout(function(){
+        fillToolResult('bash', 'exit code: 1 执行 t2h:hap 失败：IllegalArgumentException: Invalid utf8 byte sequence', true);
+        AIP.active = false;
+      }, 2400);
+      setTimeout(function(){ reportUi('miglog-done'); }, 3200);
+      setTimeout(function(){ reportUi('miglog-after'); }, 4000);
+      return;
+    }
+    // 自动出报告自检（LINGQU_UI_PROBE=autoreport，0.39.54）：模拟"AI 已跑完（finished=true）"，
+    // 断言页面**自己**调了 `t2h:report`——判据 autoReportDone=true、autoReportPath 非空、errorCount=0。
+    // 夹具只给状态（不跑真迁移）；报告是对**当前工程**的真实落档生成（`t2h:report` 只读落档、可反复出）。
+    if (mode === 'autoreport') {
+      setTimeout(function(){ switchScreen('migrate'); }, 800);
+      setTimeout(function(){
+        AIP.autoReported = false;
+        window.__autoReport = null;
+        renderAiPort({ ok: true, active: false, finished: true, total: 8, concludedCount: 8,
+          verdict: '全部通过（8 步）',
+          path: String((typeof PROJECT !== 'undefined' && PROJECT.path) || '') });
+      }, 1600);
+      setTimeout(function(){ reportUi('autoreport-fired'); }, 5000);
+      setTimeout(function(){ reportUi('autoreport-done'); }, 9000);
+      return;
+    }
+    // 风险分级自检（LINGQU_UI_PROBE=risk，0.39.47）：切到 ⑦ → 真出一次报告 → 回投
+    // reportRisk / reportRiskLabel / reportRiskRows / reportRiskHi / reportRiskSum。
+    // 判据：reportRisk 必须是 high|mid|low 之一且 reportRiskRows ≥ 1（有落档的工程不可能"0 条"）。
+    // 要指向某个工程：启动时给 LINGQU_REPORT_PATH（或 LINGQU_SCAN_PATH），否则沿用上次工程。
+    if (mode === 'risk') {
+      setTimeout(function(){ switchScreen('report'); }, 1100);
+      setTimeout(function(){ runReport(''); }, 1600);
+      setTimeout(function(){ reportUi('risk-generated'); }, 4200);
+      setTimeout(function(){ reportUi('risk-after'); }, 7000);
       return;
     }
     // 出站帧体检自检（LINGQU_UI_PROBE=wssend，0.39.35）：分档发大帧，看 cjh 在多大时开始
@@ -7001,9 +7702,15 @@ withBridge(function(tauri){
     }
     // ⓪ AI 自动迁移自检（0.37.0）：起一次真的 agent 循环，用 ui_report 断言
     //   aiPortDirective>0（任务书发出去了）、aiPortPolls>0（在盯落档）、toolCards>0（它真的调了工具）
-    if (mode === 'ai' || mode === 'ai-full') {
+    if (mode === 'ai' || mode === 'ai-full' || mode === 'autoport') {
       // 批量全自动实证：LINGQU_UI_PROBE=ai-full 时跑一个从没迁过的样本（scope=all）
+      // 0.39.54：新增 `autoport` 模式——工程由 `LINGQU_SCAN_PATH`（或当前工程）给，探针只负责
+      // **点真按钮**（`#btnAiPort` 的那条路径：技能/上下文/工具路径准备 → 发任务书 → 轮询落档）。
       var fullProj = (mode === 'ai-full') ? 'E:/test/rust/m3u8dl-tauri' : 'E:/test/rust/habit-tree';
+      if (mode === 'autoport') {
+        var envProj = String(window.__scanPath || '');
+        fullProj = envProj || String((typeof PROJECT !== 'undefined' && PROJECT.path) || '');
+      }
       window.__probePath = fullProj;
       setTimeout(function(){
         setCurrentProject(fullProj);   // 0.39.8：路径框只读了，探针改用「当前工程」
@@ -7093,6 +7800,8 @@ function projectRecent(){
 function rememberProject(p){
   p = String(p || '').trim();
   if (!p) { return; }
+  // 地址不是工程目录：记进"最近工程"会让下次启动又把地址当工程带回来（0.39.48）
+  if (looksLikeGitUrl(p)) { return; }
   var list = projectRecent().filter(function(x){ return x !== p; });
   list.unshift(p);
   if (list.length > 8) { list = list.slice(0, 8); }
@@ -7129,6 +7838,25 @@ function pickRestoreProject(saved, recent){
     }
   }
   return { path: '', source: 'none' };
+}
+
+/**
+ * 纯函数：这个字符串像不像 Git 地址（0.39.48；与后端 `src/git_clone.cj` 的 looksLikeGitUrl 同一口径）。
+ *
+ * 起因（用户实测）：把 `https://gitcode.com/qq8864/juCang` 填进「工程路径」后，
+ * ② 迁移画像报「扫描失败：路径不存在：https://…」——文案没错，但界面没说"地址要先克隆成目录"，
+ * 用户也就不知道克隆按钮是干嘛的。现在填地址**不再被当成工程**，而是自动打开克隆面板并把地址填进去。
+ */
+function looksLikeGitUrl(s){
+  var v = String(s === undefined || s === null ? '' : s).trim().toLowerCase();
+  if (!v) { return false; }
+  if (v.indexOf('http://') === 0 || v.indexOf('https://') === 0 ||
+      v.indexOf('ssh://') === 0 || v.indexOf('git://') === 0 || v.indexOf('file://') === 0) {
+    return true;
+  }
+  // scp 形态 git@host:org/repo：@ 必须在第一个 : 之前（`C:\work\x` 没有 @，不会误判）
+  var at = v.indexOf('@'), colon = v.indexOf(':');
+  return at > 0 && colon > at;
 }
 
 function renderProjectNote(){
@@ -7177,8 +7905,33 @@ function syncProjectEchoes(){
   renderProjectNote();
 }
 
+/* ===== 外层 → 内层桥（0.39.48）=====
+ * 这一层（顶层）拿不到上面的 `reportUi` / `invoke`（它们在另一个作用域里）。直接调用会抛
+ * `ReferenceError`，而且**只落 window.onerror** —— 界面表现就是"点了没反应"。
+ * 这两个同名包装负责转交；内层没就绪时：回投静默跳过、invoke 返回 rejected promise（不会崩）。
+ * 规矩照抄 §4-107：外层只经桥取内层能力，禁止再写裸 `reportUi/invoke` 依赖作用域巧合。
+ */
+function reportUi(tag){
+  if (typeof window.__reportUi === 'function') { window.__reportUi(tag); }
+}
+function invoke(cmd, args){
+  if (typeof window.__invoke === 'function') { return window.__invoke(cmd, args || {}); }
+  return Promise.reject(new Error('内层桥未就绪：window.__invoke'));
+}
+
 function setCurrentProject(p){
-  PROJECT.path = String(p || '').trim();
+  var v = String(p || '').trim();
+  // 地址不是目录（0.39.48）：不设工程，直接把克隆面板打开并填好地址——
+  // 用户实测的坑就是"填了地址、点了迁移画像、只得到一句路径不存在"，中间没有任何指引。
+  if (looksLikeGitUrl(v)) {
+    window.__gitUrlGuard = (window.__gitUrlGuard || 0) + 1;
+    openClonePanel(true);
+    if ($('cloneUrl')) { $('cloneUrl').value = v; }
+    cloneNote('这是 Git 地址，不是本地工程目录——点「开始克隆」（或按回车）把它拉下来，克隆完会自动设为当前工程', 'err');
+    reportUi('project-url-guard');
+    return;
+  }
+  PROJECT.path = v;
   if (PROJECT.path) { rememberProject(PROJECT.path); }
   var top = $('projPath');
   if (top) { top.value = PROJECT.path; }
@@ -7487,11 +8240,22 @@ function openClonePanel(open){
       var depth = parseInt(($('cloneDepth') && $('cloneDepth').value) || '1', 10);
       if (isNaN(depth) || depth < 0) { depth = 1; }
       btnGo.disabled = true;
-      cloneNote('正在克隆…（浅克隆 depth=' + depth + '）');
+      // 「没反应」的另一半是**没有心跳**（0.39.48）：git 的输出要等结束才回来，
+      // 慢网络下界面静悄悄几十秒，用户只能猜。这里每秒刷一次已用时长。
+      var t0 = Date.now();
+      var tick = setInterval(function(){
+        var s = Math.round((Date.now() - t0) / 1000);
+        cloneNote('正在克隆… ' + s + 's（depth=' + depth + '，克隆到 ' +
+          (dir ? dir : '工作区根') + '；网络慢时可能要几十秒）');
+      }, 1000);
+      window.__cloneState = { busy: true, note: '', target: '' };
+      cloneNote('正在克隆… 0s（depth=' + depth + '）');
       reportUi('clone-start');
       invoke('t2h:git_clone', { url: url, dir: dir, depth: depth }).then(function(r){
         r = r || {};
+        clearInterval(tick);
         btnGo.disabled = false;
+        window.__cloneState = { busy: false, note: String(r.error || ''), target: String(r.target || '') };
         if (!r.ok) {
           cloneNote('克隆失败：' + (r.error || '未知错误'), 'err');
           reportUi('clone-fail');
@@ -7500,14 +8264,27 @@ function openClonePanel(open){
         $('cloneUrl').value = '';
         $('cloneDir').value = '';
         setCurrentProject(r.target);
-        cloneNote('已克隆到 ' + r.target + '（' + (r.hint || '') + '）', 'ok');
+        // 说清三件事：克隆到哪了、像不像 Tauri 工程、下一步点哪（用户原来"不知道有没有成功"）
+        cloneNote('已克隆到 ' + r.target + '（' + (r.hint || '') + '）——已设为当前工程，'
+          + '现在可以去 ② 迁移画像点「重新扫描」', 'ok');
         reportUi('clone-ok');
       }).catch(function(e){
+        clearInterval(tick);
         btnGo.disabled = false;
+        window.__cloneState = { busy: false, note: String(e && e.message ? e.message : e), target: '' };
         cloneNote('克隆失败：' + (e && e.message ? e.message : e), 'err');
         reportUi('clone-fail');
       });
     };
+    // 回车 = 开始克隆（0.39.48）：用户实测"输入地址后没反应"，一半原因就是按了回车没人接管
+    if ($('cloneUrl')) {
+      $('cloneUrl').onkeydown = function(ev){
+        if (ev && (ev.key === 'Enter' || ev.keyCode === 13)) {
+          if (ev.preventDefault) { ev.preventDefault(); }
+          btnGo.onclick();
+        }
+      };
+    }
   }
   if (btnRecent) {
     btnRecent.onclick = function(){

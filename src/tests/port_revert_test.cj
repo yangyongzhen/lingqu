@@ -19,13 +19,16 @@ public func testRevertPairsCoverAllAppliedFiles(): Unit {
     // 而 revert 还在找旧路径 .lingqu/port/<工程>-Cargo.toml.bak → 回滚永远报"没有备份"。
     // 这条用例锁的是「映射表本身」，命令层只需按表做 IO，不会再各写一份路径。
     let pairs = revertPairs()
-    @Assert(pairs.size, 5)
+    // 0.39.53：R2-PORT-015 也会改工程文件（gen/ohos/entry/hvigorfile.ts），回滚表跟着变 6 条。
+    // 这条断言的作用就是"改了文件却没进回滚表"时当场报红（§4-33）。
+    @Assert(pairs.size, 6)
 
     var cargoRel = "unset"
     var sawToolchain = false
     var sawConfig = false
     var sawLib = false
     var sawIndex = false
+    var sawHvigor = false
     for (p in pairs) {
         if (p.backupFile == BAK_CARGO) {
             cargoRel = p.relTarget
@@ -42,6 +45,9 @@ public func testRevertPairsCoverAllAppliedFiles(): Unit {
         if (p.backupFile == BAK_INDEX && p.relTarget == "index.html") {
             sawIndex = true
         }
+        if (p.backupFile == BAK_HVIGORFILE && p.relTarget == "src-tauri/gen/ohos/entry/hvigorfile.ts") {
+            sawHvigor = true
+        }
     }
     // Cargo.toml 的落点由命令层用 cargoTomlPathOf 解析（可能在 src-tauri/ 也可能在根）
     @Assert(cargoRel, "")
@@ -49,6 +55,7 @@ public func testRevertPairsCoverAllAppliedFiles(): Unit {
     @Assert(sawConfig, true)
     @Assert(sawLib, true)
     @Assert(sawIndex, true)
+    @Assert(sawHvigor, true)
 }
 
 @Test

@@ -183,11 +183,74 @@ public func hapNameIn(line: String): String {
     }
 }
 
+/**
+ * 逐字节把命令行输出转成文本，**非法字节换成 `?`，绝不抛异常**（0.39.51）。
+ *
+ * 为什么必须有它（实测事故，2026-11-01 20:42，juCang）：
+ *   agent 跑 `t2h:hap` → `IllegalArgumentException: Invalid utf8 byte sequence` → 落档写成
+ *   「HAP 0 字节 / arm64 条目 0」→ 整条迁移停在那里，而 agent 那一轮的轮次预算（40）刚好用完，
+ *   于是界面只剩一句「回合结束 · 轮次 41」。
+ *   罪魁是 `stripAnsi` 里 `out += String.fromUtf8([bytes[i]])`：**中文一个字节不是合法 UTF-8**，
+ *   hvigor / ohpm / cmd 的输出里中文与 GBK 段都很常见，一碰就炸。
+ * 纪律：`String.fromUtf8` 只对整个**合法序列**用；逐字节一律走这里（AGENTS §4-41 / §4-62）。
+ */
+public func lenientUtf8(bytes: Array<Byte>): String {
+    let out = ArrayList<Byte>()
+    var i: Int64 = 0
+    while (i < bytes.size) {
+        let b = Int64(bytes[i])
+        var need: Int64 = 0
+        if (b < 128) {
+            // ASCII：原样
+            out.add(bytes[i])
+            i += 1
+            continue
+        } else if (b >= 0xC2 && b <= 0xDF) {
+            need = 1
+        } else if (b >= 0xE0 && b <= 0xEF) {
+            need = 2
+        } else if (b >= 0xF0 && b <= 0xF4) {
+            need = 3
+        } else {
+            // 0x80..0xC1（野续字节）与 0xF5..0xFF：不可能是合法首字节
+            need = -1
+        }
+        var ok = need > 0
+        if (ok) {
+            var k: Int64 = 1
+            while (k <= need) {
+                if (i + k >= bytes.size) {
+                    ok = false
+                    break
+                }
+                let c = Int64(bytes[i + k])
+                if (c < 128 || c > 191) {
+                    ok = false
+                    break
+                }
+                k += 1
+            }
+        }
+        if (!ok) {
+            out.add(UInt8(63))   // '?'
+            i += 1
+            continue
+        }
+        var k2: Int64 = 0
+        while (k2 <= need) {
+            out.add(bytes[i + k2])
+            k2 += 1
+        }
+        i += need + 1
+    }
+    return String.fromUtf8(out.toArray())
+}
+
 /** 去掉 ANSI 颜色转义（hvigor 输出带色，不剥会让 startsWith 判断失效） */
 public func stripAnsi(s: String): String {
-    var out = ""
-    var i: Int64 = 0
     let bytes = s.toArray()
+    let out = ArrayList<Byte>()
+    var i: Int64 = 0
     while (i < bytes.size) {
         if (bytes[i] == 27 && i + 1 < bytes.size && bytes[i + 1] == 91) {
             // ESC [ ... m  → 跳过直到 'm'
@@ -202,10 +265,10 @@ public func stripAnsi(s: String): String {
             i = if (j < bytes.size) { j + 1 } else { bytes.size }
             continue
         }
-        out += String.fromUtf8([bytes[i]])
+        out.add(bytes[i])
         i += 1
     }
-    return out
+    return lenientUtf8(out.toArray())
 }
 
 /** HAP（zip）里的关键条目扫描结果 */
