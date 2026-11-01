@@ -3344,7 +3344,9 @@ withBridge(function(tauri){
   }
 
   function pollAiPort(){
-    invoke('t2h:autoport_status', { path: migratePathValue() }).then(function(st){
+    // activity：页面收到的 WS 帧总数（含 delta）。agent 长时间"只思考/只流式回话、不调工具"时，
+    // 落档和轨迹都不动，但帧一直在来 —— 带上它，后端就不会把"正在干活"判成"在绕圈"（0.39.34）
+    invoke('t2h:autoport_status', { path: migratePathValue(), activity: (CJ.frames || 0) }).then(function(st){
       st = st || {};
       renderAiPort(st);
       // 停滞/超时：只提示，不自动停——停不停由人决定（手刹在人这边）

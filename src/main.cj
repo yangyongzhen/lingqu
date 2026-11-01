@@ -4645,7 +4645,13 @@ public class AutoPortStatusCommand <: CommandHandler {
         }
         // 停滞判定要带上 agent 活动量：分钟级交叉编译期间落档当然不动，
         // 只看落档会把"正在干活"误判成"在绕圈"（0.39.7 实测踩到）
-        let sig = autoportSnapshotWith(rows, agentTraceLines(path))
+        //
+        // 0.39.34 再加一路活动量：**页面收到的 WS 帧数**（`activity`）。
+        // 实测踩到的假停滞是这样的：agent 连续 30+ 秒都在"思考/流式回话"、一个工具都不调，
+        // 落档不动、轨迹也不动 → 20 次轮询（3s × 20 = 60s）后判「AI 在绕圈」，
+        // 可它其实一直在吐 delta 帧（界面在动）。页面把帧数带进来，这一整类误判就没了。
+        let activity = argInt(args, "activity", 0)
+        let sig = autoportSnapshotWith(rows, agentTraceLines(path)) + "|a=${activity}"
         // 但**单个长工具调用期间**连轨迹都不动（tool / tool_done 各一条）——
         // 这时按"正在干活"处理：不判停滞，并清空已攒的快照（否则工具一结束就立刻误报）
         let busy = agentTraceBusy(path)
@@ -4722,31 +4728,9 @@ public class AgentTraceCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
+        // 注意：这里以前误粘了 `SignCommand` 的 `--login`（AGC 登录）分支——
+        // 一旦机器上导出了 `LINGQU_SIGN_LOGIN=1`，页面每记一条轨迹就会去跑一次登录。
+        // 0.39.34 删除。轨迹命令只做一件事：追加一行。
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
