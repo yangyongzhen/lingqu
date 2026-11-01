@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.36**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.37**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -251,6 +251,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 95 | 扫完当前工程后，顶栏胶囊仍说「未扫描（旁边的数字属于上一个工程）」 | **同一路径的两种写法**：后端回投的是 `E:\test\rust\m3u8dl-tauri`，输入框/`localStorage` 记住的是 `E:/test/rust/m3u8dl-tauri`，直接用 `===` 比较 → 判成两个工程。**路径比较一律先归一化**（`normPathKey()`：`\`→`/`、去尾分隔符、Windows 盘符与整串小写——Windows 路径大小写不敏感）。这条适用于所有"落档里的路径 vs 界面里的路径"（§4-26 是取末段时的同族坑，§4-75 是读档时的同族坑） |
 | 96 | 「5 样本矩阵」把**迁完的工程显示成未跑**（m3u8dl-tauri 可用率 100% 却写「未跑 / 25%」），用户也就找不到"移植成功的项目在哪看" | 两条叠在一起：① `batch_feed.cj` 的 7 处读档**全是相对当前工作目录**的 `.lingqu/...`（§4-75 那族的第三处漏网，改 `report_feed` 时没 grep 全）；② 自动发现样本时**只捡工程名、不带路径**，天然定位不到样本自己的落档。处置：读档统一走 `readSampleLq(projPath, sampleLqRel(步骤, 名))`（内部 `resolveLqPath`），发现改成扫候选根（`LINGQU_SAMPLES_ROOT` / `LINGQU_WORKSPACES` / `~/lingqu-workspaces`）里**带 `.lingqu` 的目录**并带回路径。**判据：凡"多工程并排"的功能，每一行都必须能说出自己的工程路径**（现在 `title` 就挂着）——说不出来就一定会读错档 |
 | 101 | 接续旧会话时服务商回 400：`The reasoning_content in the thinking mode must be passed back to the API` | **思考模式的模型要求把上一轮 assistant 的 `reasoning_content` 原样回传**，而 cjh 的 `ChatMessage` 只有 role/content/toolCalls、`SessionStore` 也只存 role/content/name/tool_call_id —— **reasoning 从来没落库**。所以：新会话一定正常，**接续旧会话（resume / 重启后恢复）必然 400**。判据：报错文案里出现 `reasoning_content`；`服务商返回错误：` 这句出自 **cjh 自带网页 UI**（`static_assets.cj:1116`），不是灵渠的文案（看到它就说明当时在浏览器里开着 `127.0.0.1:8765`）。本仓处置：**识别到该 400 自动 `new_session`**（界面历史仍保留），别让人被隐性规则卡死；根治要 cjh 侧 `ChatMessage` 加 reasoning + 落盘 + 回传（`docs/上游回馈-cjh.md` 第 10 条，0.39.36 实测） |
+| 102 | 聊天窗口被工具输出刷屏：`bash / 完成 / exit code: 0 / stdout: … {"id":"cjh",…,"ok":true,…}` 一串串铺满，用户问"这一大堆是什么？看着刷屏不好看，也不是什么关键信息" | **工具的中间产物不等于结论**：agent 一个回合能调十几次工具，把每次的参数 + 最多 2000 字 stdout 全铺进聊天区，就把"模型说了什么"冲没了。界面规矩：① 工具卡片**默认折叠**，标题行只留「工具 · 耗时 · exit · 行数」，点标题行展开；② **失败自动展开**（错误必须第一眼看见），成功才折叠；③ 全文留在 DOM 的展开区（**不是删掉**），随时可点开/复制；④ 断线重连的 `history_messages` 回放走同一形态。断言用 `ui_report` 的 `toolCardsOpen / toolResultChars`：1162 字的输出、展开卡 0 张才算对（0.39.37 实测：success→0、error→1、点击后→0） |
 ---
 
 ## 5. 文档与提交

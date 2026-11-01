@@ -5,6 +5,49 @@
 
 ---
 
+## [0.39.37] - 2026-11-02
+
+**主题**：工具调用不再刷屏 —— 卡片**默认折叠**，标题行只留「工具 · 耗时 · exit · 行数」，点开看全文。
+
+### 现象（用户实测）
+
+> 聊天窗口里显示 `bash / 完成 / exit code: 0 / stdout: … {"id":"cjh","label":"AI 引擎 cjh（内置）","ok":true …}`，
+> 一大堆这些信息是什么呀？看着刷屏不好看，且也不是什么关键信息。
+
+### 根因
+
+`fillToolResult` 把工具输出**整块铺在聊天区**（最多 2000 字），`addToolCard` 还把参数 JSON 全量放在卡面上。
+agent 一个回合调十几次工具时，这些**中间产物**就把"模型说了什么"冲得看不见了。
+
+### 处置
+
+- `assets/ui/index.html`：
+  - 工具卡片改为**默认折叠**（`.tool .tb{display:none}`，`.tool.open .tb{display:block}`），
+    标题行 = 状态点 + 工具名 + **摘要** + 状态 + 折叠箭头；点标题行展开/收起。
+  - 摘要由纯函数 `toolSummary()` 从输出里取关键信息：`exit code: 0` / `exit=0` / `[exit 1]` 的退出码、
+    行数、字数；执行中则显示 `briefArgs()` 给的一行命令简介（`cat /tmp/env.json`，>46 字截断）。
+  - **失败的调用自动展开**（错误必须第一眼看见），成功的一律折叠；`title` 里带首个非空行预览。
+  - 展开区上限从 2000 字提到 8000 字（折叠后不再占版面，全文可以留得更全），超出标注"共 N 字，已截断"。
+  - 断线重连的 `history_messages` 回放（`renderHistory`）同样改成折叠卡片，不再把 19 条工具输出铺一行行。
+- `t2h:ui_report` 新增 `toolCardsOpen`（当前展开几张）/ `toolResultChars`（这轮工具输出总字数），
+  白名单两处（`index.html` 的 `reportUi` + `src/main.cj` 的 `o.put`）同时加，见 AGENTS §4-60。
+- `LINGQU_UI_PROBE=toolrun` 扩了三条断言：成功长输出 → `toolCardsOpen=0`；失败 → `=1`（自动展开）；
+  再点击标题行 → `=0`（交互可用）。
+
+### 证据（`LINGQU_UI_PROBE=toolrun` 实跑）
+
+| tag | toolCards | toolCardsOpen | toolResultChars | 判据 |
+|---|---|---|---|---|
+| `tool-run-busy` | 1 | 0 | 0 | 心跳仍在（`aiToolRunning=1 / elapsed=4 / ⏳ bash · 3s`） |
+| `tool-collapsed` | 2 | **0** | **1162** | 1162 字的输出，展开卡 0 张 |
+| `tool-error-open` | 3 | **1** | 1185 | 失败卡片自动展开，仅 1 张 |
+| `tool-click-toggle` | 3 | **0** | 1185 | 点标题行后收起 |
+
+### 说明
+
+- **信息没删，只是默认不占版面**：全文仍在 DOM 里的展开区，随时点开、可复制。
+- 使用者真正要读的是模型的结论（assistant 气泡），工具输出只是可查的细节。
+
 ## [0.39.36] - 2026-11-02
 
 **主题**：接续旧会话被 DeepSeek 思考模式拒（400 `reasoning_content`）→ 我们**自动开新会话**，不再把人卡死。

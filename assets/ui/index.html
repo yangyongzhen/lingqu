@@ -430,10 +430,18 @@ body.ai-hidden .dock{display:none}
 .composer .autorow input{accent-color:var(--acc);margin:0}
 .composer .autorow .on{color:var(--ok)}
 .tool{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
-.tool .th{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:11.5px;border-bottom:1px solid var(--line)}
+.tool .th{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:11.5px;cursor:pointer;user-select:none}
 .tool .th .nm{font-family:var(--mono);font-weight:600;color:var(--acc)}
-.tool .th .st{margin-left:auto;font-size:10.5px;color:var(--ok)}
-.tool .tb{padding:9px 10px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;color:var(--dim);line-height:1.75}
+.tool .th .st{margin-left:8px;font-size:10.5px;color:var(--ok);white-space:nowrap}
+/* 工具卡片默认**折叠**（0.39.37）：一次 bash 调用原本会把命令 + 最多 2000 字 stdout 全铺在聊天区，
+   连调十几次就把对话刷没了 —— 而且那些内容对使用者不是关键信息（要查的时候再点开）。
+   折叠后标题行只留「工具名 · 状态 · 耗时 · 输出行数 · exit」，点标题行展开看全文。 */
+.tool .th .sum{margin-left:auto;font-size:10.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52%;text-align:right}
+.tool .th .cs{font-size:9px;color:var(--dim);transform:rotate(-90deg);transition:transform .12s}
+.tool.open .th .cs{transform:rotate(0deg)}
+.tool .tb{display:none;padding:9px 10px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;color:var(--dim);line-height:1.75;border-top:1px solid var(--line)}
+.tool.open .tb{display:block}
+.tool .tb .argl{color:var(--acc);opacity:.75}
 .tool .st.err{color:var(--err)}
 
 /* 危险操作审批卡（cjh 的 approval_request） */
@@ -2742,6 +2750,9 @@ withBridge(function(tauri){
   var CJ = {
     port: 0, up: false, connecting: false, retry: 0, timer: null, session: '',
     frames: 0, toolCards: 0, approvals: 0, lastType: '', lastError: '',
+    // 工具卡片折叠留痕（0.39.37）：toolCardsOpen = 当前展开的卡片数（成功调用应保持 0），
+    // toolResultChars = 这轮工具输出总字数（证明"输出体量"与"占用版面"不再是同一个数）
+    toolCardsOpen: 0, toolResultChars: 0,
     acc: '', curBubble: null, flushTimer: null, curApproval: null,
     // 中止来源留痕（0.39.8）：0.39.7 端到端跑出现「agent 被 interrupt 但不知谁按的」，
     // 现在每处 abort 都标来源，随 ui_report 回投，别再靠猜（是哪个入口按的）
@@ -3499,6 +3510,14 @@ withBridge(function(tauri){
     document.body.removeChild(ta);
   }
   chatBox().addEventListener('click', function (e) {
+    // 工具卡片折叠/展开（0.39.37）：点标题行即可，全文始终在 DOM 里（不丢证据）
+    var tgt = e.target;
+    var th = (tgt && tgt.closest) ? tgt.closest('.tool .th') : null;
+    if (th) {
+      var card = th.closest('.tool');
+      setToolOpen(card, !(card.getAttribute('data-open') === '1'));
+      return;
+    }
     var b = e.target && e.target.closest ? e.target.closest('.code-copy') : null;
     if (!b) { return; }
     copyText(MD_CODES[b.getAttribute('data-cid')] || '');
@@ -3558,12 +3577,72 @@ withBridge(function(tauri){
     renderToolBusy();
   }
 
+  /* ---------- 工具结果摘要（0.39.37 纯函数）----------
+   * 现象（用户实测）：一次 bash 调用就把「命令 + 最多 2000 字 stdout」整块铺进聊天区，
+   * 连调十几次后对话被冲得看不见，而且 `{"id":"cjh","label":"AI 引擎 cjh（内置）","ok":true,…}`
+   * 这类内容是**工具自己的中间产物**，不是使用者要读的结论。
+   * 处置：卡片默认折叠，标题行只留"关键信息"——状态 · 耗时 · exit · 输出行数/体量；
+   * 全文仍保留在展开区（不是删掉，是**默认不占版面**），点标题行随时展开。
+   * 判据只认 cjh/bash 实际会写出来的形态：`exit code: 0`、`exit=0`、`[exit 1]`。
+   */
+  function toolSummary(content) {
+    var text = String(content == null ? '' : content);
+    var lines = text.length ? text.split('\n').length : 0;
+    var m = /(?:exit code:?|exit\s*[=:]\s*|\bexit\s+)(-?\d+)/i.exec(text);
+    var head = '';
+    var rows = text.split('\n');
+    for (var i = 0; i < rows.length; i++) {
+      var t = rows[i].replace(/\s+/g, ' ').trim();
+      if (t) { head = t; break; }
+    }
+    if (head.length > 60) { head = head.slice(0, 60) + '…'; }
+    return { exit: m ? m[1] : '', lines: lines, chars: text.length, head: head };
+  }
+
+  /** 折叠标题行右侧那串摘要：`1.2s · exit=0 · 77 行`（窄栏里要短，细节放 title） */
+  function toolSumText(content, elapsedS) {
+    var s = toolSummary(content);
+    var bits = [];
+    if (elapsedS > 0) { bits.push(elapsedS + 's'); }
+    if (s.exit !== '') { bits.push('exit=' + s.exit); }
+    if (s.chars === 0) { bits.push('无输出'); }
+    else if (s.lines > 1) { bits.push(s.lines + ' 行'); }
+    else if (s.chars > 60) { bits.push((Math.round(s.chars / 102) / 10) + 'k 字'); }
+    return bits.join(' · ');
+  }
+
+  function setToolOpen(card, open) {
+    if (!card) { return; }
+    card.setAttribute('data-open', open ? '1' : '0');
+    if (open) { card.classList.add('open'); } else { card.classList.remove('open'); }
+    CJ.toolCardsOpen = chatBox().querySelectorAll('.tool[data-open="1"]').length;
+  }
+
+  /** 参数的一行简介（0.39.37）：执行中时标题行显示「跑的是什么」，比一整块 JSON 好读 */
+  function briefArgs(args, argsText) {
+    var s = '';
+    try {
+      if (args && typeof args === 'object' && typeof args.command === 'string') { s = args.command; }
+      else if (typeof args === 'string') { s = args; }
+      else { s = String(argsText || ''); }
+    } catch (e) { s = String(argsText || ''); }
+    s = s.replace(/\s+/g, ' ').trim();
+    return s.length > 46 ? (s.slice(0, 46) + '…') : s;
+  }
+
   function addToolCard(name, args) {
     var argsText = '';
     try { argsText = (typeof args === 'string') ? args : JSON.stringify(args || {}); } catch (e) { argsText = ''; }
-    var card = mkEl('<div class="tool"><div class="th"><span class="dot warn"></span>' +
-      '<span class="nm">' + esc(name) + '</span><span class="st">执行中…</span></div>' +
-      '<div class="tb">' + esc(argsText) + '</div></div>');
+    var card = mkEl('<div class="tool" data-open="0">' +
+      '<div class="th" title="点这里展开/收起工具输出"><span class="dot warn"></span>' +
+      '<span class="nm">' + esc(name) + '</span><span class="sum">' + esc(briefArgs(args, argsText)) + '</span>' +
+      '<span class="st">执行中…</span><span class="cs">◀</span></div>' +
+      '<div class="tb"></div></div>');
+    var head = card.querySelector('.th');
+    if (head) { head.setAttribute('title', '参数：' + argsText.slice(0, 300) + '\n（点这一行展开/收起输出）'); }
+    var tb = card.querySelector('.tb');
+    if (tb) { tb.innerHTML = '<div class="argl">' + esc(argsText.slice(0, 600)) + '</div>'; }
+    card.setAttribute('data-args', argsText.slice(0, 600));
     var wrap = mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
       '<div class="who">工具调用 · ' + now() + '</div></div></div>');
     wrap.querySelector('.b').appendChild(card);
@@ -3585,17 +3664,36 @@ withBridge(function(tauri){
       if (nm.textContent === name && running) { target = cards[i]; break; }
     }
     if (!target) { stopToolRun(true); return; }
+    var elapsedS = toolElapsedSec();
+    var text = String(content == null ? '' : content);
+    var sum = toolSummary(text);
+    CJ.toolResultChars = (CJ.toolResultChars || 0) + text.length;   // 回投用：这轮工具输出有多少字
+
     var st2 = target.querySelector('.st');
     if (st2) {
       st2.textContent = isError ? '失败' : '完成';
       st2.className = 'st' + (isError ? ' err' : '');
     }
+    var sumEl = target.querySelector('.sum');
+    if (sumEl) { sumEl.textContent = toolSumText(text, elapsedS); }
+    var head = target.querySelector('.th');
+    if (head) {
+      head.title = (sum.head ? ('首个非空行：' + sum.head + '\n') : '') +
+        '输出 ' + sum.chars + ' 字 / ' + sum.lines + ' 行' +
+        (sum.exit !== '' ? ('，exit=' + sum.exit) : '') + '\n（点这一行展开/收起全文）';
+      if (isError) { var d = head.querySelector('.dot'); if (d) { d.className = 'dot err'; } }
+      else { var d2 = head.querySelector('.dot'); if (d2) { d2.className = 'dot ok'; } }
+    }
     stopToolRun(true);   // 收表（卡片状态已在上一步写定）
     var tb = target.querySelector('.tb');
     if (tb) {
-      var text = String(content == null ? '' : content);
-      tb.textContent = text.length > 2000 ? text.slice(0, 2000) + '\n…（已截断显示）' : text;
+      var argText = target.getAttribute('data-args') || '';
+      var shown = text.length > 8000 ? text.slice(0, 8000) + '\n…（共 ' + text.length + ' 字，已截断显示）' : text;
+      tb.innerHTML = (argText ? '<div class="argl">' + esc(argText) + '</div>' : '') +
+        '<div>' + esc(shown || '（无输出）') + '</div>';
     }
+    // 失败要第一眼看见（默认折叠会让错误被藏起来）；成功一律折叠
+    setToolOpen(target, !!isError);
     atBottom();
   }
 
@@ -3900,12 +3998,19 @@ withBridge(function(tauri){
       var text = String(m && m.content || '');
       if (role === 'system') { return; }
       if (role === 'tool') {
+        // 历史回放也走**折叠**（0.39.37）：以前把输出压成 160 字一句铺开，
+        // 十几条工具结果照样把"断线期间到底聊了什么"冲掉；现在与其他工具卡片同一形态。
         var nm = String(m.name || 'tool');
-        var one = text.replace(/\s+/g, ' ').slice(0, 160);
+        var hs = toolSummary(text);
         insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
-          '<div class="tool"><div class="th"><span class="dot ok"></span>' +
-          '<span class="nm">' + esc(nm) + '</span><span class="st">已完成</span></div>' +
-          '<div class="tb">' + esc(one) + (text.length > 160 ? ' …' : '') + '</div></div></div></div>'));
+          '<div class="tool" data-open="0">' +
+          '<div class="th" title="点这里展开/收起工具输出"><span class="dot ok"></span>' +
+          '<span class="nm">' + esc(nm) + '</span>' +
+          '<span class="sum">' + esc(toolSumText(text, 0)) + '</span>' +
+          '<span class="st">已完成</span><span class="cs">◀</span></div>' +
+          '<div class="tb">' + esc(text.length > 8000 ? text.slice(0, 8000) + '…（已截断）' : text) + '</div>' +
+          '</div></div></div>'));
+        CJ.toolResultChars = (CJ.toolResultChars || 0) + hs.chars;
         shown += 1;
         return;
       }
@@ -5732,6 +5837,9 @@ withBridge(function(tauri){
       wsState: CJ.up ? 'connected' : (CJ.connecting ? 'connecting' : 'closed'),
       frames: CJ.frames,
       toolCards: CJ.toolCards,
+      // 工具卡片折叠（0.39.37）：成功的工具调用不该占版面，但输出不能丢
+      toolCardsOpen: CJ.toolCardsOpen || 0,
+      toolResultChars: CJ.toolResultChars || 0,
       approvals: CJ.approvals,
       lastFrameType: CJ.lastType,
       replyPreview: (CJ.lastReply || '').slice(0, 120),
@@ -6198,6 +6306,28 @@ withBridge(function(tauri){
       setTimeout(function(){ reportUi('tool-run-busy'); }, 5200);
       setTimeout(function(){ onFrame({ type: 'tool_result', name: 'bash', content: 'done' }); }, 5800);
       setTimeout(function(){ reportUi('tool-run-idle'); }, 6600);
+      // 折叠自检（0.39.37）：喂一段**真形态**的 bash 长输出（含 exit code 与 20 行内容），
+      // 断言 toolCardsOpen 仍是 0（成功的工具调用不许占版面）；再喂一次失败结果，
+      // 断言 toolCardsOpen=1（失败要第一眼看见），最后用真实的点击事件收起它（证明交互可用）。
+      var longOut = 'exit code: 0\n' + Array.apply(null, Array(20)).map(function(_, i){
+        return '  {"id":"cjh","label":"AI 引擎 cjh（内置）","ok":true,"row":' + i + '}';
+      }).join('\n');
+      setTimeout(function(){
+        onFrame({ type: 'tool_start', name: 'bash', args: { command: 'cat /tmp/env.json' } });
+        onFrame({ type: 'tool_result', name: 'bash', content: longOut, is_error: false });
+        reportUi('tool-collapsed');
+      }, 7400);
+      setTimeout(function(){
+        onFrame({ type: 'tool_start', name: 'bash', args: { command: 'false' } });
+        onFrame({ type: 'tool_result', name: 'bash', content: 'exit code: 1\nbash: boom', is_error: true });
+        reportUi('tool-error-open');
+      }, 8200);
+      setTimeout(function(){
+        var heads = chatBox().querySelectorAll('.tool .th');
+        var last = heads.length ? heads[heads.length - 1] : null;
+        if (last) { last.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
+        reportUi('tool-click-toggle');
+      }, 9000);
       return;
     }
     // 鸿蒙工程根自检（LINGQU_UI_PROBE=ohos，0.39.31）：真跑一次 hap（hvigor 增量），

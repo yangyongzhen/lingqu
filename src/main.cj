@@ -1364,6 +1364,10 @@ public class UiReportCommand <: CommandHandler {
         o.put("cjhHome", JsonString(argStr(args, "cjhHome", "")))
         o.put("frames", JsonInt(argInt(args, "frames", 0)))
         o.put("toolCards", JsonInt(argInt(args, "toolCards", 0)))
+        // 工具卡片折叠证据（0.39.37）：open=当前展开几张（成功调用应 0，失败自动展开），
+        // chars=这轮工具输出总字数（说明"输出体量"与"占用版面"已经解耦）
+        o.put("toolCardsOpen", JsonInt(argInt(args, "toolCardsOpen", 0)))
+        o.put("toolResultChars", JsonInt(argInt(args, "toolResultChars", 0)))
         o.put("approvals", JsonInt(argInt(args, "approvals", 0)))
         o.put("lastFrameType", JsonString(argStr(args, "lastFrameType", "")))
         o.put("replyPreview", JsonString(argStr(args, "replyPreview", "")))
