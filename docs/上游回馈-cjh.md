@@ -323,6 +323,37 @@ code=ws_read_failed
 并把出站帧体检回投 `ui_report`：`wsSendCount / wsLastSendBytes / wsLastSendType /
 wsErrCodes / wsLastErrCode / wsTruncated`，下次同类问题一句话就能定位。
 
+---
+
+## 10. 接续旧会话时 DeepSeek 思考模式报 400：必须回传 `reasoning_content`
+
+**现象**（用户实测，2026-11-01）
+
+```
+❌ 服务商返回错误：服务商拒绝了本次请求（Exception: HTTP 400:
+   {"error":{"message":"The `reasoning_content` in the thinking mode must be passed back to the API.",
+             "type":"invalid_request_error"}}）
+```
+
+**根因（cjh 侧两处口径缺失）**
+
+1. `ChatMessage`（agent 层）只有 `role / content / toolCalls`，**没有 reasoning 字段**；
+   `src/agent/loop.cj:852/987` 把模型回的 assistant 消息入历史时不带 `reasoning_content`；
+2. `~/.cjh/sessions/*.json` 的落盘（`SessionStore`）也只存 role/content/name/tool_call_id
+   （`src/gateway/channel.cj:1149` 的历史帧同理），**reasoning 根本没落库**。
+   ⇒ 只要**接续旧会话**（`resume_session` / 进程重启后恢复），回传的历史就缺该字段 →
+   DeepSeek 思考模式直接 400；全新会话不受影响。
+
+**建议**
+
+1. `ChatMessage` 增加 `reasoning: String`（空串=无），入历史与回传时都带上 `reasoning_content`；
+2. `SessionStore` 落盘/读取保持一致（老档没有该字段时按空处理，别把老会话读坏）；
+3. `history_messages` 帧也带 reasoning（客户端展示可选）；`/api/capabilities` 的 `features` 里
+   声明 `reasoning_passthrough=true`，客户端就能知道"这个引擎能接续思考模式会话"。
+
+**灵渠侧的临时处置**（0.39.36）：识别到该 400 就**自动 `new_session` 并提示**
+（界面上的历史仍保留），避免用户被一条"必须重置会话"的隐性规则卡死。
+
 
 
 

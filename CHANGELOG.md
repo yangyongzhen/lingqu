@@ -5,6 +5,40 @@
 
 ---
 
+## [0.39.36] - 2026-11-02
+
+**主题**：接续旧会话被 DeepSeek 思考模式拒（400 `reasoning_content`）→ 我们**自动开新会话**，不再把人卡死。
+
+### 现象（用户实测）
+
+```
+❌ 服务商返回错误：服务商拒绝了本次请求（HTTP 400: The `reasoning_content` in the thinking mode
+   must be passed back to the API.）
+```
+
+### 根因（cjh 侧两处口径缺失）
+
+1. `ChatMessage` 只有 `role / content / toolCalls`，**没有 reasoning 字段**；入历史时不带
+   `reasoning_content`；
+2. `~/.cjh/sessions/*.json` 的落盘也只存 role/content/name/tool_call_id，**reasoning 没落库**。
+   ⇒ 只要**接续旧会话**（`resume_session` 或进程重启后恢复历史），回传的历史就缺该字段，
+   DeepSeek 思考模式直接 400；**全新会话不受影响**。
+
+### 处置（本仓）
+
+- `assets/ui/index.html`：识别到 `error` 帧里含 `reasoning_content` → **自动 `new_session`** 并提示
+  「上一轮历史缺 reasoning_content，已自动开新会话；界面上的历史仍保留。根治要 cjh 把 reasoning
+  一起落库并回传」。计数上限 **3 次**（`CJ.reasoningHeals`）：够覆盖「断线重连恢复的旧会话」这种
+  一次性场景，又不至于在某条永远失败的路径上每轮换一个会话白烧轮次。
+- 上游：`docs/上游回馈-cjh.md` 新增第 10 条（`ChatMessage` 加 reasoning / `SessionStore` 落盘 /
+  `history_messages` 带上 / `features.reasoning_passthrough` 四条改法）。
+
+### 说明
+
+- 这条错误文案 `服务商返回错误：` 出自 **cjh 自带的网页 UI**（`static_assets.cj:1116`），
+  不是灵渠窗口的文案 —— 若在浏览器里开着 `127.0.0.1:8765`，看到的报错是那一页给的。
+- 灵渠窗口遇到同一 400 时，现在会自动换成新会话（历史仍显示在界面上），可以继续用。
+
 ## [0.39.35] - 2026-11-02
 
 **主题**：查清 `ws_read_failed · Invalid utf8 byte sequence` —— **大帧被 WS 分片、cjh 不拼续帧**。

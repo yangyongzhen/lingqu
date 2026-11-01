@@ -3852,6 +3852,23 @@ withBridge(function(tauri){
       var ec = String(m.code || 'unknown');
       CJ.errCodes[ec] = (CJ.errCodes[ec] || 0) + 1;
       CJ.lastErrCode = ec;
+      // 「思考模式必须回传 reasoning_content」的自愈（0.39.36）：
+      // DeepSeek 思考模式要求把上一轮 assistant 的 `reasoning_content` 原样带回；
+      // cjh 的会话存储没存它（`ChatMessage` 只有 role/content/toolCalls），
+      // 所以**接续旧会话**（尤其从 `~/.cjh/sessions` 恢复）必然 400。
+      // 我们的自愈：识别到这条就把会话换成新的——历史照旧显示在界面上，至少不让人卡死。
+      var emsg = String(m.message || '') + ' ' + String(m.error || '') + ' ' + String(cjhErrText(m) || '');
+      // 上限 3 次：够覆盖「断线重连恢复的旧会话」这种一次性场景，
+      // 又不至于在某条永远失败的路径上无限重开（每轮都换会话同样会白烧轮次）
+      if (emsg.indexOf('reasoning_content') >= 0 && (CJ.reasoningHeals || 0) < 3) {
+        CJ.reasoningHeals = (CJ.reasoningHeals || 0) + 1;
+        wsSend({ type: 'new_session' });
+        CJ.session = '';
+        CJ.acc = ''; CJ.curBubble = null;
+        addError('上一轮历史缺 `reasoning_content`（思考模式要求回传）——已**自动开新会话**（第 ' +
+          CJ.reasoningHeals + '/3 次）；界面上的历史仍保留，接着发就行。' +
+          '根治要 cjh 把 reasoning 一起落库并回传。', 'reasoning_reset');
+      }
     } else if (t === 'cancelled') {
       // was_running=false 是事实（那一帧到达时没有在跑的回合），不是错误
       finishTurn('已取消（was_running=' + (m.was_running ? 'true' : 'false') + '）');
