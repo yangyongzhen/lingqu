@@ -182,3 +182,31 @@ public func testDiagnoseSignMaterialFingerprints(): Unit {
     }
     @Assert(found2, true)
 }
+
+@Test
+public func testFingerprintHvigorDevEcoStudioScriptHook(): Unit {
+    // 0.39.51（juCang 实测）：hvigor 报 00308018 时，日志里真正的 trace 是
+    // hvigorfile 的 tauri 钩子在跑 dev 专用脚本 → 读不到 dev server 的 addr 文件 → panic。
+    // 这条与签名/代码无关，必须能被指纹一次说清（否则 agent 会反复烧轮次去查）
+    let log = "thread 'main' panicked: failed to read missing addr file C:\\Users\\x\\AppData\\Local\\Temp\\com.dicing.jucang-server-addr\n" +
+        "Command failed: cargo tauri ohos dev-eco-studio-script --target aarch64\n" +
+        "> hvigor ERROR: Error Code: 00308018 Unknown Error"
+    let hits = diagnoseLog(log)
+    var found = false
+    for (d in hits) {
+        if (d.fingerprint.id == "FP-020") {
+            found = true
+            @Assert(d.fingerprint.rootCause.contains("dev-eco-studio-script"), true)
+            @Assert(d.fingerprint.fix.contains("hvigorfile"), true)
+            @Assert(d.fingerprint.patchKind, PK_GUIDE)
+        }
+    }
+    @Assert(found, true)
+    // HAP 闸也要能把这条翻成人话（同一套判定，报告与 ⑤ 屏第一眼可读）
+    let hint = hapSignHint(log)
+    @Assert(hint.contains("00308018"), true)
+    @Assert(hint.contains("server-addr"), true)
+    @Assert(hint.contains("hvigorfile"), true)
+    // 不相干的日志别乱报（这里没有 00308018 / dev 脚本的痕迹）
+    @Assert(hapSignHint("hvigor BUILD SUCCESSFUL").size, 0)
+}

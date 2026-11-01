@@ -191,6 +191,26 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
         d += "```bash\nlingqu-cli resume --path .\nlingqu-cli scan --path .\n```\n"
         d += "（`lingqu-cli` 不在 PATH 里的话，让应用帮你定位，或直接读 `.lingqu/` 落档做判断。）\n"
     }
+    // 0.39.55：让 agent **自己把踩的坑写下来**。它的文字汇报会留在会话里，而会话会被压缩
+    // （实测"21/24/30 条早期消息 → 摘要"），细节一压缩就淡；落成文件才留得住、才能进报告与技能库。
+    //
+    // 注意：内容必须走 **`--body <文件>`**，不能写进命令行参数：仓颉程序在 Windows 上接不了非 ASCII 的
+    // argv（`Invalid unicode scalar value`，见 AGENTS §4-119），而经验内容天然是中文。
+    if (inp.cliPath.size > 0) {
+        d += "\n## 把踩到的坑记下来（**必做**，只记真发生过的）\n"
+        d += "某一步**重试 ≥2 次才通**、或**换了方案才通**、或撞到与平台相关的坑时，立刻追加一条。\n"
+        d += "内容写进 JSON 文件再交给命令（**别把中文写进命令行参数**——Windows 上 argv 过不了非 ASCII，"
+        d += "会直接抛 `Invalid unicode scalar value`）：\n"
+        d += "```bash\n"
+        d += "cat > .lingqu/note-in.json <<'EOF'\n"
+        d += "{\"title\":\"一句话标题\",\"symptom\":\"看到的报错/现象\",\"cause\":\"你判断的根因\"," +
+            "\"repro\":\"复现命令或落档位置\",\"fix\":\"你实际怎么修好的\"}\n"
+        d += "EOF\n"
+        d += inp.cliPath + " notes --action append --path . --body .lingqu/note-in.json\n"
+        d += "```\n"
+        d += "（同标题只累加次数，不会重复堆；写进 `.lingqu/notes/<工程>.md`，报告里会引用。）\n"
+        d += "**别记「我猜可能」的东西**——只记你亲手验证过的。\n\n"
+    }
     d += "\n**判断只认落档**：`.lingqu/<步骤>/<工程>.json` 里的判定字段才算数，退出码为 0 不等于通过。\n"
     d += "日志在 `.lingqu/<步骤>/<工程>.log`；失败先读它的最后 40 行，再动手。\n\n"
 

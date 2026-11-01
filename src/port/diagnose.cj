@@ -165,6 +165,15 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
         "build-profile.json5 的 signingConfigs 指向的签名材料文件不存在（.p12/.cer/.p7b 被删或换机器丢了）",
         "跑「签名体检」确认三个路径是否都在；缺了就重新自动签名一次，别手填别的工程的路径",
         "", PK_GUIDE))
+    // FP-020（0.39.51，juCang 实测）：hvigor 报 00308018，日志里真正的 trace 是
+    //   thread 'main' panicked … failed to read missing addr file %TEMP%\<包名>-server-addr
+    //   Command failed: cargo tauri ohos dev-eco-studio-script --target aarch64
+    // 那条钩子是给 `tauri ohos dev`（有 dev server）准备的：它要读 dev server 写下的 addr 文件，
+    // 非 dev 场景（我们就是）必然 panic。它和签名、代码都没关系，别再让 agent 反复烧轮次去查。
+    lib.add(Fingerprint("FP-020", "dev-eco-studio-script",
+        "hvigorfile.ts 里的 tauri 钩子在跑 `cargo tauri ohos dev-eco-studio-script`，它要读 dev server 的 addr 文件（%TEMP%\\<包名>-server-addr）；非 dev 场景没有这个文件 → tauri-cli panic → hvigor 00308018",
+        "让 gen/ohos/entry/hvigorfile.ts 不再跑这个钩子（迁移台的 t2h:hap 已负责把 lib<模块>.so 装配进 libs/arm64-v8a，不需要它编 Rust）；或者先 `cargo tauri ohos dev` 起 dev server 再装配",
+        "", PK_GUIDE))
 
     return lib
 }
@@ -252,4 +261,88 @@ public func patchProposalsFromDiagnosis(items: ArrayList<Diagnosis>): ArrayList<
         out.add(PatchProposal(file, 0, 0, d.fingerprint.id))
     }
     return out
+}
+
+// ============================================================
+// 未命中指纹的"攒候选"（0.39.55）：让飞轮自己转起来
+// ============================================================
+//
+// 以前 `t2h:diagnose` 未命中就只返回空数组——于是"这条错误没人认识"这件事**没有落档**，
+// 下一个样本再撞上还是从零开始。现在把未命中的日志归一成一个**签名**记下来，
+// 同形态累积到阈值就提示"该补指纹"，并给出候选条目的草稿要素。
+//
+// 纪律：机器只负责**发现与攒证据**，新指纹进库仍要人确认（指纹库会指导 agent 怎么改代码，
+// 自动写进去 = 让一个没人看过的规则去改用户工程，代价太大）。
+
+/** 纯函数：把错误行归一成"签名"（数字/长十六进制折叠、ASCII 小写、空白压成单空格、截断 120） */
+public func missSignatureOf(logText: String): String {
+    var sample = ""
+    for (line in logText.split("\n", -1)) {
+        let t = line.trimAscii()
+        if (t.size == 0) {
+            continue
+        }
+        let lower = diagLowerOf(t)
+        if (lower.contains("error") || lower.contains("failed") || lower.contains("panic")) {
+            sample = t
+            break
+        }
+    }
+    if (sample.size == 0) {
+        return ""
+    }
+    let bytes = sample.toArray()
+    let out = ArrayList<Byte>()
+    var i: Int64 = 0
+    while (i < Int64(bytes.size)) {
+        let b = bytes[i]
+        // 连续数字 → 一个 '#'
+        if (b >= 48 && b <= 57) {
+            out.add(UInt8(35))
+            while (i < Int64(bytes.size) && bytes[i] >= 48 && bytes[i] <= 57) {
+                i += 1
+            }
+            continue
+        }
+        // 空白压成一个空格
+        if (b == 32 || b == 9) {
+            out.add(UInt8(32))
+            while (i < Int64(bytes.size) && (bytes[i] == 32 || bytes[i] == 9)) {
+                i += 1
+            }
+            continue
+        }
+        // ASCII 小写
+        out.add(if (b >= 65 && b <= 90) { UInt8(Int64(b) + 32) } else { b })
+        i += 1
+    }
+    var sig = String.fromUtf8(out.toArray()).trimAscii()
+    if (sig.size > 120) {
+        sig = sig[0..120]
+    }
+    return sig
+}
+
+/** 纯函数：同形态攒到几次该怎么处置（给界面/报告看，一句话说清"下一步"） */
+public func missCandidateHint(times: Int64): String {
+    if (times <= 0) {
+        return ""
+    }
+    if (times == 1) {
+        return "第 1 次见到这种错误——先记下（`.lingqu/diagnose/misses.jsonl`），不急着进指纹库"
+    }
+    if (times == 2) {
+        return "第 2 次见到同一种错误——可以考虑补一条指纹（现象/根因/修法三件齐全再进库）"
+    }
+    return "已出现 ${times} 次同一种错误——**建议补指纹**：把日志里的稳定子串做成 marker，" +
+        "按 `fingerprintLibrary()` 的格式加一条（带单测），下次 agent 一次就能拿到修法"
+}
+
+/** ASCII 小写（本包私有；`lingqu` 包里那个同名函数不在本包作用域，§4 跨包不共享私有符号） */
+func diagLowerOf(s: String): String {
+    let out = ArrayList<Byte>()
+    for (b in s.toArray()) {
+        out.add(if (b >= 65 && b <= 90) { UInt8(Int64(b) + 32) } else { b })
+    }
+    return String.fromUtf8(out.toArray())
 }
