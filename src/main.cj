@@ -612,8 +612,7 @@ func stepBriefOf(projName: String, path: String, step: String, logLines: Int64):
     return b
 }
 
-/**
- * t2h:ai_brief —— G1+G2：把某一步的**失败现场**拼成一段可以直接发给 AI 的提问。
+/** t2h:ai_brief —— G1+G2：把某一步的**失败现场**拼成一段可以直接发给 AI 的提问。
  *
  *   {path, step, logLines?} → {ok, step, stepTitle, project, prompt, artifact, artifactExists, logPath, logLines}
  *
@@ -1462,7 +1461,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("aiPortActive", JsonBool(argBool(args, "aiPortActive", false)))
         o.put("aiPortPolls", JsonInt(argInt(args, "aiPortPolls", 0)))
         o.put("aiPortStalled", JsonBool(argBool(args, "aiPortStalled", false)))
+        // 自动迁移是否"全部有结论"（0.39.41）：界面据此不再喊"绕圈"
+        o.put("aiPortFinished", JsonBool(argBool(args, "aiPortFinished", false)))
         o.put("aiPortVerdict", JsonString(argStr(args, "aiPortVerdict", "")))
+        // 左栏步骤徽标（0.39.41）：profile=通过 | deps=未开始 | …（写死的「待接入」已删）
+        o.put("railBadges", JsonString(argStr(args, "railBadges", "")))
+        o.put("railFail", JsonString(argStr(args, "railFail", "")))
         o.put("aiPortDirective", JsonInt(argInt(args, "aiPortDirective", 0)))
         o.put("aiPortCli", JsonString(argStr(args, "aiPortCli", "")))
         // 行为轨迹行数（0.39.0）
@@ -4722,12 +4726,17 @@ public class AutoPortStatusCommand <: CommandHandler {
         // 但**单个长工具调用期间**连轨迹都不动（tool / tool_done 各一条）——
         // 这时按"正在干活"处理：不判停滞，并清空已攒的快照（否则工具一结束就立刻误报）
         let busy = agentTraceBusy(path)
+        // 0.39.41：**活干完了就不许判停滞**。全部步骤都有结论（通过或跳过）之后，
+        // 落档/轨迹/帧数都不再变化是正常的——旧逻辑照样攒满 20 次快照就喊
+        // 「AI 连续 20 次轮询落档没有变化，建议点「停止」后让它总结」，
+        // 而用户看到的现场是：迁移全绿、报告已生成。这是"已完工"被当成"在绕圈"。
+        let allConcluded = autoportAllConcluded(rows)
         var stalled = false
         var polls: Int64 = 0
         synchronized(gAutoPortLock) {
             if (gAutoPort.active) {
-                if (busy) {
-                    // agent 正在跑工具：清掉攒下的快照，且本轮不判停滞
+                if (busy || allConcluded) {
+                    // agent 正在跑工具 / 或者活已经干完：清掉攒下的快照，且本轮不判停滞
                     gAutoPort.clearHistory()
                     gAutoPort.polls += 1
                 } else {
@@ -4738,6 +4747,7 @@ public class AutoPortStatusCommand <: CommandHandler {
             }
         }
         let done = autoportDoneCount(rows)
+        let concluded = autoportConcludedCount(rows)
         var arr = JsonArray()
         for (r in rows) {
             arr.add(r.toJson())
@@ -4751,11 +4761,13 @@ public class AutoPortStatusCommand <: CommandHandler {
         o.put("budget", JsonInt(budget))
         o.put("minutes", JsonInt(minutes))
         o.put("doneCount", JsonInt(done))
+        o.put("concludedCount", JsonInt(concluded))
+        o.put("finished", JsonBool(allConcluded))
         o.put("total", JsonInt(Int64(MIGRATE_STEPS.size)))
         o.put("percent", JsonInt(done * 100 / Int64(MIGRATE_STEPS.size)))
         o.put("stalled", JsonBool(stalled))
-        o.put("verdict", JsonString(autoportVerdict(rows, !active, stalled)))
-        o.put("escalation", JsonString(escalationLine(stalled, false, minutes)))
+        o.put("verdict", JsonString(autoportVerdict(rows, allConcluded || !active, stalled)))
+        o.put("escalation", JsonString(escalationLineFor(stalled, false, minutes, allConcluded)))
         o.put("rows", arr)
         return o
     }

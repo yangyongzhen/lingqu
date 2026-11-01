@@ -210,6 +210,52 @@ public func testEscalationLine(): Unit {
     @Assert(escalationLine(false, false, 40), "")
 }
 
+/**
+ * 0.39.41：**活干完了不许喊"绕圈"**（用户实测：迁移全绿、报告已生成，
+ * 界面还在说「AI 连续 20 次轮询落档没有变化，建议点「停止」」）。
+ *
+ * 三条判据：① 全部步骤有结论 ⇒ `autoportAllConcluded` 为真；
+ * ② 此时 `escalationLineFor(..., finished=true)` 必须返回空串（不叫人）；
+ * ③ 跳过也算"有结论"（没插设备的真机步骤不该拖着不让判完工）。
+ */
+@Test
+public func testAllConcludedSuppressesStall(): Unit {
+    // 三步全通过
+    let allOk = ArrayList<MigrateRow>()
+    allOk.add(mkAutoRow("scan", true, true, "R=24"))
+    allOk.add(mkAutoRow("build", true, true, "exit=0"))
+    allOk.add(mkAutoRow("hap", true, true, "signed=true"))
+    @Assert(autoportConcludedCount(allOk), 3)
+    @Assert(autoportAllConcluded(allOk), true)
+
+    // 通过 + 明确跳过（未连接真机）也算全部有结论
+    let withSkip = ArrayList<MigrateRow>()
+    withSkip.add(mkAutoRow("scan", true, true, "R=24"))
+    let dp = mkAutoRow("deploy", false, false, "")
+    dp.skipped = "未连接真机"
+    withSkip.add(dp)
+    @Assert(autoportDoneCount(withSkip), 1)
+    @Assert(autoportConcludedCount(withSkip), 2)
+    @Assert(autoportAllConcluded(withSkip), true)
+
+    // 还有一步没跑 → 不算完工
+    let notYet = ArrayList<MigrateRow>()
+    notYet.add(mkAutoRow("scan", true, true, "R=24"))
+    notYet.add(mkAutoRow("build", false, false, ""))
+    @Assert(autoportConcludedCount(notYet), 1)
+    @Assert(autoportAllConcluded(notYet), false)
+
+    // 空行表不能当成"完工"（否则刚开跑就不判停滞了）
+    let empty = ArrayList<MigrateRow>()
+    @Assert(autoportAllConcluded(empty), false)
+
+    // 完工 ⇒ 升级文案必须为空（哪怕 stalled 传了 true）
+    @Assert(escalationLineFor(true, false, 30, true), "")
+    @Assert(escalationLineFor(false, true, 50, true), "")
+    // 没完工时行为不变
+    @Assert(escalationLineFor(true, false, 30, false).contains("没有变化"), true)
+}
+
 @Test
 public func testStatePushSigKeepsWindow(): Unit {
     let st = AutoPortState()

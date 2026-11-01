@@ -319,6 +319,38 @@ public func autoportDoneCount(rows: ArrayList<MigrateRow>): Int64 {
 }
 
 /**
+ * 有多少步**已经有定论**：通过（ran && ok）**或**明确跳过（如"未连接真机"）。
+ *
+ * 与 `autoportDoneCount` 的区别：跳过的步不算"通过"，但它确实"有结论、不用再等"。
+ * 停滞判定要用这一条——见 `autoportAllConcluded`。
+ */
+public func autoportConcludedCount(rows: ArrayList<MigrateRow>): Int64 {
+    var n: Int64 = 0
+    for (r in rows) {
+        if ((r.ran && r.ok) || r.skipped.size > 0) {
+            n += 1
+        }
+    }
+    return n
+}
+
+/**
+ * 全部步骤都有结论了吗（0.39.41）。
+ *
+ * 为什么停滞判定必须让它一票否决：**活干完了，落档本来就不会再变**。
+ * 0.39.34 只处理了"还在干活"（agent 活动量、WS 帧数），却没处理"已经干完"——
+ * 于是用户看到的现象是：迁移全绿、报告都生成了，界面还在喊
+ * 「AI 连续 20 次轮询落档没有变化，建议点「停止」后让它总结，或直接接管」。
+ * 判据：8 步全部"通过或跳过" ⇒ 没有"该变而没变"的东西 ⇒ 不判停滞。
+ */
+public func autoportAllConcluded(rows: ArrayList<MigrateRow>): Bool {
+    if (rows.size == 0) {
+        return false
+    }
+    return autoportConcludedCount(rows) >= Int64(rows.size)
+}
+
+/**
  * 一句话结论（AI 自动迁移版）。
  *
  * 与确定性流程的区别：这里的"通过"只认落档，而且**跳过也算进了进度**（没插设备是环境事实）。
@@ -355,6 +387,19 @@ public func autoportVerdict(rows: ArrayList<MigrateRow>, finished: Bool, stalled
 
 /** 升级给人的一句话（预算/停滞/失败都走它，界面直接显示在结果卡顶部） */
 public func escalationLine(stalled: Bool, overBudget: Bool, minutes: Int64): String {
+    return escalationLineFor(stalled, overBudget, minutes, false)
+}
+
+/**
+ * 同上，但把「已经全部有结论」也纳入判据（0.39.41）。
+ *
+ * `finished=true` 时一律不叫人：活干完了，落档不再变化是**正常**，不是绕圈。
+ * 这正是用户实测的那条误报——迁移全绿了，界面还在喊"建议点停止后让它总结"。
+ */
+public func escalationLineFor(stalled: Bool, overBudget: Bool, minutes: Int64, finished: Bool): String {
+    if (finished) {
+        return ""
+    }
     if (stalled) {
         return "AI 连续 ${AUTOPORT_STALL_POLLS} 次轮询落档没有变化，建议点「停止」后让它总结，或直接接管。"
     }

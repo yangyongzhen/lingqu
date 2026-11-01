@@ -5,6 +5,64 @@
 
 ---
 
+## [0.39.41] - 2026-11-02
+
+**主题**：① 活干完了不再喊「AI 连续 20 次轮询落档没有变化」；② 左栏步骤徽标不再是写死的「待接入」。
+
+### 现象（用户实测，两条）
+
+> 「最后还又显示这个 AI 连续 20 次轮询落档没有变化，建议点「停止」后让它总结，或直接接管。
+>   这都成功了呀，为何还有这个显示呢」
+>
+> 「左侧的迁移画像、依赖扫描和改造执行等，无论是否执行过，都显示待接入，这有问题吧？」
+
+### 根因一：停滞判定只看"有没有变化"，没看"该不该再变"
+
+`t2h:autoport_status` 每次把 8 步落档压成一行签名（含 agent 轨迹行数、WS 帧数）丢进窗口，
+窗口内 20 次全相同就判停滞。**活干完之后落档本来就不会再变**——于是迁移全绿、报告都生成了，
+界面还在喊"绕圈、建议点停止"。0.39.34 只补了"还在干活"这一半（活动量/帧数），
+把"已经干完"这一半漏了。
+
+### 根因二：徽标是写死的示意文案
+
+左栏那排 `<span class="badge">待接入</span>` 是 HTML 里的死字，`setCurrentProject()`
+只更新输入框与胶囊，从没碰过它——落档里明明写着跑过没跑过（AGENTS §4-94 那一族）。
+
+### 处置
+
+- 新增纯函数 `autoportConcludedCount` / `autoportAllConcluded`：**通过 或 明确跳过**都算"有结论"；
+  8 步全部有结论 ⇒ **不判停滞**（并清掉已攒的快照），`escalationLineFor(..., finished=true)` 返回空串。
+- `autoport_status` 增报 `finished` / `concludedCount`；界面在 finished 时显示
+  「全部步骤都已有结论（8/8，含明确跳过的）——活已经干完，落档不再变化属正常」，不再喊绕圈。
+- 左栏徽标改由落档驱动：HTML 里换成空 `<span class="badge" data-badge="…">`，
+  `renderRailBadges()` 按 `railBadgeOf()`（纯函数）聚合——一项可能由多步拼成
+  （⑤构建打包 = build+hap+sign、⑥真机验证 = deploy+verify），文案 `未开始 / 通过 k/m / 失败 k/m / 部分 k/m`，
+  整组通过时该左栏项还打 `.done` 勾；`title` 里列每一步的结论。
+  ⑦迁移报告不在 8 步流水线里，只在**真的生成了报告**时点亮（`已生成 / 失败`）。
+- 数据源用**已有的** `t2h:resume`（`action=status`，返回 `steps[]` 的 done/failed/skipped/pending），
+  不新造命令；`ui_report` 增 `railBadges` / `railFail`。
+
+### 证据（`LINGQU_UI_PROBE=rail` 实跑，工程 m3u8dl-tauri）
+
+```
+railBadges = profile=通过 deps=通过 port=通过 build=通过 3/3 verify=通过 2/2 report=未开始
+railFail   = （空）
+rows=8  ticks=4  uiErr=（空）
+```
+
+### 踩坑（已记 AGENTS §4-107）
+
+左栏这段代码在**外层作用域**，而 `invoke` / `CJ` / `projectPathValue` 都在内层 IIFE 里——
+直接引用会抛 `ReferenceError: xxx is not defined`，**只落到 `window.onerror`，调用方完全看不到**
+（本次为此白查三轮：徽标一直是空的、却没有任何报错）。处置：外层只"读 DOM + 画"，
+取数据走内层注册的 `window.__railBridge`；并用 `railsFail` 把这类被吞掉的错误回投出来。
+
+### 未验证
+
+- ⑦报告徽标只在本次会话点过「生成报告」后点亮；重启后仍显示「未开始」（没做"读盘判断报告是否存在"）。
+- 停滞判定的"完工"只看 8 步是否有结论，不看 agent 回合是否真的结束（回合还在跑但落档已全绿时不会叫人，
+  这是有意的：叫人按停止的代价比多等一会儿大）。
+
 ## [0.39.40] - 2026-11-02
 
 **主题**：① 界面不再把「开始时的设备快照」当成"现在"，② 黑窗一闪一闪的根因（GUI 进程没有控制台）修掉。

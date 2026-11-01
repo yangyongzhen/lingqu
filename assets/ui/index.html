@@ -123,6 +123,7 @@ body.ai-hidden #aiResizer{display:none}
 .step .badge{margin-left:auto;font-size:10.5px;padding:1px 7px;border-radius:999px;background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
 .step .badge.warn{color:var(--warn);border-color:rgba(255,184,107,.4);background:var(--warnsoft)}
 .step .badge.ok{color:var(--ok);border-color:rgba(126,226,168,.4);background:var(--oksoft)}
+.step .badge.err{color:var(--err);border-color:rgba(255,122,122,.45);background:var(--errsoft)}
 .rail-f{padding:11px 13px;border-top:1px solid var(--line);font-size:11.5px;color:var(--dim);display:flex;flex-direction:column;gap:7px}
 .rail-f .row{display:flex;align-items:center;gap:8px}
 
@@ -592,12 +593,15 @@ body.ai-hidden .ai-show{display:block}
       <div class="steps" id="steps">
         <button class="step active" data-s="migrate"><span class="n">⚡</span>一键迁移</button>
         <button class="step" data-s="env"><span class="n">①</span>项目 / 环境</button>
-        <button class="step" data-s="profile"><span class="n">②</span>迁移画像<span class="badge">待接入</span></button>
-        <button class="step" data-s="deps"><span class="n">③</span>依赖扫描<span class="badge">待接入</span></button>
-        <button class="step" data-s="port"><span class="n">④</span>改造执行<span class="badge">待接入</span></button>
-        <button class="step" data-s="build"><span class="n">⑤</span>构建打包<span class="badge">待接入</span></button>
-        <button class="step" data-s="verify"><span class="n">⑥</span>真机验证<span class="badge">待接入</span></button>
-        <button class="step" data-s="report"><span class="n">⑦</span>迁移报告<span class="badge">待接入</span></button>
+        <!-- 徽标不再写死「待接入」（0.39.41）：用户实测反馈"无论是否执行过都显示待接入"，
+             而落档里明明写着跑过没跑过。现在由 t2h:board 读 .lingqu/<步骤>/<工程>.json 驱动，
+             徽标文案见 railBadgeText()：未开始 / 通过 / 失败 / 已跑 / 部分 / 跳过。 -->
+        <button class="step" data-s="profile"><span class="n">②</span>迁移画像<span class="badge" data-badge="profile"></span></button>
+        <button class="step" data-s="deps"><span class="n">③</span>依赖扫描<span class="badge" data-badge="deps"></span></button>
+        <button class="step" data-s="port"><span class="n">④</span>改造执行<span class="badge" data-badge="port"></span></button>
+        <button class="step" data-s="build"><span class="n">⑤</span>构建打包<span class="badge" data-badge="build"></span></button>
+        <button class="step" data-s="verify"><span class="n">⑥</span>真机验证<span class="badge" data-badge="verify"></span></button>
+        <button class="step" data-s="report"><span class="n">⑦</span>迁移报告<span class="badge" data-badge="report"></span></button>
       </div>
       <div class="rail-f">
         <div class="row"><span class="dot" id="dotAgent"></span><span id="txtAgent">引擎未就绪</span></div>
@@ -3458,7 +3462,7 @@ withBridge(function(tauri){
    *   ② 把任务书发过去（走已有 WS 通道，流式回复直接给人看）
    *   ③ 盯落档（t2h:autoport_status）：进度、停滞、预算；要人定的用确认卡
    * 判定只认落档：AI 说"迁好了"，时间轴没变就是没变。 */
-  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0 };
+  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0, finished: false };
 
   /** scope → 中文档位文案（全自动 / 半自动「只做这一步」） */
   function autoPortScopeLabel(scope){
@@ -3477,6 +3481,10 @@ withBridge(function(tauri){
     AIP.active = st.active === true;
     AIP.polls = (typeof st.polls === 'number') ? st.polls : 0;
     AIP.stalled = st.stalled === true;
+    // finished = 8 步全部有结论（通过或明确跳过）。活干完了落档当然不再变，
+    // 后端已据此不判停滞；界面这边也不能再喊"绕圈"（0.39.41 用户实测误报）
+    AIP.finished = st.finished === true;
+    AIP.concluded = (typeof st.concludedCount === 'number') ? st.concludedCount : 0;
     AIP.verdict = String(st.verdict || '');
     renderMigrate(st);
     if ($('btnAiPortContinue')) {
@@ -3496,7 +3504,14 @@ withBridge(function(tauri){
       st = st || {};
       renderAiPort(st);
       // 停滞/超时：只提示，不自动停——停不停由人决定（手刹在人这边）
-      if (st.stalled === true) {
+      // 0.39.41：**已完工就别再叫人**。8 步全部有结论后落档不会再有变化，
+      // 旧逻辑会照喊「连续 20 次轮询落档没有变化」，而现场是迁移全绿、报告已生成。
+      if (st.finished === true) {
+        var c = (typeof st.concludedCount === 'number') ? st.concludedCount : 0;
+        var t = (typeof st.total === 'number') ? st.total : 0;
+        aiPortNote('全部步骤都已有结论（' + c + '/' + t + '，含明确跳过的）——活已经干完，'
+          + '落档不再变化属正常；可以直接看结果卡/报告，需要收尾就点「停止」。');
+      } else if (st.stalled === true) {
         aiPortNote(String(st.escalation || 'AI 好像绕圈了'));
         reportUi('autoport-stalled');
       } else if (aiPortElapsedMin() > (st.minutes || 40)) {
@@ -5578,6 +5593,15 @@ withBridge(function(tauri){
     });
   }
 
+  // 左栏徽标数据桥（0.39.41）：左栏那段代码在**外层作用域**，那里没有 `invoke`（会抛
+  // `ReferenceError: invoke is not defined`）；这里在内层，把 `loadResumeBoard` 的结果递给外层。
+  window.__railBridge = function(path){
+    return loadResumeBoard(path).then(function(r){
+      if (window.__railApply) { window.__railApply(r || {}); }
+      return r;
+    });
+  };
+
   function rememberSession(sid){
     if (!sid || sid === window.__resumeSavedSession) { return; }
     window.__resumeSavedSession = sid;
@@ -5705,6 +5729,16 @@ withBridge(function(tauri){
     if (reportPathValue()) { arg.path = reportPathValue(); }
     invoke('t2h:report', arg).then(function(r){
       renderReport(r || {});
+      // ⑦迁移报告不在 8 步流水线里（resume 的 steps 到 verify 为止），
+      // 它的徽标只能由"这次真的生成了报告"来点亮（0.39.41）
+      var rEl = document.querySelector('.step .badge[data-badge="report"]');
+      if (rEl) {
+        var okRep = (REPORT.ok === true);
+        rEl.textContent = okRep ? '已生成' : '失败';
+        rEl.className = 'badge ' + (okRep ? 'ok' : 'err');
+        rEl.title = okRep ? ('报告：' + (REPORT.paths.md || REPORT.paths.html || '已生成')) : (REPORT.error || '生成失败');
+        window.__rail.badges = (window.__rail.badges || '') + ' | report=' + rEl.textContent;
+      }
       if (which && REPORT.paths[which]) {
         $('rpPaths').innerHTML += '<br><span class="pill ok">已导出 ' + esc(which.toUpperCase())
           + '：' + esc(REPORT.paths[which]) + '</span>';
@@ -6143,6 +6177,11 @@ withBridge(function(tauri){
       aiPortActive: AIP.active === true,
       aiPortPolls: (typeof AIP.polls === 'number') ? AIP.polls : 0,
       aiPortStalled: AIP.stalled === true,
+      aiPortFinished: AIP.finished === true,
+      // 左栏步骤徽标（0.39.41）：profile=通过 | deps=未开始 | …
+      // 状态挂在 window.__rail：左栏那段代码在 CJ 作用域**之外**（写 CJ.xxx 会 ReferenceError）
+      railBadges: (window.__rail && window.__rail.badges) ? String(window.__rail.badges) : '',
+      railFail: (window.__rail && window.__rail.err) ? String(window.__rail.err) : '',
       aiPortVerdict: AIP.verdict || '',
       aiPortDirective: (typeof AIP.directiveChars === 'number') ? AIP.directiveChars : 0,
       aiPortCli: AIP.cliPath || '',
@@ -6527,6 +6566,36 @@ withBridge(function(tauri){
       setTimeout(function(){ reportUi('device-cases'); }, 1200);
       return;
     }
+    // 左栏徽标自检（LINGQU_UI_PROBE=rail，0.39.41）：证明"不再是写死的待接入"。
+    // 选一个落档齐全的工程，读 t2h:board 后断言：① 徽标文案里出现「通过」；② 没有任何「待接入」；
+    // ③ 六个左栏项都有文案（不是空 span）。回投 railBadges / railFail 当证据。
+    if (mode === 'rail') {
+      var projR = 'C:/Users/yang/Desktop/test/m3u8dl-tauri';
+      window.__railProbe = true;
+      setTimeout(function(){ setCurrentProject(projR); }, 900);
+      // 等两个周期（6s 一次的 setInterval）再断言：让**生产路径**自己去刷徽标，
+      // 而不是探针自己再发一次 invoke（探针里的 invoke 实测不 settle，见 docs/进度记录）
+      setTimeout(function(){
+        var badges = [];
+        var missing = [];
+        Object.keys(RAIL_STEPS).forEach(function(k){
+          var el = document.querySelector('.step .badge[data-badge="' + k + '"]');
+          if (!el || !(el.textContent || '').trim()) { missing.push(k); }
+          badges.push(k + '=' + ((el && el.textContent) || ''));
+        });
+        var all = badges.join(' ');
+        var fails = [];
+        if (missing.length) { fails.push('空徽标:' + missing.join(',')); }
+        if (all.indexOf('通过') < 0) { fails.push('没有任何通过'); }
+        if (all.indexOf('待接入') >= 0) { fails.push('还在写待接入'); }
+        window.__rail.err = fails.join(';') + ' || inv=' + (window.__rail.inv || '?') + ' rows=' + window.__rail.rows
+          + ' ticks=' + window.__rail.ticks
+          + ' uiErr=' + ((window.__uiErrors || []).join(' ; ').slice(0, 300));
+        window.__rail.badges = all;
+        reportUi('rail-badges');
+      }, 13500);
+      return;
+    }
     // 连接横跳自检（LINGQU_UI_PROBE=flap，0.39.38）：断 WS 的判据是**纯函数** `wsKeepDecision`，
     // 这里直接对它做表驱动断言（不去驱动 DOM —— 直接调 renderStatus 会在"缺失"分支里改页面，
     // 探针要断的是判据本身）。判据四条：
@@ -6842,6 +6911,112 @@ function setCurrentProject(p){
   if (top) { top.value = PROJECT.path; }
   syncProjectEchoes();
   renderTopProj();   // 顶栏胶囊跟着换（0.39.28：原来它写死成 habit-tree）
+  refreshRailBadges();   // 左栏步骤徽标跟着工程走（0.39.41：原来是写死的「待接入」）
+}
+
+/* ===== 左栏步骤徽标：由落档驱动（0.39.41）=====
+ * 起因（用户实测）：「左侧的迁移画像、依赖扫描、改造执行等，无论是否执行过，都显示待接入，
+ * 这有问题吧？」——徽标是 HTML 里写死的「待接入」，从来没人更新它；而 `.lingqu/<步骤>/<工程>.json`
+ * 里一直写着"跑过没跑过、过没过"。写死的示意文案冒充状态 = 对用户谎报（AGENTS §4-94）。
+ *
+ * 口径：一个左栏项可能由多个落档步骤拼成（⑤构建打包 = build+hap+sign，⑥真机验证 = deploy+verify），
+ * 聚合规则见 railBadgeOf()；**没跑过就说没跑过**，绝不再写「待接入」。
+ */
+// 顶层状态（0.39.41 教训：左栏这段代码在 CJ 所在的作用域**之外**，写 CJ.xxx 会抛
+// `ReferenceError: CJ is not defined`；统一用 window.__rail 传递，reportUi 那边读它）
+window.__rail = window.__rail || { badges: "", rows: -1, ticks: 0, err: "" };
+var RAIL_STEPS = {
+  profile: ['scan'],
+  deps: ['deps'],
+  port: ['port'],
+  build: ['build', 'hap', 'sign'],
+  verify: ['deploy', 'verify'],
+  report: ['report']
+};
+
+/** 纯函数：把若干步的落档观测聚合成一个徽标文案（+ 样式类） */
+function railBadgeOf(rows, steps){
+  var total = steps.length, ran = 0, ok = 0, bad = 0;
+  for (var i = 0; i < steps.length; i++) {
+    var r = rows[steps[i]];
+    if (!r || r.ran !== true) { continue; }
+    ran += 1;
+    if (r.ok === true) { ok += 1; } else { bad += 1; }
+  }
+  if (ran === 0) { return { text: '未开始', cls: '' }; }
+  if (bad > 0) { return { text: total > 1 ? ('失败 ' + bad + '/' + total) : '失败', cls: 'err' }; }
+  if (ok === total) { return { text: total > 1 ? ('通过 ' + ok + '/' + total) : '通过', cls: 'ok' }; }
+  return { text: '部分 ' + ok + '/' + total, cls: 'warn' };
+}
+
+function renderRailBadges(rows){
+  var txt = [];
+  Object.keys(RAIL_STEPS).forEach(function(key){
+    var stepIds = RAIL_STEPS[key];
+    var b = railBadgeOf(rows || {}, stepIds);
+    var el = document.querySelector('.step .badge[data-badge="' + key + '"]');
+    if (el) {
+      el.textContent = b.text;
+      el.className = 'badge' + (b.cls ? (' ' + b.cls) : '');
+      var notes = [];
+      stepIds.forEach(function(s){
+        var r = (rows || {})[s];
+        if (r) { notes.push((r.title || s) + '：' + (r.ran ? (r.ok ? '通过' : '失败') : '未跑') + (r.note ? ('（' + r.note + '）') : '')); }
+      });
+      el.title = notes.join('\n');
+    }
+    txt.push(key + '=' + b.text);
+  });
+  window.__rail.badges = txt.join(' | ');
+  updateRailStepDoneMarker();
+}
+
+/** 左栏项的 .done 记号跟着徽标走（每个左栏项只要"该组步骤全部通过"就打个勾） */
+function updateRailStepDoneMarker(){
+  Object.keys(RAIL_STEPS).forEach(function(key){
+    var el = document.querySelector('.step[data-s="' + key + '"]');
+    if (!el) { return; }
+    var b = document.querySelector('.step .badge[data-badge="' + key + '"]');
+    var okAll = !!(b && /\u901a\u8fc7/.test(b.textContent || ''));
+    el.classList.toggle('done', okAll);
+  });
+}
+
+/** 把 `t2h:resume` 的 steps[] 摊成 {id: {ran, ok, note}} 并写进徽标（由内层桥接调用） */
+window.__railApply = function(res){
+  var rows = {};
+  ((res && res.steps) || []).forEach(function(s){
+    rows[s.id] = {
+      step: s.id,
+      title: s.title,
+      ran: s.status !== 'pending',
+      ok: s.status === 'done' || s.status === 'skipped',
+      note: s.note || ''
+    };
+  });
+  renderRailBadges(rows);
+  window.__rail.rows = ((res && res.steps) || []).length;
+  window.__rail.err = '';
+};
+
+function refreshRailBadges(){
+  // ⚠ 作用域坑（0.39.41 实测，记 AGENTS §4-107）：这个函数在**外层作用域**，
+  // 而 `invoke` / `CJ` / `projectPathValue` 都在内层 IIFE 里 —— 直接引用会抛
+  // `ReferenceError: xxx is not defined`，且只落到 window.onerror，调用方完全看不到
+  // （本次为此白查了三轮：徽标一直是空的，却没有任何报错）。
+  // 所以外层只做"读 DOM + 画"，取数据一律走 window.__railBridge（内层注册的桥）。
+  var topEl = $('projPath');
+  var p = (topEl && topEl.value ? String(topEl.value).trim() : '');
+  if (!p) { p = (PROJECT && PROJECT.path) ? String(PROJECT.path) : ''; }
+  if (!p) { p = window.__probePath || ''; }
+  window.__rail.ticks += 1;
+  if (!p) { renderRailBadges({}); window.__rail.err = 'no-path'; return; }
+  if (!window.__railBridge) { window.__rail.err = 'no-bridge'; return; }
+  try {
+    window.__railBridge(p);
+  } catch (e) {
+    window.__rail.err = 'throw:' + String((e && e.message) ? e.message : e);
+  }
 }
 
 /* ===== 顶栏「当前项目」胶囊：跟着当前工程走（0.39.28）=====
@@ -7057,6 +7232,9 @@ function openClonePanel(open){
   attachOverrideButtons();
   syncProjectEchoes();
   renderTopProj();   // 启动时先把胶囊刷成当前工程（记住的工程 / 未选），别再显示写死的示意数据
+  // 左栏步骤徽标由落档驱动（0.39.41）：启动刷一次 + 每 6 秒跟上（agent 在后台跑时它会变）
+  refreshRailBadges();
+  setInterval(refreshRailBadges, 6000);
 })();
 </script>
 </body>
