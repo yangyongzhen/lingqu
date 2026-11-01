@@ -5,6 +5,43 @@
 
 ---
 
+## [0.39.16] - 2026-11-02
+
+**主题**：**证明我们的 AesGcmKit 口令密文 hvigor 真能解开**——这是"全新生成签名材料"路上最后一个
+未知数。附 `hap-sign-tool` 的定位与调用（生成密钥对与 CSR）。
+
+### 决定性实验（本机实测，可复跑）
+
+    # ① 用我们自己的实现重加密 habit-tree 现有口令密文（新 IV，同一口令）
+    lingqu-cli sign --reencrypt --buildProfile E:\test\rust\habit-tree\src-tauri\gen\ohos\build-profile.json5
+      → ok=true  storePwdLen=10  keyPwdLen=10  newStorePasswordPrefix=0000001af150…
+      原密文前缀 0000001ABCEAD81D… → 新密文前缀 0000001af15004076fb1…（确实变了）
+
+    # ② 让 hvigor 去解「我们造的密文」
+    lingqu-cli hap --path E:\test\rust\habit-tree
+      → hvigor Finished :entry:default@SignHap… after 2s 578ms
+      → hvigor BUILD SUCCESSFUL in 14s 175ms
+      → built=true signed=true hapBytes=7,249,832 gates.ok=true
+    # 实验后 habit-tree 的 build-profile.json5 已还原（.bak 删除）
+
+结论：**命令里那串口令密文可以完全由我们自己生成**，hvigor/DevEco 解得开——不必再"抄别人的密文"。
+
+### Added
+
+- `src/compiler/sign_tool.cj`（`hap-sign-tool.jar` 的定位与调用）：
+  - `javaCandidates`（`JAVA_HOME` → DevEco JBR → PATH）/ `hapSignToolCandidates`（SDK 三档布局 +
+    数字版本目录降序）/ `firstExisting`
+  - `randomPasswordAlnum`（8 随机字节 → base64url → 去 `-_=`，纯字母数字、7~10 位，与 flutter 同规则）
+  - `keypairArgs` / `csrArgs`（**`generate-keypair` 没有 `-outFile`，`generate-csr` 才有**）
+  - `maskSecrets`：日志里把 `-keystorePwd` / `-keyPwd` 后面的值替换成 `******`
+  - `genKeypair` / `genCsr` / `runSignTool`（失败带 exit 码与日志尾部）
+- `t2h:sign --reencrypt`（或 `LINGQU_SIGN_REENCRYPT=1`）：读 `material/` → 解出原口令 → 用新 IV
+  重新加密 → 写回（先留 `.bak`）；只回**口令长度**与前缀，绝不回明文。
+
+### 说明（仍未验证）
+
+真实账号授权未完成（等一次浏览器点击）。因此"用 AGC 侧给新包名签发的 profile + 我们自己生成的
+密钥/口令"这一整条，还差最后一段；`m3u8dl-tauri` 的 `signed=true` 尚未发生。
 ## [0.39.15] - 2026-11-02
 
 **主题**：AGC 云侧动作（设备 / 证书 / profile / 安全下载）落地——登录之后的整条链已经写完，

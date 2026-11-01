@@ -2351,6 +2351,91 @@ public class SignCommand <: CommandHandler {
                 "teams=${outc.teamCount} err=${outc.error}")
             return res2
         }
+        // ---- `--reencrypt`：用本机 material/ 重新加密 build-profile 里的口令密文 ----
+        //
+        // 用途：① 证明我们的 AesGcmKit 实现与 hvigor 逐字节兼容（把密文换成我们造的，让 hvigor 去解）；
+        //      ② `material/` 被重建后，旧密文会失效，需要按同一口令重新加密。
+        // 做法保守：读原口令 → 解出来 → 用**新 IV** 重新加密 → 写回（先留 .bak），任一步失败都不动原文件。
+        if (argBool(args, "reencrypt", false) || envOr("LINGQU_SIGN_REENCRYPT", "") == "1") {
+            var res3 = JsonObject()
+            let bpPath = argStr(args, "buildProfile", "")
+            if (bpPath == "" || !exists(Path(bpPath))) {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("要给 build-profile.json5 的路径（--buildProfile）"))
+                return res3
+            }
+            let cfgDir = ohosConfigDir()
+            let mdir = materialDirOfConfig(cfgDir)
+            let (workKey, e1) = loadWorkKey(mdir)
+            if (e1 != "") {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("读 material/ 失败：${e1}（material 目录：${mdir}）"))
+                return res3
+            }
+            var origin = ""
+            try {
+                origin = String.fromUtf8(File.readFrom(bpPath))
+            } catch (e: Exception) {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("读 ${bpPath} 失败：${e}"))
+                return res3
+            }
+            let m = signingMaterialOf(origin)
+            if (m.storePassword == "") {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("工程里没有 storePassword（未配 signingConfigs？）"))
+                return res3
+            }
+            let (pwd, e2) = decryptPasswordHex(workKey, m.storePassword)
+            if (e2 != "") {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("解 storePassword 失败：${e2}"))
+                return res3
+            }
+            let (pwd2, e3) = decryptPasswordHex(workKey, m.keyPassword)
+            if (e3 != "") {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("解 keyPassword 失败：${e3}"))
+                return res3
+            }
+            let (newStore, e4) = encryptPasswordHex(workKey, pwd)
+            if (e4 != "") {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("重加密 storePassword 失败：${e4}"))
+                return res3
+            }
+            let (newKey, e5) = encryptPasswordHex(workKey, pwd2)
+            if (e5 != "") {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("重加密 keyPassword 失败：${e5}"))
+                return res3
+            }
+            var out = origin
+            out = out.replace(m.storePassword, newStore)
+            out = out.replace(m.keyPassword, newKey)
+            if (out == origin) {
+                res3.put("ok", JsonBool(false))
+                res3.put("error", JsonString("替换失败：原文里没找到原口令密文（格式可能变了）"))
+                return res3
+            }
+            let bak = "${bpPath}.lingqu-reencrypt.bak"
+            var outError = ""
+            try {
+                File.writeTo(bak, origin.toArray())
+                File.writeTo(bpPath, out.toArray())
+            } catch (e: Exception) {
+                outError = "写回失败：${e}"
+            }
+            res3.put("ok", JsonBool(outError == ""))
+            res3.put("buildProfile", JsonString(bpPath))
+            res3.put("backup", JsonString(bak))
+            res3.put("storePwdLen", JsonInt(Int64(pwd.size)))       // 只回长度，不回明文
+            res3.put("keyPwdLen", JsonInt(Int64(pwd2.size)))
+            res3.put("newStorePasswordPrefix", JsonString(if (newStore.size > 12) { newStore[0..12] } else { newStore }))
+            res3.put("error", JsonString(outError))
+            eprintln("[lingqu][sign:reencrypt] ok=${outError == ""} bp=${bpPath} storePwdLen=${pwd.size}")
+            return res3
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
