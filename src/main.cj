@@ -1,6 +1,7 @@
 package lingqu
 
 import cjTauri.*
+import cjTauri.plugins.dialog.*
 import cjTauri.plugins.log.*
 import cjTauri.plugins.ws.*
 import lingqu.scanner.*
@@ -85,6 +86,31 @@ func addCheck(arr: JsonArray, id: String, label: String, found: String, hint: St
 // ============================================================
 // ① 环境体检（t2h:env）
 // ============================================================
+
+/**
+ * `t2h:git_clone`：把一个 Git 地址克隆成"当前工程"（0.39.25）。
+ *
+ * 与「手敲路径 / 原生选目录」并列的第三条路：工程还没在本机时，先拉下来再选。
+ * 参数：`url`（必填）、`dir`（父目录，留空＝工作区根 `LINGQU_WORKSPACES` 或 `~/lingqu-workspaces`）、
+ * `depth`（默认 1：浅克隆，够跑迁移；要完整历史传 0）。
+ * 回投：`ok / target / hint（像不像 Tauri 工程）/ outputTail / error`。
+ */
+public class GitCloneCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        let url = argStr(args, "url", "")
+        let dir = argStr(args, "dir", "")
+        let depth = argInt(args, "depth", 1)
+        let r = gitCloneProject(url, dir, depth)
+        eprintln("[lingqu][git_clone] ok=${r.ok} url=${r.url} target=${r.target} err=${r.error}")
+        var o = r.toJson()
+        // 顺手把工作区根回投给界面（"克隆到哪"要能看见，别让人猜）
+        o.put("workspaceRoot", JsonString(workspaceRootDir()))
+        o.put("depth", JsonInt(depth))
+        return o
+    }
+}
 
 /**
  * 把迁移所需的工具链一次性体检出来。
@@ -1428,6 +1454,16 @@ public class UiReportCommand <: CommandHandler {
         o.put("projectPromptCount", JsonInt(argInt(args, "projectPromptCount", 0)))
         o.put("pathFieldCount", JsonInt(argInt(args, "pathFieldCount", 0)))
         o.put("stepPathOverride", JsonString(argStr(args, "stepPathOverride", "")))
+        // 选工程的三条路（0.39.25）：手敲 / 原生目录框 / Git 克隆。
+        // echoInputsEditable 必须为 0：8 个回显框默认全只读（界面上不许"到处都要填路径"）。
+        o.put("echoInputsTotal", JsonInt(argInt(args, "echoInputsTotal", 0)))
+        o.put("echoInputsEditable", JsonInt(argInt(args, "echoInputsEditable", 0)))
+        o.put("echoInputsEchoStyled", JsonInt(argInt(args, "echoInputsEchoStyled", 0)))
+        o.put("pickerUsed", JsonInt(argInt(args, "pickerUsed", 0)))
+        o.put("pickerFallback", JsonInt(argInt(args, "pickerFallback", 0)))
+        o.put("pickerLastPath", JsonString(argStr(args, "pickerLastPath", "")))
+        o.put("clonePanelOpen", JsonBool(argBool(args, "clonePanelOpen", false)))
+        o.put("cloneUrlFilled", JsonBool(argBool(args, "cloneUrlFilled", false)))
         o.put("abortAt", JsonInt(argInt(args, "abortAt", 0)))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))
@@ -5213,6 +5249,8 @@ public func build(): AppSpec {
     return AppSpec()
         .window(WindowConfig("lingqu", 1280, 840))
         // 日志落盘：GUI 产物双击没控制台，报障时一个文件看全
+        // 原生「选目录」框：让"设工程路径"不只有手敲一条路（dialog:pickFolder）
+        .plugin(DialogPlugin())
         .plugin(LogPlugin())
         // WS：cjh 的对话/工具/审批都走 ws://127.0.0.1:<port>/ws（帧类型见 docs/实施路线图.md P1）
         .plugin(WsPlugin())
@@ -5231,6 +5269,7 @@ public func build(): AppSpec {
             }
 
             app.register("t2h:env", EnvCommand())
+        app.register("t2h:git_clone", GitCloneCommand())
             app.register("t2h:quit", QuitCommand(app))
             app.register("t2h:ui_report", UiReportCommand())
             app.register("t2h:scan", ScanCommand())

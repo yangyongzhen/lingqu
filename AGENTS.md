@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.24**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.25**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -241,6 +241,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 85 | hvigor 报 `00303242 Signature material verification failed, as: Unsupported state or unable to authenticate data`；`sign --reencrypt` 报 `GCM tag mismatch` | **`.p12` 的口令没人知道**（材料是拷来的 / `material/` 重建过）→ 旧密文解不开，也就没法用本机 workKey 重加密。`GCM tag mismatch` 就是"这份密文与本机 material 不配套"的可判定证据。处置是 `--newKeys`：旧材料**改名留底**后重生成，自己掌口令、自己加密。**别猜口令、别把旧密文硬写回去** |
 | 86 | 加了 `--newKeys` 却"什么都不做"（既不报错也不换材料），排查一小时 | 拼材料路径时手抄模板**漏了 `=` 分隔**（DevEco 命名是 `<base>=` + 后缀）→ `exists()` 全 false，一个文件都没被挪走。**同一组路径只能有一个构造点**（本项目收成 `matPrefix`），凡是"静默不生效"的开关先打印它读到的值再怀疑逻辑 |
 | 87 | `hdc install` 报 `9568332 install sign info inconsistent` | 同包名**已装过另一套签名**的版本（重签后必然撞上）。调试机上正解是先 `bm uninstall -n <bundle>` 再装——`deploy` 已自动做一次并记进证据。反之 `10106102` 是**锁屏**（开发者模式禁止自动解锁），处置是"解锁后重试"，**不是** ability 名写错 |
+| 88 | 装配框架插件 `DialogPlugin()` 后 `cj-tauri check` 报「已注册命令 `dialog:message` 未在 capabilities 声明」 | 插件**一次性注册** `open`/`save`/`pickFolder`/`message` 四条，而命名权限集 `dialog:files` 只覆盖前三条 → 门禁按「已注册 ⊆ 已声明」判红。现在用 `dialog:default`（四条全覆盖）。**这是门禁口径的可改进点**：应先把 `permissions` 展开成命令名再比对，否则"想只申请最小权限集"反而过不了门禁（0.39.25 实测，用户只要 `pickFolder` 却被迫拿到 `message`） |
+| 89 | 当目录**已存在**时调 `Directory.create(Path(p), recursive: true)` 抛 `FSException: The input path ... is already exists`（第二次克隆同名仓库时撞到，报的是"建不了父目录"） | **`recursive: true` 只保证"路径中间的父级会建出来"，不保证"已存在也返回成功"**——与 `mkdir -p` 语义不同。要先 `if (!exists(Path(p)))` 再 create。§4-76 那条讲的是"父级不存在"要怎么建，这条讲的是"已经存在"不能被当成错误（0.39.25 实测） |
 
 ---
 

@@ -25,7 +25,7 @@ import stdx.encoding.json.*
 /** CLI 支持的命令（与注册表一致；GUI 专属的 quit/cjh_* 不开放） */
 public let CLI_COMMANDS: Array<String> = [
     "migrate", "scan", "deps", "port", "revert", "decisions", "diagnose", "build", "hap", "sign",
-    "deploy", "verify", "report", "batch", "resume", "env", "skill", "agent_context"
+    "deploy", "verify", "report", "batch", "resume", "env", "skill", "agent_context", "git_clone"
 ]
 
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
@@ -244,7 +244,7 @@ public func dispatchCli(argv: Array<String>): CliResult {
  * 这不是技术限制，是安全设计——AI 建议的命令点一下就执行，出错代价必须可控。
  */
 public func cliRunAllowed(cmd: String, args: JsonObject): (Bool, String) {
-    let readOnly = ["scan", "deps", "resume", "report", "verify", "env", "diagnose", "batch"]
+    let readOnly = ["scan", "deps", "resume", "report", "verify", "env", "diagnose", "batch", "git_clone"]
     for (c in readOnly) {
         if (c == cmd) {
             return (true, "")
@@ -468,6 +468,9 @@ func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcCont
     }
     if (cmd == "env") {
         return EnvCommand().handle(fullName, args, ctx)
+    }
+    if (cmd == "git_clone") {
+        return GitCloneCommand().handle(fullName, args, ctx)
     }
     if (cmd == "skill") {
         return SkillCommand().handle(fullName, args, ctx)

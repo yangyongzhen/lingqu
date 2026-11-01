@@ -37,7 +37,7 @@ body{background:var(--bg);color:var(--fg);
 ::-webkit-scrollbar-track{background:transparent}
 
 /* ============ 骨架布局 ============ */
-.app{height:100%;display:grid;grid-template-rows:48px 1fr}
+.app{height:100%;display:grid;grid-template-rows:48px auto 1fr}
 .titlebar{display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);z-index:5}
 .logo{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:.2px;white-space:nowrap}
 .logo .mark{width:24px;height:24px;border-radius:8px;display:grid;place-items:center;font-size:12px;color:#fff;font-weight:700;
@@ -456,6 +456,36 @@ input.setinput:focus,select.setinput:focus{outline:none;border-color:var(--acc)}
 .setactions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
 .sethint{font-size:11px;color:var(--dim2);line-height:1.6;margin-top:2px}
 
+/* ============ 当前工程条（0.39.25） ============
+   手敲路径**保留**（老习惯不能断），另外补两条更省事的路：
+   · 「选择…」= 原生目录框（dialog:pickFolder）
+   · 「克隆…」= 从 Git 地址拉下来再自动设为当前工程
+   各屏那 8 个路径框是**只读回显**，样式上要一眼看出"不是让你填的"：
+   去掉输入框观感（无边框、透明底、灰字），只有被 ✎ 显式覆盖时才恢复成输入样式。 */
+#projBar{display:flex;align-items:center;gap:6px;min-width:0}
+#projBar .projLabel{font-size:11px;color:var(--dim);white-space:nowrap}
+#projPath{border:1px solid var(--line);background:var(--panel2);border-radius:8px;
+  padding:4px 8px;color:var(--fg);font-size:12px}
+#projPath:focus{outline:none;border-color:var(--acc)}
+/* 只读回显：看起来像"一行值"，不像"一个输入框" */
+input[readonly].echo{border-color:transparent!important;background:transparent!important;
+  color:var(--dim);cursor:default;box-shadow:none}
+input[readonly].echo:hover{border-color:var(--line)!important;background:var(--panel2)!important;color:var(--fg)}
+input.echo.ovr{border-color:var(--warn)!important;color:var(--warn)!important;background:var(--warnsoft)!important}
+
+#clonePanel{display:none;gap:8px;align-items:center;flex-wrap:wrap;
+  padding:8px 14px;background:var(--panel2);border-bottom:1px solid var(--line);font-size:12px}
+#clonePanel.open{display:flex}
+#clonePanel .cpTitle{color:var(--dim);font-size:11px;white-space:nowrap}
+#clonePanel input{border:1px solid var(--line);background:var(--panel);border-radius:8px;
+  padding:5px 8px;color:var(--fg);font-size:12px}
+#clonePanel input:focus{outline:none;border-color:var(--acc)}
+#cloneUrl{flex:1 1 420px;min-width:240px;font-family:var(--mono)}
+#cloneDir{flex:0 1 260px;min-width:180px;font-family:var(--mono);color:var(--dim)}
+#cloneNote{flex:1 1 100%;color:var(--dim2);font-size:11px;min-height:14px}
+#cloneNote.err{color:var(--err)}
+#cloneNote.ok{color:var(--ok)}
+
 /* 折叠后的悬浮唤出按钮 */
 .ai-show{position:fixed;right:0;top:50%;transform:translateY(-50%);display:none;
   background:var(--acc);color:#fff;border:0;border-radius:14px 0 0 14px;padding:14px 9px;
@@ -475,8 +505,9 @@ body.ai-hidden .ai-show{display:block}
          避免「8 个框各填一遍、填错一个就对着别的工程干活」。 -->
     <div id="projBar">
       <span class="projLabel">当前工程</span>
-      <input id="projPath" class="mono" placeholder="选一个 Tauri 工程路径（所有步骤都用它）" style="flex:1 1 380px;min-width:260px">
-      <button class="btn" id="btnProjOpen" title="选一个工程目录">打开工程…</button>
+      <input id="projPath" class="mono" placeholder="粘贴工程路径，或用「选择…」/「克隆…」（所有步骤都用它）" style="flex:1 1 380px;min-width:260px">
+      <button class="btn" id="btnProjOpen" title="弹系统目录选择框（也可以直接在左边手敲路径）">选择…</button>
+      <button class="btn" id="btnProjClone" title="从 Git 地址克隆下来，并设为当前工程">克隆…</button>
       <button class="btn" id="btnProjRecent" title="最近用过的工程">最近 ▾</button>
       <span id="projNote" class="sethint"></span>
     </div>
@@ -490,6 +521,20 @@ body.ai-hidden .ai-show{display:block}
     <button class="btn sm ghost" id="btnAiToggle" title="展开/收起 AI 助手（Ctrl+B）">AI 助手</button>
     <button class="btn sm ghost" id="btnQuit" title="退出（会同时收尾本应用拉起的 cjh）">退出</button>
   </header>
+
+  <!-- 从 Git 克隆（0.39.25）：默认克隆到工作区根（LINGQU_WORKSPACES 或 ~/lingqu-workspaces），
+       浅克隆（depth=1）够跑迁移；要完整历史把深度填 0。
+       注意：这个面板是 .app 网格的**第二行**（`.app` 的 grid-template-rows 是 `48px auto 1fr`），
+       别塞进 titlebar —— 那行高度是固定的 48px。 -->
+  <div id="clonePanel">
+    <span class="cpTitle">从 Git 克隆</span>
+    <input id="cloneUrl" placeholder="https://atomgit.com/…/habit-tree.git  或  git@host:org/repo.git">
+    <input id="cloneDir" placeholder="父目录（留空＝工作区根）">
+    <input id="cloneDepth" type="number" min="0" step="1" value="1" style="width:72px" title="0 = 完整历史">
+    <button class="btn primary" id="btnCloneGo">开始克隆</button>
+    <button class="btn ghost" id="btnCloneCancel">取消</button>
+    <span id="cloneNote"></span>
+  </div>
 
   <div class="body">
     <!-- ==================== 左栏 ==================== -->
@@ -5542,6 +5587,26 @@ withBridge(function(tauri){
       projectPromptCount: 1,
       pathFieldCount: (typeof PATH_FIELDS !== 'undefined') ? PATH_FIELDS.length : 0,
       stepPathOverride: (typeof PATH_OVERRIDE !== 'undefined') ? Object.keys(PATH_OVERRIDE).filter(function(k){ return String(PATH_OVERRIDE[k]||'').length > 0; }).join(',') : '',
+      // 选工程的三条路（0.39.25）：手敲 / 原生目录框 / 克隆。
+      // echoInputsEditable 必须等于 0——8 个回显框默认全只读，界面上不该出现"到处都要填路径"。
+      echoInputsTotal: (typeof PATH_FIELDS !== 'undefined') ? PATH_FIELDS.length : 0,
+      echoInputsEditable: (function(){
+        if (typeof PATH_FIELDS === 'undefined') { return 0; }
+        var n = 0;
+        PATH_FIELDS.forEach(function(id){ var el = document.getElementById(id); if (el && !el.readOnly) { n += 1; } });
+        return n;
+      })(),
+      echoInputsEchoStyled: (function(){
+        if (typeof PATH_FIELDS === 'undefined') { return 0; }
+        var n = 0;
+        PATH_FIELDS.forEach(function(id){ var el = document.getElementById(id); if (el && el.classList.contains('echo')) { n += 1; } });
+        return n;
+      })(),
+      pickerUsed: (typeof PICK !== 'undefined') ? PICK.used : 0,
+      pickerFallback: (typeof PICK !== 'undefined') ? PICK.fallback : 0,
+      pickerLastPath: (typeof PICK !== 'undefined') ? String(PICK.lastPath || '') : '',
+      clonePanelOpen: !!(document.getElementById('clonePanel') && document.getElementById('clonePanel').classList.contains('open')),
+      cloneUrlFilled: !!((document.getElementById('cloneUrl') || {}).value),
       abortSource: String(CJ.abortSource || ''),
       abortAt: Number(CJ.abortAt || 0),
       wsFrameTypes: (function(){
@@ -5922,9 +5987,13 @@ function syncProjectEchoes(){
     if (!el) { return; }
     el.readOnly = true;
     el.placeholder = '';
+    // echo 类 = 只读回显的样式（透明底、无边框）：一眼看出"这不是让你填的输入框"。
+    // 值仍存在 input 上，所以各屏既有的 `$('xxx').value` 读法一行都不用改。
+    el.classList.add('echo');
     if (String(PATH_OVERRIDE[id] || '').length > 0) {
       el.value = PATH_OVERRIDE[id];
       el.classList.add('ovr');
+      el.readOnly = false;      // 覆盖态允许直接改（等价于点过 ✎）
     } else {
       el.value = PROJECT.path || '';
       el.classList.remove('ovr');
@@ -5967,9 +6036,58 @@ function attachOverrideButtons(){
   });
 }
 
+/* ===== 选工程：手敲（保留）/ 原生目录框 / 从 Git 克隆（0.39.25）=====
+ * 三条路并存，谁也不替代谁：
+ *   ① 顶部输入框手敲绝对路径（老习惯，脚本化/粘贴最省事）；
+ *   ② 「选择…」= 原生目录框（框架 dialog:pickFolder），没装配该插件时**回退到 prompt**，
+ *      功能不会因为漏挂插件而消失；
+ *   ③ 「克隆…」= 从 Git 地址拉下来再说（t2h:git_clone）：拉完自动设为当前工程。
+ */
+var PICK = { used: 0, fallback: 0, lastPath: '' };
+
+/** 弹系统目录选择框；框架 dialog 插件不可用时回退到 prompt（并记账，便于 ui_report 区分） */
+function pickDirectory(title, initial){
+  return new Promise(function(resolve){
+    var dlg = window.__CJ_TAURI__ && window.__CJ_TAURI__.dialog;
+    if (dlg && typeof dlg.pickFolder === 'function') {
+      Promise.resolve(dlg.pickFolder({ title: title || '选择工程目录' })).then(function(p){
+        PICK.used += 1;
+        if (p) { PICK.lastPath = String(p); }
+        resolve(String(p || ''));
+      }).catch(function(){
+        PICK.fallback += 1;
+        resolve(String(window.prompt(title || 'Tauri 工程目录的绝对路径：', initial || '') || ''));
+      });
+      return;
+    }
+    PICK.fallback += 1;
+    resolve(String(window.prompt(title || 'Tauri 工程目录的绝对路径：', initial || '') || ''));
+  });
+}
+
+function cloneNote(text, kind){
+  var n = $('cloneNote');
+  if (!n) { return; }
+  n.textContent = text || '';
+  n.className = kind === 'err' ? 'err' : (kind === 'ok' ? 'ok' : '');
+}
+
+function openClonePanel(open){
+  var p = $('clonePanel');
+  if (!p) { return; }
+  var want = (typeof open === 'boolean') ? open : !p.classList.contains('open');
+  p.classList.toggle('open', want);
+  if (want) {
+    cloneNote('');
+    if ($('cloneUrl')) { $('cloneUrl').focus(); }
+  }
+  reportUi('clone-panel');
+}
+
 (function initProjectBar(){
   try { PROJECT.path = String(localStorage.getItem(PROJECT.key) || '').trim(); } catch (e) {}
   var top = $('projPath'), btnOpen = $('btnProjOpen'), btnRecent = $('btnProjRecent');
+  var btnClone = $('btnProjClone'), btnGo = $('btnCloneGo'), btnCancel = $('btnCloneCancel');
   if (top) {
     top.value = PROJECT.path;
     top.onchange = function(){ setCurrentProject(top.value); reportUi('project-set'); };
@@ -5977,10 +6095,64 @@ function attachOverrideButtons(){
   }
   if (btnOpen) {
     btnOpen.onclick = function(){
-      var p = window.prompt('Tauri 工程目录的绝对路径：', PROJECT.path || '');
-      if (p === null) { return; }
-      setCurrentProject(p);
-      reportUi('project-open');
+      pickDirectory('选择 Tauri 工程目录', PROJECT.path || '').then(function(p){
+        if (!String(p || '').trim()) { reportUi('project-open-cancel'); return; }
+        setCurrentProject(p);
+        reportUi('project-open');
+      });
+    };
+  }
+  if (btnClone) {
+    btnClone.onclick = function(){ openClonePanel(); };
+  }
+  if (btnCancel) {
+    btnCancel.onclick = function(){ openClonePanel(false); };
+  }
+  if ($('cloneDir')) {
+    $('cloneDir').placeholder = '父目录（留空＝工作区根；可先「选择」）';
+    $('cloneDir').readOnly = true;
+    $('cloneDir').title = '工作区根默认是 %USERPROFILE%\\lingqu-workspaces（可用 LINGQU_WORKSPACES 覆盖）';
+  }
+  var btnPickDir = document.createElement('button');
+  if ($('cloneDir') && $('cloneDir').parentNode) {
+    btnPickDir.className = 'btn';
+    btnPickDir.textContent = '选择…';
+    btnPickDir.title = '选择克隆到哪个父目录';
+    btnPickDir.onclick = function(){
+      pickDirectory('选择克隆到哪个父目录', $('cloneDir').value || '').then(function(p){
+        if (String(p || '').trim()) { $('cloneDir').value = String(p).trim(); $('cloneDir').readOnly = false; }
+      });
+    };
+    $('cloneDir').parentNode.insertBefore(btnPickDir, $('cloneDir').nextSibling);
+  }
+  if (btnGo) {
+    btnGo.onclick = function(){
+      var url = ($('cloneUrl') && $('cloneUrl').value ? $('cloneUrl').value : '').trim();
+      if (!url) { cloneNote('请先填 Git 地址（https://… 或 git@host:org/repo.git）', 'err'); if ($('cloneUrl')) { $('cloneUrl').focus(); } return; }
+      var dir = ($('cloneDir') && $('cloneDir').value ? $('cloneDir').value : '').trim();
+      var depth = parseInt(($('cloneDepth') && $('cloneDepth').value) || '1', 10);
+      if (isNaN(depth) || depth < 0) { depth = 1; }
+      btnGo.disabled = true;
+      cloneNote('正在克隆…（浅克隆 depth=' + depth + '）');
+      reportUi('clone-start');
+      invoke('t2h:git_clone', { url: url, dir: dir, depth: depth }).then(function(r){
+        r = r || {};
+        btnGo.disabled = false;
+        if (!r.ok) {
+          cloneNote('克隆失败：' + (r.error || '未知错误'), 'err');
+          reportUi('clone-fail');
+          return;
+        }
+        $('cloneUrl').value = '';
+        $('cloneDir').value = '';
+        setCurrentProject(r.target);
+        cloneNote('已克隆到 ' + r.target + '（' + (r.hint || '') + '）', 'ok');
+        reportUi('clone-ok');
+      }).catch(function(e){
+        btnGo.disabled = false;
+        cloneNote('克隆失败：' + (e && e.message ? e.message : e), 'err');
+        reportUi('clone-fail');
+      });
     };
   }
   if (btnRecent) {

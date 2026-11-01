@@ -5,6 +5,51 @@
 
 ---
 
+## [0.39.25] - 2026-11-02
+
+**主题**：选工程从"手敲路径一条路"变成**三条路并存**（手敲 / 原生目录框 / 从 Git 克隆），
+并把左栏各屏那 8 个回显框做成**一眼看出不是输入框**的样子。
+
+### 起因（用户反馈）
+
+> 「当前工程旁边有个输入框，左侧迁移画像/依赖扫描/改造执行/真机验证/迁移报告等界面，还都留着输入框。
+> 这些 UI 交互细节让人迷惑。另外，工程路径可否弹出文件选择框来选？或者支持给个网络链接自动 clone？」
+
+### 做了什么
+
+1. **保留手敲**（老习惯不断）：顶部输入框照旧可以粘贴绝对路径。
+2. **「选择…」改成原生目录框**：装配框架 `DialogPlugin()`，走 `dialog:pickFolder`
+   （框架自带、返回选中目录绝对路径）。**没装配该插件时自动回退到 `prompt`**——
+   功能不会因为漏挂插件而消失，`ui_report.pickerUsed/pickerFallback` 能分辨走的哪条。
+3. **新增「克隆…」**：从 Git 地址拉下来并自动设为当前工程。
+   - 新命令 `t2h:git_clone { url, dir?, depth? }`（`src/git_clone.cj`）；
+   - 默认克隆到**工作区根** `LINGQU_WORKSPACES` 或 `~/lingqu-workspaces`，浅克隆 `depth=1`（填 0 = 完整历史）；
+   - 三条硬规则：① 参数走 **argv 不经 shell**（URL 里 `&`/`%` 交给 shell 必被吃掉，见 §4-80）；
+     ② URL 先过白名单（https/http/ssh/git/file/git@host:path），**拒绝 `-` 开头**
+     （`--upload-pack=…` 这类参数注入）；③ 同名目录**不覆盖**，自动换 `-2`/`-3`；
+   - 克隆完给一句"像不像 Tauri 工程"的判断（有 `src-tauri/` / 只有 `package.json` / 都没有），
+     只提示不拦截（monorepo 也能继续）。
+4. **8 个回显框视觉改造**：加 `echo` 样式（透明底、无边框、灰字），只有被 `✎` 显式覆盖时
+   才恢复成输入框外观并可编辑。**值仍存在 input 上**，所以各屏既有的 `$('xxx').value`
+   读法一行都没改——这是有意的：改 DOM 结构会牵动十几处取值逻辑，风险远大于收益。
+5. `ui_report` 新增 8 个字段（两处一起加，见 §4-60）：`echoInputsTotal / echoInputsEditable /
+   echoInputsEchoStyled / pickerUsed / pickerFallback / pickerLastPath / clonePanelOpen /
+   cloneUrlFilled`。**`echoInputsEditable` 必须为 0**——界面上不许再"到处都要填路径"。
+
+### 顺带撞到的门禁口径问题
+
+挂 `DialogPlugin()` 后 `cj-tauri check` 报
+`已注册命令 dialog:message 未在 capabilities 声明`：插件一次性注册 open/save/pickFolder/message
+四条，而命名权限集 `dialog:files` 只覆盖前三条 → 门禁按"已注册 ⊆ 已声明"判红。
+现在用 `dialog:default`（四条全覆盖）。**这是框架侧可改进点**：门禁应先展开 permissions 再比对，
+否则"用最小权限集"反而过不了门禁。
+
+### 门禁与测试
+
+- 五道闸全绿；单测 **338 例**（+6：URL 白名单、仓库目录名抽取、冲突命名、Tauri 特征提示、
+  工作区根兜底、坏地址在起进程前就被拒）。
+- 改动后端 + 前端，`targets/` 已重新 sync；版本三处对齐 **0.39.25**。
+
 ## [0.39.24] - 2026-11-02
 
 **主题**：m3u8dl-tauri 最后两格补齐（**可用率 80% → 100%**），并修掉「报告结论自己打自己」的读档缺陷。

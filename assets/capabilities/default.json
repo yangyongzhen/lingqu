@@ -3,6 +3,7 @@
   "windows": ["main"],
   "commands": [
     "t2h:env",
+    "t2h:git_clone",
     "t2h:quit",
     "t2h:ui_report",
     "t2h:scan",
@@ -47,7 +48,7 @@
     "system:echo"
   ],
   "events": ["ws:frame", "ws:state"],
-  "permissions": ["ws:default"],
+  "permissions": ["ws:default", "dialog:default"],
   "scopes": {
     "ws": {
       "allow": ["127.0.0.1", "localhost"]

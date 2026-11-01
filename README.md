@@ -44,6 +44,22 @@ bash packaging/pack-win-single-full.sh   # 产物只有一个 main.exe
 bash packaging/package-win.sh            # 或常规目录包（DLL 按导入闭包自动收）
 ```
 
+### 设「当前工程」的三条路（0.39.25）
+
+1. **手敲/粘贴**绝对路径到顶部输入框（脚本化、粘贴最省事，一直保留）；
+2. **「选择…」** 弹系统目录框（框架 `dialog:pickFolder`；插件不在时自动回退成输入框提示）；
+3. **「克隆…」** 给个 Git 地址，先克隆到工作区根再自动设为当前工程：
+
+```bash
+lingqu-cli sign --path <工程>          # CLI 侧照旧只吃 path
+# GUI 的「克隆…」等价于：
+#   t2h:git_clone { url: "https://…/habit-tree.git", depth: 1 }
+#   → 克隆到 %USERPROFILE%\lingqu-workspaces\habit-tree（可用 LINGQU_WORKSPACES 覆盖）
+```
+
+左栏各屏那 8 个路径框是**只读回显**（跟随顶部当前工程，样式上已做成"不是输入框"），
+要单独为某一步指定工程才点右侧 `✎`。
+
 ### 迁移一个应用（最小路径）
 
 ```bash
