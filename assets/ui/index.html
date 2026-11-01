@@ -6600,7 +6600,9 @@ withBridge(function(tauri){
         var all = badges.join(' ');
         var fails = [];
         if (missing.length) { fails.push('空徽标:' + missing.join(',')); }
-        if (all.indexOf('通过') < 0) { fails.push('没有任何通过'); }
+        // 徽标口径（0.39.43）：完成态叫「已完成」（不是「通过」——它表示"这一步检查跑过没有"）
+        if (all.indexOf('已完成') < 0) { fails.push('没有任何已完成'); }
+        if (/通过/.test(all)) { fails.push('还在用"通过"这种判定词'); }
         if (all.indexOf('待接入') >= 0) { fails.push('还在写待接入'); }
         window.__rail.err = fails.join(';') + ' || inv=' + (window.__rail.inv || '?') + ' rows=' + window.__rail.rows
           + ' ticks=' + window.__rail.ticks
@@ -6948,7 +6950,15 @@ var RAIL_STEPS = {
   report: ['report']
 };
 
-/** 纯函数：把若干步的落档观测聚合成一个徽标文案（+ 样式类） */
+/**
+ * 纯函数：把若干步的落档观测聚合成一个徽标文案（+ 样式类）。
+ *
+ * 文案口径（0.39.43，用户反馈"通过不太合适"）：
+ *   这几个左栏项表示的是**"这一步检查做过没有"**，不是"合不合格"，
+ *   所以完成态叫「已完成」而不是「通过」。
+ *   但**失败不能藏**：落档里 ok=false 就是要说出来（否则又成了另一种瞒报），
+ *   单列「有失败 N/M」，具体哪一步为什么失败见徽标的 title。
+ */
 function railBadgeOf(rows, steps){
   var total = steps.length, ran = 0, ok = 0, bad = 0;
   for (var i = 0; i < steps.length; i++) {
@@ -6958,9 +6968,9 @@ function railBadgeOf(rows, steps){
     if (r.ok === true) { ok += 1; } else { bad += 1; }
   }
   if (ran === 0) { return { text: '未开始', cls: '' }; }
-  if (bad > 0) { return { text: total > 1 ? ('失败 ' + bad + '/' + total) : '失败', cls: 'err' }; }
-  if (ok === total) { return { text: total > 1 ? ('通过 ' + ok + '/' + total) : '通过', cls: 'ok' }; }
-  return { text: '部分 ' + ok + '/' + total, cls: 'warn' };
+  if (bad > 0) { return { text: '有失败 ' + bad + '/' + total, cls: 'err' }; }
+  if (ok === total) { return { text: total > 1 ? ('已完成 ' + ok + '/' + total) : '已完成', cls: 'ok' }; }
+  return { text: '部分完成 ' + ok + '/' + total, cls: 'warn' };
 }
 
 function renderRailBadges(rows){
@@ -6975,9 +6985,10 @@ function renderRailBadges(rows){
       var notes = [];
       stepIds.forEach(function(s){
         var r = (rows || {})[s];
-        if (r) { notes.push((r.title || s) + '：' + (r.ran ? (r.ok ? '通过' : '失败') : '未跑') + (r.note ? ('（' + r.note + '）') : '')); }
+        // 细节里保留真实判定（通过 / 失败 / 未跑）：徽标说"做过没有"，title 说"做得怎么样"
+        if (r) { notes.push((r.title || s) + '：' + (r.ran ? (r.ok ? '已完成（判定通过）' : '已完成（判定失败）') : '未跑') + (r.note ? ('（' + r.note + '）') : '')); }
       });
-      el.title = notes.join('\n');
+      el.title = notes.join('\n') + '\n\n（徽标只表示"这一步检查跑过没有"；判定结果见上）';
     }
     txt.push(key + '=' + b.text);
   });
@@ -6985,13 +6996,15 @@ function renderRailBadges(rows){
   updateRailStepDoneMarker();
 }
 
-/** 左栏项的 .done 记号跟着徽标走（每个左栏项只要"该组步骤全部通过"就打个勾） */
+/** 左栏项的 .done 记号跟着徽标走（该组步骤**全部已完成**就打个勾；"有失败"不打勾） */
 function updateRailStepDoneMarker(){
   Object.keys(RAIL_STEPS).forEach(function(key){
     var el = document.querySelector('.step[data-s="' + key + '"]');
     if (!el) { return; }
     var b = document.querySelector('.step .badge[data-badge="' + key + '"]');
-    var okAll = !!(b && /\u901a\u8fc7/.test(b.textContent || ''));
+    var txt = (b && b.textContent) || '';
+    // 「已完成」「已完成 3/3」打勾；「有失败」「部分完成」「未开始」都不打
+    var okAll = /^已完成/.test(txt);
     el.classList.toggle('done', okAll);
   });
 }
