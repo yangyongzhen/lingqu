@@ -5,6 +5,53 @@
 
 ---
 
+## [0.39.28] - 2026-11-02
+
+**主题**：顶栏「当前项目」胶囊**不再撒谎** —— 它原来是 HTML 里写死的一段示意文案。
+
+### 现象（用户实测）
+
+> 「我已经选择了其他项目，但 UI 上为何还显示 当前项目 habit-tree · v1.2.0 · 原生 TS + Rust？」
+
+### 根因
+
+`.tb-proj` 这段三个字段（`habit-tree` / `v1.2.0` / `原生 TS + Rust`）**全是写死的字符串**，
+`setCurrentProject()` 只更新顶部输入框与左栏 8 个回显框，从来没碰过它 —— 换哪个工程它都不变。
+而且它写的是"看起来像数据"的样子，用户没理由怀疑它是示意稿。
+
+### 处置
+
+- HTML：`<div class="tb-proj">` 拆成 `#tbProj` / `#tbProjName` / `#tbProjMeta` 三段，初始值「（未选）· 未选工程」。
+- 新增 `renderTopProj()`（配 `basenameOf()` / `normPathKey()`）：**只显示真的知道的两样东西** ——
+  - 工程名 = 当前工程路径末段；
+  - 扫描状态 = `已扫描 R=N 项` / `未扫描` / `扫描失败`，`title` 里给完整路径。
+  版本号、技术栈这类要读工程元数据的字段**没有真实来源就不写**（AGENTS §1-4：未验证不得冒充已验证），
+  而不是继续沿用一段没人维护的假数据。
+- 调用点：`setCurrentProject()`（换工程即刷新）、扫描成功/失败后、页面初始化。
+- 路径比较统一走 `normPathKey()`（`\`↔`/`、去尾分隔符、Windows 盘符小写）：
+  后端回投的是 `E:\test\rust\m3u8dl-tauri`，输入框/记住的是 `E:/test/rust/m3u8dl-tauri`，
+  直接 `===` 会把同一工程判成两个，导致**扫完之后胶囊还说「未扫描（旁边的数字属于上一个工程）」**。
+
+### 自动断言（§4-60 两处一起加）
+
+`ui_report` 新增 4 个字段：`tbProjName` / `tbProjMeta` / `tbProjScanned` / `tbProjStale`。
+`LINGQU_UI_PROBE=layout` 由 3 步扩到 4 步，第 ④ 步专门用**反斜杠写法**的 `__scan` 验证路径归一化。
+
+### 实测（`LINGQU_UI_PROBE=layout`，窗口 1264×801）
+
+| 探针状态 | 当前工程 | `tbProjName` | `tbProjScanned` / `Stale` | `tbProjMeta` |
+|---|---|---|---|---|
+| `layout-no-project` | （空） | （未选） | 0 / 0 | 未选工程 |
+| `layout-with-override` | `E:/test/rust/m3u8dl-tauri` | `m3u8dl-tauri` | 0 / 0 | 未扫描 |
+| `layout-normal` | `E:/test/rust/m3u8dl-tauri` | `m3u8dl-tauri` | 0 / 0 | 未扫描 |
+| `layout-scan-same-project` | 同上 | `m3u8dl-tauri` | **1 / 0** | **已扫描 R=13 项** |
+
+**换工程胶囊跟着换**（第 1→2 行）、**同一工程写法不同也认得出**（第 4 行）。
+
+### 坑
+
+AGENTS §4-94（写死的示意数据留在真实界面里 = 谎报）、§4-95（路径字符串比较必须先归一化）。
+
 ## [0.39.27] - 2026-11-02
 
 **主题**：**门禁不再误杀 cjh 引擎**，且「立即拉起」拉的是**当前该用的那个** cjh —— 两处都是"器官被自己掰断"的错误。

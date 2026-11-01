@@ -1472,6 +1472,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("projNoteClipped", JsonBool(argBool(args, "projNoteClipped", false)))
         o.put("projNoteText", JsonString(argStr(args, "projNoteText", "")))
         o.put("projBarClipped", JsonBool(argBool(args, "projBarClipped", false)))
+        // 顶栏「当前项目」胶囊（0.39.28）：它以前是写死的习惯用语（habit-tree · v1.2.0 · …），
+        // 换了工程一个字都不变。现在只显示工程名 + 扫描状态，这两组字段让"换工程后胶囊跟着换"可断言。
+        o.put("tbProjName", JsonString(argStr(args, "tbProjName", "")))
+        o.put("tbProjMeta", JsonString(argStr(args, "tbProjMeta", "")))
+        o.put("tbProjScanned", JsonInt(argInt(args, "tbProjScanned", 0)))
+        o.put("tbProjStale", JsonInt(argInt(args, "tbProjStale", 0)))
         // 底部贴齐（0.39.26）：layoutGapBottom 必须 ≈0（.app 底边 - .body 底边），
         // 否则"最大化后底部空一截"这类布局缺陷没人能自动发现。
         o.put("layoutGapBottom", JsonInt(argInt(args, "layoutGapBottom", -1)))
