@@ -98,7 +98,7 @@ public func collectBatchRow(projName: String, projPath: String, now: String): Ba
     row.stepTotal = pr.total
 
     // A3 人工介入（采纳才算一次）
-    let hc = countHumanDecisions(collectDecisionValues(projName))
+    let hc = countHumanDecisions(collectDecisionValues(projName, projPath))
     row.humanAccepted = hc.accepted
     return row
 }

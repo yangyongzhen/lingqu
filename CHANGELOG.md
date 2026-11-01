@@ -5,6 +5,47 @@
 
 ---
 
+## [0.39.24] - 2026-11-02
+
+**主题**：m3u8dl-tauri 最后两格补齐（**可用率 80% → 100%**），并修掉「报告结论自己打自己」的读档缺陷。
+
+### 实测证据（同一条链，HarmonyOS PC `3QC0124B20000048`）
+
+| 环节 | 清理前 | 清理后 |
+|---|---|---|
+| `hap` 闸 | `gates=false`（rawfile 6 条死资源） | **`gates=true`、`rawfileCount=0`、`signed=true`**，包体 8,273,766 → **8,257,155** B |
+| `deploy --start` | installed/started 均 true | 仍 `ok=true`，hilog 40 行无崩溃 |
+| 界面 | ArkWeb 已渲染 | `uitest dumpLayout` 仍命中本应用窗口 + `Web`/`rootWebArea` + 真实文案（**证明清死资源没影响渲染**） |
+| `verify` | pass 4 / fail 1 → 80% | **pass 5 / fail 0 / limit 1 / unknown 0 → 100%** |
+| `report` | 结论「可用率 尚未验证」 | **「8 步完成 8/8（100%），核心功能可用率 100%，0 处人工介入」** |
+
+### 做了什么
+
+- **清掉 m3u8dl 的 6 个死 rawfile 条目**（`app.js` / `index.html` / `style.css` 及 hvigor 记录里的镜像条目）：
+  前端已在 `.so` 里（`/assets/index.html`、`/assets/app.js`、`/assets/style.css` 在 `.so` 内可见），
+  源码（`*.ets`/`*.ts`/`*.json5`）**没有任何 rawfile 引用**——先落这三条证据再动手。
+  清理前把 3 个文件**按 SHA256 校验着备份**到 `<工程>/.lingqu/evidence/rawfile-bak-<时间戳>/`。
+
+### Fixed（报告读档，属 §4-75 同族但漏在 `report_feed`）
+
+1. **`collectReportFacts` 全程用相对 CWD 的 `.lingqu/...` 读落档** → 从仓目录跑
+   `report --path <别的工程>` 时读到本仓旧档（或读不到）→ 结论写「核心功能可用率 尚未验证」，
+   而**同一份报告正文的任务板摘要写着 100%**——一份文档里两个数。
+   现在：读按 `resolveLqPath(projPath, …)` 解析，附录仍显示工程内相对路径。
+2. **`.lingqu` 前缀被喂给 `resolveLqPath` 会拼出 `.lingqu/.lingqu/...`**（它内部自己补一层），
+   `exists()` 永远 false → 所有产物附录消失、可用率读不到。新增纯函数
+   `bareLqRel`（剥前缀，两种分隔符都认，且不误伤 `.lingqu-extra/`）+ 单测钉住。
+3. 顺带修一处**签名结论过期**：报告里的「签名体检没过」来自自动签名之前的旧落档；
+   重跑 `sign --path` 后为 `ok=true / mode=debug / candidateBundleMatch=true`，
+   报告因此只剩一条**真实**的提醒（debug 态不能上架）。
+
+### 说明
+
+- 单测 **332 例**（+1：`testBareLqRelStripsLingquPrefix`，含"不能把 100% 说成未验证"的结论口径）。
+- 5 道门禁全绿。
+- **遗留（口径缺口，非缺陷）**：报告的「0 处人工介入」只数 `port` 决策采纳；
+  本轮 AGC 那次**浏览器授权点击**没被计进 A3，属口径未覆盖，已记录在 `docs/进度记录.md`。
+
 ## [0.39.23] - 2026-11-02
 
 **主题**：把「跑过但没过」从「没跑过」里分出来——`verify` 之前会把**装配跑过、闸没过**说成

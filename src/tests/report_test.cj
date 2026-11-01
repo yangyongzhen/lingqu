@@ -1,6 +1,7 @@
 package lingqu.tests
 
 import lingqu.report.*
+import lingqu.*
 import std.collection.*
 
 /*
@@ -254,4 +255,27 @@ public func testStepActionHints(): Unit {
     // 文件名 base：空工程名兜底成 unknown
     @Assert(reportFileBase("habit-tree"), "habit-tree")
     @Assert(reportFileBase(""), "unknown")
+}
+
+@Test
+public func testBareLqRelStripsLingquPrefix(): Unit {
+    // 0.39.24：报告收数把 `.lingqu/xxx/<工程>.json` 直接喂给 resolveLqPath，
+    // 而后者内部还会再补一层 `<工程>/.lingqu/` → 拼成 `.lingqu/.lingqu/...`，
+    // exists() 永远 false → 报告结论写「可用率 尚未验证」，正文却写着 100%（一份文档两个数）。
+    @Assert(bareLqRel(".lingqu/scan/habit-tree.json"), "scan/habit-tree.json")
+    @Assert(bareLqRel(".lingqu/verify/habit-tree.md"), "verify/habit-tree.md")
+    @Assert(bareLqRel(".lingqu\\scan\\habit-tree.json"), "scan\\habit-tree.json")
+    // 已经是裸 rel 的原样返回（两种分隔符都不许被吃掉）
+    @Assert(bareLqRel("scan/habit-tree.json"), "scan/habit-tree.json")
+    @Assert(bareLqRel("tasks.json"), "tasks.json")
+    // 不能把".lingqu-xxx"这种近似前缀当成目录前缀切掉
+    @Assert(bareLqRel(".lingqu-extra/a.json"), ".lingqu-extra/a.json")
+    @Assert(bareLqRel(""), "")
+    // 结论口径：有可用率就报数字，没有才说"尚未验证"（别把 100% 说成未验证）
+    let f = satisfiedFacts()
+    f.project = "demo"
+    f.verifyRate = 100
+    @Assert(reportConclusion(f).contains("可用率 100%"), true)
+    f.verifyRate = -1
+    @Assert(reportConclusion(f).contains("尚未验证"), true)
 }
