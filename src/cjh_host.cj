@@ -103,9 +103,13 @@ func fileReadable(p: String): Bool {
 // ============================================================
 
 public func cjhHealthy(port: Int64): Bool {
+    // 3s 而不是 1s（0.39.33 实测教训）：cjh 正在跑 agent 回合 / 大工具调用时，
+    // /api/health 可能排队到 1s 以上才回 —— 1s 超时会把它判成"引擎不在"，
+    // 于是应用**又拉起一只引擎**（端口被占，那只注定失败），用户侧表现为
+    // 「连接已断开」+ 偶发的僵尸进程。判活要宽容，判死要有证据。
     let client = ClientBuilder()
-        .readTimeout(Duration.second * 1)
-        .writeTimeout(Duration.second * 1)
+        .readTimeout(Duration.second * 3)
+        .writeTimeout(Duration.second * 3)
         .build()
     var ok = false
     try {
@@ -118,6 +122,28 @@ public func cjhHealthy(port: Int64): Bool {
     }
     client.close()
     return ok
+}
+
+/**
+ * 判活（带重试）：引擎**正在跑回合**时 /api/health 偶尔会慢，一次超时不算死。
+ *
+ * 0.39.33 实测：用户在一次长对话里看到「连接已断开」，同时进程表里**多出一只引擎**
+ * （`main.exe web --port 8765` 起了两只，第二只绑不上端口）。根因就是这里 1s 超时误判
+ * → `ensureCjhWeb()` 以为没有引擎 → 又 spawn 一只。现在：先重试 `tries` 次（每次 700ms），
+ * 全都不通才认定"没有引擎"。判死要有证据，不能一次读超时就下结论（§2.3 的"就绪判据"同样适用）。
+ */
+public func cjhHealthyWithRetry(port: Int64, tries: Int64): Bool {
+    var n: Int64 = 0
+    while (n < tries) {
+        if (cjhHealthy(port)) {
+            return true
+        }
+        n += 1
+        if (n < tries) {
+            sleep(Duration.millisecond * 700)
+        }
+    }
+    return false
 }
 
 /** 可用端点的统一形状：页面拿到就能自己接上 */
@@ -652,7 +678,8 @@ func terminateCjhProc(p: SubProcess): Unit {
  */
 public func ensureCjhWeb(): Bool {
     let port = cjhPort()
-    if (cjhHealthy(port)) {
+    // 先按"可能只是忙"重试，避免在长回合期间误判引擎已死、再拉起一只绑不上端口的僵尸
+    if (cjhHealthyWithRetry(port, 6)) {
         eprintln("[lingqu] cjh web 已在运行（port=${port}），直接复用")
         gCjhOwned = false
         return true
@@ -819,7 +846,8 @@ func cjhExtractBundle(bundle: String, installDir: String): Option<String> {
 func cjhDeployAndStart(): JsonObject {
     let obj = JsonObject()
     let port = cjhPort()
-    if (cjhHealthy(port)) {
+    // 同 ensureCjhWeb：引擎忙的时候 health 会慢，先重试再下"没有引擎"的结论
+    if (cjhHealthyWithRetry(port, 4)) {
         obj.put("ok", JsonBool(true))
         obj.put("reused", JsonBool(true))
         putEndpoints(obj, port)

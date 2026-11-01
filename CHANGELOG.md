@@ -5,6 +5,67 @@
 
 ---
 
+## [0.39.33] - 2026-11-02
+
+**主题**：查清「**连接已断开——回复可能不完整**」为什么会偶发，并让**断线可恢复**（不再只剩半截回复）。
+
+### 现象（用户连续两轮实测）
+
+> 「连接已断开——回复可能不完整），为啥总是偶发会出现这个？」
+
+### 证据（`~/.cjh/logs/cjh.log`）
+
+```
+[12:57:22] 客户端断开，本轮继续执行（web.keep_running_on_disconnect=true）
+[12:57:23] WebChannel 发送失败，连接判定为断开，后续帧跳过
+           （ws sent=494 failed=1 dead=true err=SocketException: Failed to write data
+            10054: An existing connection was forcibly closed by the remote host.）
+[13:00:40] Agent.run 正常结束: 41 rounds, 45 tools, 628753ms
+```
+
+（11:52 那一次同款，错误码是 **10053** An established connection was aborted by the software in your host machine.）
+
+**结论：不是"网络玄学"，也不是 cjh 崩了。** WebSocket 是**客户端这一侧**关掉的
+（10053 = 本机软件中止、10054 = 对端强制关闭，两次都对得上"应用被重启/关闭"）；
+cjh 按 `keep_running_on_disconnect=true` **继续把回合跑完了**（3 分钟后 41 轮 / 45 个工具正常结束），
+但那根连接已判定 dead、后续帧全部跳过 → 界面只剩半截回复 + 一句"可能不完整"。
+
+### 三类真实触发（都不是随机）
+
+1. **应用被重启/关闭**：开发期我反复重启验证，以及早期门禁的 `taskkill /F /IM main.exe`（§4-92）——
+   用户侧的会话被打断，这是"偶发"的最大来源；
+2. **健康检查误判**（真 bug）：`cjhHealthy` 的 `readTimeout` 原来是 **1s**，引擎在跑长回合时
+   `/api/health` 排队就超过 1s → 被判成"引擎不在" → `ensureCjhWeb()` **又拉起一只引擎**。
+   实测证据：13:09:24 应用（pid 15248）在 8765 已被 14668 占着的情况下又 spawn 了 pid 24536，
+   那只注定绑不上端口，成为僵尸；
+3. **恢复时只插一句话**（UX 缺陷）：重连后 cjh 会推 `history_messages`，我们原来只显示
+   「已恢复历史会话（N 条）」，**不渲染内容** —— 断线期间 agent 的产出在界面上等于丢了。
+
+### 处置
+
+- 后端（`src/cjh_host.cj`）：
+  - `cjhHealthy` 读超时 1s → **3s**（判活要宽容，判死要有证据）；
+  - 新增 `cjhHealthyWithRetry(port, tries)`（700ms × N 次）；`ensureCjhWeb()` 重试 6 次、
+    `cjhDeployAndStart()` 重试 4 次，全都不通才认定"没有引擎"→ **不再在引擎忙时 spawn 僵尸**。
+- 前端（`assets/ui/index.html`）：
+  - 新增 `renderHistory()`：收到 `history_messages` 就**按历史重建对话**
+    （user → 我的气泡；assistant → Markdown；tool → 一行工具结果），末尾标注
+    「↻ 已按会话历史重建对话（N 条）——断线期间的产出也在这里」；
+  - 断开措辞改成「**连接断开 · 正在自动重连，重连后按会话历史补回这段**」（不再是终点式的"可能不完整"）；
+  - `ui_report` 新增 `historyIn` / `historyShown`；新增探针 `LINGQU_UI_PROBE=history`。
+
+### 实测（`LINGQU_UI_PROBE=history`，喂一帧真实形状的 `history_messages`）
+
+`ui_report` 的 `history-restored` 一行：
+`historyIn=3`、`historyShown=3`、`lastFrameType=history_messages`、`errorCount=0` —— 界面真的把三重建出来了。
+
+### 未做（如实标注）
+
+- cjh **断线期间的事件（tool_start/tool_result）没有落库**，重连只能靠会话消息重建，
+  中间的工具过程看不到；要补得在 cjh 侧把帧写进 session（属上游改动）。
+- 本次两次断线都有明确的客户端侧证据（10053/10054）；**WebView2 自身无故断 WS 没有证据支持**，
+  所以没有为此加"心跳 ping"之类的补丁。
+
 ## [0.39.32] - 2026-11-02
 
 **主题**：长命令期间聊天区**不再看着像卡死** —— 工具执行挂秒表；同时把「DOS 窗口一闪」查清并记进上游回馈。

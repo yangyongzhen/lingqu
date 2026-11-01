@@ -3804,13 +3804,59 @@ withBridge(function(tauri){
     } else if (t === 'ack') {
       var foot = $('txtFoot'); if (foot) { foot.textContent = 'ack: ' + (m.action || ''); }
     } else if (t === 'history_messages') {
-      var n = (m.messages && m.messages.length) || 0;
-      insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
-        '<div class="small muted">已恢复历史会话' + (n ? ('（' + n + ' 条）') : '') + '</div></div></div>'));
+      // 断线重连后 cjh 会把**整个会话历史**推回来（0.39.33）。
+      // 以前这里只插一句"已恢复历史会话（N 条）"——用户看到的是半截回复 + 一句提示，
+      // 断线期间 agent 到底产出了什么完全看不到。现在按历史重建对话，把内容补回版面。
+      renderHistory(m.messages || []);
     } else if (t === 'raw') {
       addError('无法解析的帧：<span class="mono">' + esc(String(m.text || '').slice(0, 200)) + '</span>', 'raw');
     }
     renderWsState();
+  }
+
+  /* ---------- 历史回放（0.39.33）----------
+   * 断线/重连后 cjh 推 `history_messages`（{role, content, name?, tool_call_id?}）。
+   * 以前只显示一句"已恢复历史会话"，断线期间 agent 的产出全丢在界面上。
+   * 现在按历史重建：user → 我的气泡；assistant → Markdown 气泡；tool → 折叠成一行工具结果。
+   */
+  function renderHistory(msgs){
+    var list = msgs || [];    chatBox().innerHTML = '';
+    CJ.curBubble = null; CJ.acc = '';
+    var shown = 0;
+    var lastAssistant = '';
+    list.forEach(function(m){
+      var role = String(m && m.role || '');
+      var text = String(m && m.content || '');
+      if (role === 'system') { return; }
+      if (role === 'tool') {
+        var nm = String(m.name || 'tool');
+        var one = text.replace(/\s+/g, ' ').slice(0, 160);
+        insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+          '<div class="tool"><div class="th"><span class="dot ok"></span>' +
+          '<span class="nm">' + esc(nm) + '</span><span class="st">已完成</span></div>' +
+          '<div class="tb">' + esc(one) + (text.length > 160 ? ' …' : '') + '</div></div></div></div>'));
+        shown += 1;
+        return;
+      }
+      if (role === 'user') {
+        insertNode(mkEl('<div class="msg me"><div class="av me">我</div><div class="b">' +
+          '<div class="who">' + now() + '</div><div class="md">' + esc(text) + '</div></div></div>'));
+        shown += 1;
+        return;
+      }
+      // assistant（含空 content 的"只调工具"回合：跳过，避免空白气泡）
+      if (text.trim().length === 0) { return; }
+      lastAssistant = text;
+      insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' + renderMd(text) + '</div></div>'));
+      shown += 1;
+    });
+    if (lastAssistant) { CJ.lastReply = lastAssistant; }
+    insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+      '<div class="small muted">↻ 已按会话历史重建对话（' + shown + ' 条）——断线期间的产出也在这里</div></div></div>'));
+    // 给 ui_report 留可断言位（断线恢复到底"补回了几条"）
+    CJ.historyIn = list.length;
+    CJ.historyShown = shown;
+    atBottom();
   }
 
   /* ---------- 发送提问 ---------- */
@@ -3862,7 +3908,9 @@ withBridge(function(tauri){
     } else if (st === 'closed') {
       CJ.up = false; CJ.connecting = false;
       renderWsState();
-      if (CJ.curBubble) { finishTurn('（连接已断开——回复可能不完整）'); }
+      // 断开时不要把"可能不完整"当终点：下面会退避重连，连上后 cjh 会推 history_messages，
+      // 我们按历史重建对话（renderHistory），所以这里只标一句"正在补"（0.39.33）。
+      if (CJ.curBubble) { finishTurn('（连接断开 · 正在自动重连，重连后按会话历史补回这段）'); }
       scheduleReconnect();
     }
   });
@@ -5744,6 +5792,9 @@ withBridge(function(tauri){
       aiToolName: (typeof TOOLRUN !== 'undefined') ? String(TOOLRUN.name || '') : '',
       aiToolElapsed: (typeof TOOLRUN !== 'undefined' && TOOLRUN.startedAt) ? toolElapsedSec() : 0,
       aiBusyText: (function(){ var n = document.getElementById('aiBusy'); return n ? String(n.textContent || '') : ''; })(),
+      // 断线恢复（0.39.33）：收到 history_messages 后按历史重建了几条
+      historyIn: (typeof CJ.historyIn === 'number') ? CJ.historyIn : 0,
+      historyShown: (typeof CJ.historyShown === 'number') ? CJ.historyShown : 0,
       currentProject: (typeof PROJECT !== 'undefined') ? String(PROJECT.path || '') : '',
       projectPromptCount: 1,
       pathFieldCount: (typeof PATH_FIELDS !== 'undefined') ? PATH_FIELDS.length : 0,
@@ -6020,6 +6071,20 @@ withBridge(function(tauri){
       setTimeout(function(){ setCurrentProject('E:/test/rust/m3u8dl-tauri'); }, 900);
       setTimeout(function(){ switchScreen('report'); }, 1200);
       setTimeout(function(){ reportUi('batch-auto'); }, 4500);
+      return;
+    }
+    // 断线恢复自检（LINGQU_UI_PROBE=history，0.39.33）：喂一帧真实形状的 history_messages，
+    // 断言界面上真的把历史重建出来了（而不是只插一句"已恢复历史会话"）。
+    // 判据：historyIn=3、historyShown=3、聊天气泡数 >0、errorCount=0。
+    if (mode === 'history') {
+      setTimeout(function(){
+        onFrame({ type: 'history_messages', session_id: 'probe-s1', messages: [
+          { role: 'user', content: '帮我看看这个工程能不能迁' },
+          { role: 'assistant', content: '**可以**。我先扫描：\n\n1. 读 `package.json`\n2. 跑 `t2h:scan`' },
+          { role: 'tool', name: 'bash', content: 'scan done: R=13 units, unknown=0' }
+        ] });
+      }, 1200);
+      setTimeout(function(){ reportUi('history-restored'); }, 2600);
       return;
     }
     // 工具心跳自检（LINGQU_UI_PROBE=toolrun，0.39.32）：模拟一次 tool_start → 等 4 秒 → 回投

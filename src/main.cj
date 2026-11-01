@@ -1623,6 +1623,9 @@ public class UiReportCommand <: CommandHandler {
         o.put("aiToolName", JsonString(argStr(args, "aiToolName", "")))
         o.put("aiToolElapsed", JsonInt(argInt(args, "aiToolElapsed", 0)))
         o.put("aiBusyText", JsonString(argStr(args, "aiBusyText", "")))
+        // 断线恢复（0.39.33）：收到 history_messages 后按历史重建了几条
+        o.put("historyIn", JsonInt(argInt(args, "historyIn", 0)))
+        o.put("historyShown", JsonInt(argInt(args, "historyShown", 0)))
         o.put("batchA4", JsonBool(argBool(args, "batchA4", false)))
         o.put("batchA1", JsonBool(argBool(args, "batchA1", false)))
         o.put("batchHtml", JsonString(argStr(args, "batchHtml", "")))
