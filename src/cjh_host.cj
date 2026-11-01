@@ -7,9 +7,9 @@ import std.env.*
 import std.fs.*
 import std.io.*            // InputStream（读 HTTP 响应体）
 import std.collection.*    // ArrayList
-// SubProcess / launch 只在非 Windows 分支用（Windows 走框架 launchHidden），
-// import 也跟着同一条 @When 门禁——否则 Windows 构建会多一条 unused import 警告
-@When[os != "Windows"]
+// SubProcess / launch：非 Windows 分支一直用；Windows 侧 0.39.40 起也用它（让 cjh 继承
+// 我们的隐藏控制台，避免它再拉 bash/find 时各自弹黑窗）。因此两边都要 import——
+// 但各自仍需 @When 门禁，否则另一平台会多一条 unused import 警告。
 import std.process.*
 import cjTauri.*              // bytesToHex
 import stdx.encoding.json.*
@@ -41,11 +41,58 @@ public let CJH_DEFAULT_PORT: Int64 = 8765
 
 /** 全局持有 spawn 出来的子进程：装配期写一次、退出收尾读一次，不做并发保护 */
 @When[os == "Windows"]
-public var gCjhProc: Option<BackgroundProcess> = None
+public var gCjhProc: Option<CjhHandle> = None
 @When[os != "Windows"]
 public var gCjhProc: Option<SubProcess> = None
 /** true = cjh 是本应用拉起的（退出时要收尾）；false = 本来就在跑（别动人家的） */
 public var gCjhOwned: Bool = false
+
+/**
+ * 两种拉起方式的统一句柄（0.39.40，仅 Windows）。
+ *
+ * 为什么需要它：`launchHidden`（C 桥，DETACHED_PROCESS）拿不到子进程输出、只留 pid；
+ * 而「让 cjh 继承我们的隐藏控制台」只能走 `std.process.launch`（返回 SubProcess）。
+ * 两边的存活判定/终止方法签名不同，所以收在一层里——上层（就绪等待 / 退出收尾）不必分叉。
+ */
+@When[os == "Windows"]
+public class CjhHandle {
+    private let hidden: Option<BackgroundProcess>
+    private let sub: Option<SubProcess>
+
+    public init(hidden: Option<BackgroundProcess>, sub: Option<SubProcess>) {
+        this.hidden = hidden
+        this.sub = sub
+    }
+
+    public func isAlive(): Bool {
+        match (this.hidden) {
+            case Some(h) => return h.isAlive()
+            case None => ()
+        }
+        match (this.sub) {
+            case Some(s) => return s.isAlive()
+            case None => return false
+        }
+    }
+
+    public func stop(): Unit {
+        match (this.hidden) {
+            case Some(h) => h.stop()
+            case None => ()
+        }
+        match (this.sub) {
+            case Some(s) =>
+                try {
+                    s.terminate(force: true)
+                    sleep(Duration.millisecond * 200)
+                    let _ = s.wait()
+                } catch (e: Exception) {
+                    ()
+                }
+            case None => ()
+        }
+    }
+}
 
 // ============================================================
 // 端口 / 环境变量
@@ -592,21 +639,51 @@ func spawnCjhWeb(bin: String): Bool {
         terminateCjhProc(old)
         gCjhProc = None
     }
+    // 0.39.40：本进程若已分到**隐藏控制台**（win_console.ensureHiddenConsole），就让 cjh
+    // **继承**它（走 std.process.launch），而不是 DETACHED 掉——这样 cjh 再拉 bash / find /
+    // lingqu-cli 时都继承这个看不见的 console，用户不会再看到一个个黑窗闪。
+    // 没有隐藏控制台时回落到 launchHidden：那时若继承，cjh 会顶出一个**可见**的黑窗（更糟）。
+    let inherited = launchCjhInheritingConsole(bin)
+    match (inherited) {
+        case Some(sub) =>
+            return awaitCjhOwned(CjhHandle(None, Some(sub)), "继承隐藏控制台")
+        case None => ()
+    }
     let held = launchHidden(bin, cjhWebArgs())
     if (let None <- held) {
         eprintln("[lingqu] 启动 cjh web 失败（${bin}）——C 桥的 spawn 没拿到 pid")
         return false
     }
-    let proc = held.getOrThrow()
-    gCjhProc = Some(proc)
-    match (awaitCjhReady(cjhPort(), { => proc.isAlive() })) {
+    return awaitCjhOwned(CjhHandle(Some(held.getOrThrow()), None), "launchHidden")
+}
+
+/** 隐藏控制台可用时，用「继承 console」的方式拉起 cjh；不可用或失败返回 None（调用方回落） */
+@When[os == "Windows"]
+func launchCjhInheritingConsole(bin: String): Option<SubProcess> {
+    if (!gConsoleHidden) {
+        return None
+    }
+    try {
+        let p = launch(bin, cjhWebArgs())
+        eprintln("[lingqu] cjh web 以「继承隐藏控制台」方式拉起：子进程不再各自弹黑窗")
+        return Some(p)
+    } catch (e: Exception) {
+        eprintln("[lingqu] 继承控制台方式拉起失败，回落到 launchHidden：${e}")
+        return None
+    }
+}
+
+/** 拉起后等就绪 + 记账（两种拉起方式共用；`how` 只用于日志） */
+@When[os == "Windows"]
+func awaitCjhOwned(h: CjhHandle, how: String): Bool {
+    gCjhProc = Some(h)
+    match (awaitCjhReady(cjhPort(), { => h.isAlive() })) {
         case CjhWait.Ready =>
             gCjhOwned = true
-            eprintln("[lingqu] cjh web pid=${proc.processId()}")
+            eprintln("[lingqu] cjh web 已就绪（${how}）")
             return true
         case CjhWait.Died =>
-            eprintln("[lingqu] cjh web 进程退出（launchHidden 只留 pid，拿不到退出码）" +
-                "——检查这个可执行文件与 cjh 配置")
+            eprintln("[lingqu] cjh web 进程退出（${how}）——检查这个可执行文件与 cjh 配置")
             gCjhProc = None
             return false
         case CjhWait.Timeout =>
@@ -655,9 +732,9 @@ public func shutdownCjh(): Unit {
 }
 
 @When[os == "Windows"]
-func terminateCjhProc(p: BackgroundProcess): Unit {
+func terminateCjhProc(p: CjhHandle): Unit {
     if (p.isAlive()) {
-        eprintln("[lingqu] 收尾：终止 cjh web（pid=${p.processId()}）")
+        eprintln("[lingqu] 收尾：终止 cjh web")
         p.stop()
     }
 }

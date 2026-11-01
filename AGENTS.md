@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.39**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.40**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -115,7 +115,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 就绪判据 | 只有一条：`GET /api/health` 收到 200。没有"看着像起来了"这种模糊态 |
 | 复用优先 | 8765 上已有 cjh（可能是用户自己的）就复用，**不抢不杀**，退出时也不动它 |
 | 收尾归属 | 只有本应用拉起的（`gCjhOwned=true`）才在退出时终止 |
-| 拉起方式 | 必须 `launchHidden()`（本应用是 GUI 子系统，`std.process.launch` 会给子进程配黑窗口） |
+| 拉起方式 | **有隐藏控制台时继承拉起、否则 `launchHidden()`**（0.39.40）：本应用是 GUI 子系统，`std.process.launch` 会给子进程**新配**一个黑窗口；但先用 `win_console.ensureHiddenConsole()` 给自己分一个**看不见的** console 之后，继承它反而让 cjh 及其 bash/find/lingqu-cli 全都不再弹窗。规则：`ensureHiddenConsole()` 成功 → `std.process.launch`（继承）；失败 → 回落 `launchHidden`（DETACHED，绝不顶出可见窗口）。两种句柄由 `CjhHandle` 收口 |
 | 绑定地址 | 自己拉起的一律 `--bind 127.0.0.1`（cjh 默认绑 `0.0.0.0` 且默认无鉴权） |
 | 就绪等待 | 100ms × 10s；超时**不算成功**，只是留着进程等重试 |
 | 二进制校验 | vendor 目录 4 个文件逐个 SHA256；**验不过绝不解包也不执行** |
@@ -253,6 +253,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 101 | 接续旧会话时服务商回 400：`The reasoning_content in the thinking mode must be passed back to the API` | **思考模式的模型要求把上一轮 assistant 的 `reasoning_content` 原样回传**，而 cjh 的 `ChatMessage` 只有 role/content/toolCalls、`SessionStore` 也只存 role/content/name/tool_call_id —— **reasoning 从来没落库**。所以：新会话一定正常，**接续旧会话（resume / 重启后恢复）必然 400**。判据：报错文案里出现 `reasoning_content`；`服务商返回错误：` 这句出自 **cjh 自带网页 UI**（`static_assets.cj:1116`），不是灵渠的文案（看到它就说明当时在浏览器里开着 `127.0.0.1:8765`）。本仓处置：**识别到该 400 自动 `new_session`**（界面历史仍保留），别让人被隐性规则卡死；根治要 cjh 侧 `ChatMessage` 加 reasoning + 落盘 + 回传（`docs/上游回馈-cjh.md` 第 10 条，0.39.36 实测） |
 | 103 | 页脚在「WS 已连接 · 帧 26 · s…」↔「未连接」之间**反复横跳**，用户问"连接存在 bug？" | **一次状态误判不允许掐连接**：`renderStatus` 原先是"`t2h:cjh_status` 回非 running 就 `wsClose()`"，而引擎忙于 SSE 流时 `/api/health` 会超过 3s 超时 → 判成 `missing` → 关连接 → 800ms 后又连上。证据：0.39.37 探针日志里同一窗口出现 `cjhState:"running"` → `"missing"` → `"running"`，而 `wsState` 一直是 `connected`、工具帧正常在收。判据收成纯函数 `wsKeepDecision(running, streak, busy)`：**判掉 1 次只算疑似（grace）、连续 2 次且不在干活才 close**；有工具在跑/有回合气泡一律不断。配套三件事：① 页脚写清 `连接中…（第 N 次）` / `新会话（旧会话 s… 已弃用）`（自愈弃用会话后帧号后面不会空着）；② `noteWsEvent()` 记最近 8 条「谁动了连接」（`conn(#N)`/`closed(帧N)`/`close(status-miss2)`）回投 `ui_report.wsEventText` —— 下次问"为什么断了"不用猜；③ `LINGQU_UI_PROBE=flap` 表驱动断言 4 条判据（`flapFail` 为空才算过）。**排查提示**：若 cjh 日志里每 5 秒一条 `Agent.interrupt` 而你没点停止，先看有没有浏览器标签开着 cjh 自带网页 UI（`127.0.0.1:8765`）——它的断开/重连会触发 cjh 的取消策略（0.39.38 实测） |
 | 104 | 「聊天窗宽度不可拖动」——需要照 `cjnote` 的做法加拖条 | 参考 `cj-tauri/examples/cjnote/ui/index.html` 的 `#ai-resizer` + `--ai-w`，**三条要点全部照抄**：① 宽度写 **CSS 变量**（`--ai-w`），不直接改元素 `style`——折叠态/媒体查询才配合得上；② 夹取**跟窗口走**：`min(上限, 窗口宽 − 左栏 − 拖条 − 内容区保底)`，否则窄窗口「拖到最大」会把中间内容挤成 0；③ `resize` 后按新空间重夹，但**折叠态必须跳过**——`display:none` 量出来是 0，会把用户存的宽度冲成下限（cjnote 踩过）。本仓落成四列 grid `240px 1fr 6px var(--ai-w,372px)` + `#aiResizer`（`col-resize`、双击复位、`localStorage['lingqu.aiw']`，本仓没 `store:set` 就别为一次界面偏好去加命令三处联动）。断言用 `ui_report` 的 `aiDockW/aiW/aiResizerOk/aiDrags` + `LINGQU_UI_PROBE=resize`（派发真实 mousedown/mousemove/mouseup）：实测 372 → 532（左拖 160）→ 260（越过下限被夹）→ 372（双击复位），`1fr` 内容列同步缩放。**另一个坑**：这段初始化代码执行得比 `var CJ = {…}` 早，别在里面写 `CJ.xxx = …`（`CJ` 那时还是 `undefined`，运行期直接 TypeError）——用独立的 `AIW_STATE`（0.39.39 实测） |
+| 105 | 界面写「进度 100%　未连接真机」，可应用明明已经在真机上跑起来了 | **一次性快照不许当"现在"报**：`migrateHasDevice()` 只在 `t2h:migrate` 开始那一刻查一次，界面那行字直接读它 ⇒ 中途插上设备也不更新。判据要**双口径并存**：`hasDevice`（本次起始时，决定是否跳过 deploy/verify）+ `deviceInRecord`/`deviceSerial`（`deployDeviceOf()` 读 `.lingqu/deploy/<工程>.json` 核实到的真机）。文案三档并标来源：`真机已连接` / `真机已连接（部署记录 3QC…）` / `未连接真机（无部署记录）`。取证先看落档（`deploy.deviceCount`、`verify.ratePercent`）与现场 `hdc list targets -v`，别只信界面（0.39.40 实测） |
+| 106 | 「dos 的黑窗口一闪一闪弹出又消失」（用户问过三次） | 本应用是 **GUI 子系统（`--subsystem=windows`），进程没有 console** ⇒ `std.process.executeWithOutput` 每调一次（hdc/cargo/hvigor/git/java/curl）Windows 就给子进程**新配一个控制台窗口**；cjh 走 `launchHidden`（DETACHED）同样没有 console，它再拉 bash/find/lingqu-cli 又各自新配。**单点修法**：`src/win_console.cj` 的 `ensureHiddenConsole()`（`AllocConsole` + `ShowWindow(SW_HIDE)`，FFI 调用要包 `unsafe`）给本进程一个**看不见的** console，子进程继承它；cjh 在有隐藏控制台时改用 `std.process.launch` 继承拉起（回落 `launchHidden`），两种句柄用 `CjhHandle` 收一层。**可断言的证据**：`ui_report.consoleHidden=true` + 「spawn 一批子进程后 `conhost` 只多 1 个（自己那个）而不是每个子进程一个」；强制自拉起验证用 `LINGQU_CJH_PORT=8766`（别去动用户那只 8765）。注意别把「有控制台」写成「CREATE_NO_WINDOW」——那只是不显示，子进程仍各持一个隐藏 console（0.39.40 实测） |
 ---
 
 ## 5. 文档与提交

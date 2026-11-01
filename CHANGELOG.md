@@ -5,6 +5,67 @@
 
 ---
 
+## [0.39.40] - 2026-11-02
+
+**主题**：① 界面不再把「开始时的设备快照」当成"现在"，② 黑窗一闪一闪的根因（GUI 进程没有控制台）修掉。
+
+### 现象（用户实测）
+
+> 回合结束 · 轮次 28 · 工具 30 · 207.6s，进度 100%　未连接真机，我看都在真机上运行起来了，
+> 还提示这个？且为啥 dos 的黑窗口现在还一闪一闪的弹出又消失啊？
+
+### 根因一：设备状态是"一次性快照"，却被当成"现在"
+
+- `migrateHasDevice()` 只在 `t2h:migrate` **开始那一刻**查一次（`hdc list targets -v`），
+  存进 `MigrateState.hasDevice`，之后**永不再查**。
+- 界面那行 `100%　未连接真机` 直接读这个快照 ⇒ 开始时没插设备、中途插上并在真机上跑通了，
+  它还是写「未连接真机」。而落档里证据齐全：`.lingqu/deploy/m3u8dl-tauri.json` 写着
+  `deviceCount: 1`、`serial: 3QC0124B20000048`、install/start 均 ok；
+  `.lingqu/verify/*.json` 是 `ratePercent: 100`。现场 `hdc list targets -v` 也确有
+  `3QC0124B20000048  USB  Connected`。
+
+### 处置一
+
+- `t2h:migrate_status` 增报**两条口径**：`hasDevice`（本次起始时的检测，决定要不要跳过
+  deploy/verify）+ `deviceInRecord` / `deviceSerial`（读 `.lingqu/deploy/<工程>.json` 核实到的真机，
+  新增纯函数 `deployDeviceOf`）。
+- 界面 `deviceText()`：有起始检测 → `真机已连接`；没有但落档有记录 → `真机已连接（部署记录 3QC…）`；
+  两者都没有才 `未连接真机（无部署记录）`；`title` 里写明两条口径的来源与"跳过"的原因。
+
+### 根因二：GUI 进程没有控制台 ⇒ 每个子进程都新配一个控制台窗口
+
+本应用是 `--subsystem=windows`：进程**没有 console**。于是
+`std.process.executeWithOutput(...)`（hdc / cargo / node+hvigor / git / java / curl）每调一次，
+Windows 就给子进程**新配一个控制台窗口**——用户看到的就是一个个黑窗一闪。cjh 走
+`launchHidden`（DETACHED_PROCESS）也没有 console，它再拉 bash / find / lingqu-cli 时又各自新配一个。
+
+### 处置二
+
+- 新增 `src/win_console.cj`：`ensureHiddenConsole()` = `AllocConsole()` + `ShowWindow(SW_HIDE)`，
+  让本进程持有一个**看不见的**控制台，子进程直接继承它，不再各自弹窗（单点修法，
+  不去改几十处 spawn 调用点）。命令行走 `lingqu-cli` 时已有控制台，则**不动**（别去隐藏用户的窗口）。
+- cjh 拉起方式：**有隐藏控制台时走 `std.process.launch`（继承）**，否则回落 `launchHidden`——
+  继承后 cjh 的 bash / find / lingqu-cli 也继承这个看不见的 console。新增 `CjhHandle`
+  把两种句柄（`BackgroundProcess` / `SubProcess`）收在一层，就绪等待与退出收尾不必分叉。
+- `ui_report` 新增 `consoleHidden`（后端回投）、`deviceInRecord`、`migratePctText`、`deviceFail`。
+
+### 证据
+
+- `consoleHidden=true`；启动全套环境体检（会 spawn 多个 CLI）之后，`conhost` 进程**只多 1 个**
+  （应用自己那个隐藏控制台），以前是"每个子进程一个"。
+- 强制走「自己拉起」这条路（`LINGQU_CJH_PORT=8766`，不复用用户那只 8765）：
+  cjh 以「继承隐藏控制台」方式拉起，`http://127.0.0.1:8766/api/health` = **200**，
+  且 `conhost` 没有再多——证明继承生效、cjh 不再顶出黑窗。测试实例已清理，
+  用户在用的 8765 引擎（pid 14668）全程未被碰，`/api/health` 仍 200。
+- `LINGQU_UI_PROBE=device`：三种组合文案断言全过（`deviceFail=[]`）——
+  `hasDevice=true`→「真机已连接」；`record-only`→「真机已连接（部署记录 3QC…）」；都无→「未连接真机（无部署记录）」。
+
+### 未验证
+
+- 「看不到黑窗」无法用程序断言，只能按机制证明：本进程 `consoleHidden=true` + 子进程继承
+  （`conhost` 增量 = 1 而非 N）。**真实观感请以你这边的肉眼为准。**
+- 鸿蒙（ArkWeb / 无 Win32）不涉及本项；`ensureHiddenConsole()` 在非 Windows 上是返回 false 的空实现。
+
 ## [0.39.39] - 2026-11-02
 
 **主题**：聊天窗宽度**可拖动**（左右拖条 + 双击复位 + 记住宽度），参考本仓上游示例 cjnote。

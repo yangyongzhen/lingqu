@@ -3272,13 +3272,30 @@ withBridge(function(tauri){
     return projectPathValue() || window.__probePath || '';
   }
 
+  /* 设备状态怎么说才不撒谎（0.39.40）
+   * `hasDevice` 是**本次迁移开始那一刻**的检测结果，`deviceInRecord` 是最近一次部署核实到的真机
+   * （`.lingqu/deploy/<工程>.json` 的 deviceCount/serial）。用户实测的坑：开始迁移时没插设备、
+   * 中途插上并在真机跑起来了，界面却一直写「未连接真机」——拿一次性快照冒充"现在"。
+   * 规则：有落档证据就显示已连接并标出来源；两条都没有才说未连接。 */
+  function deviceText(st) {
+    if (st && st.hasDevice) { return '真机已连接'; }
+    if (st && st.deviceInRecord) {
+      return '真机已连接（部署记录' + (st.deviceSerial ? ' ' + st.deviceSerial : '') + '）';
+    }
+    return '未连接真机（无部署记录）';
+  }
+
   function renderMigrate(st){
     st = st || {};
     var running = (st.running === true) || (st.active === true);
     MIG.percent = (typeof st.percent === 'number') ? st.percent : 0;
     MIG.verdict = String(st.verdict || '');
+    MIG.deviceInRecord = (st.deviceInRecord === true);
     if ($('migratePct')) {
-      $('migratePct').textContent = MIG.percent + '%　' + (st.hasDevice ? '真机已连接' : '未连接真机');
+      $('migratePct').textContent = MIG.percent + '%　' + deviceText(st);
+      $('migratePct').title = '「真机已连接」= 本次迁移开始时的检测；'
+        + '「部署记录」= .lingqu/deploy 里最近一次部署核实到的设备；'
+        + '本次起始时没插设备但中途插上的，deploy/verify 这两步会被跳过（可单独重跑）。';
     }
     if ($('migrateBar')) { $('migrateBar').style.width = MIG.percent + '%'; }
     if ($('migrateNote')) {
@@ -6030,6 +6047,10 @@ withBridge(function(tauri){
         try { return getComputedStyle(r).cursor === 'col-resize'; } catch (e) { return false; }
       })(),
       aiDrags: AIW_STATE.drag || 0,
+      // 设备（0.39.40）：deviceInRecord=落档里核实到真机（consoleHidden 由后端自己回投，页面不参与）
+      deviceInRecord: (MIG.deviceInRecord === true),
+      migratePctText: ($('migratePct') ? String($('migratePct').textContent || '').slice(0, 60) : ''),
+      deviceFail: CJ.deviceFail || '',
       aiBubbleW: (function(){
         var b = document.querySelector('#aiChat .msg .bubble');
         return b ? Math.round(b.getBoundingClientRect().width) : 0;
@@ -6485,6 +6506,25 @@ withBridge(function(tauri){
         rzEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
         reportUi('resize-reset');
       }, 3000);
+      return;
+    }
+    // 设备状态文案自检（LINGQU_UI_PROBE=device，0.39.40）：断言「开始时有/无真机」与
+    // 「落档里有没有部署核实」四种组合下，那行字都不撒谎。回投 migratePctText 当证据。
+    if (mode === 'device') {
+      var cases = [
+        ['both', true, true, '真机已连接'],
+        ['record-only', false, true, '真机已连接（部署记录'],
+        ['none', false, false, '未连接真机']
+      ];
+      var bad = [];
+      cases.forEach(function(c){
+        renderMigrate({ percent: 100, hasDevice: c[1], deviceInRecord: c[2], deviceSerial: '3QC0124B20000048' });
+        var txt = ($('migratePct') || {}).textContent || '';
+        if (txt.indexOf(c[3]) < 0) { bad.push(c[0] + '→' + txt); }
+      });
+      CJ.deviceFail = bad.join(' ; ');
+      CJ.migratePctText = ($('migratePct') || {}).textContent || '';
+      setTimeout(function(){ reportUi('device-cases'); }, 1200);
       return;
     }
     // 连接横跳自检（LINGQU_UI_PROBE=flap，0.39.38）：断 WS 的判据是**纯函数** `wsKeepDecision`，

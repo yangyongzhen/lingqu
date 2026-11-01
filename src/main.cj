@@ -33,6 +33,11 @@ import stdx.encoding.json.*
 // 小工具
 // ============================================================
 
+/** 隐藏控制台是否建立成功（0.39.40；回投 ui_report.consoleHidden 当证据）。
+ *  声明在文件前部是必须的：仓颉顶层变量**先定义后使用**，放到文件末尾会报
+ *  `variable 'gConsoleHidden' is used before being defined`。 */
+var gConsoleHidden: Bool = false
+
 /** 拼路径：自动处理分隔符，避免 base 末尾已有分隔符时出现双分隔 */
 public func joinPath(base: String, name: String): String {
     if (base.size == 0) {
@@ -1380,6 +1385,13 @@ public class UiReportCommand <: CommandHandler {
         o.put("aiW", JsonInt(argInt(args, "aiW", 0)))
         o.put("aiResizerOk", JsonBool(argBool(args, "aiResizerOk", false)))
         o.put("aiDrags", JsonInt(argInt(args, "aiDrags", 0)))
+        // 隐藏控制台（0.39.40）：true = 本进程有一个不可见的 console，子进程不会再各自弹黑窗
+        o.put("consoleHidden", JsonBool(gConsoleHidden))
+        // 设备状态口径（0.39.40）：deviceInRecord=落档里核实到过真机（界面据此不再写"未连接"）
+        o.put("deviceInRecord", JsonBool(argBool(args, "deviceInRecord", false)))
+        // 设备文案自检（0.39.40）：migratePctText=那行字的实际内容，deviceFail=失败明细（空=全过）
+        o.put("migratePctText", JsonString(argStr(args, "migratePctText", "")))
+        o.put("deviceFail", JsonString(argStr(args, "deviceFail", "")))
         o.put("approvals", JsonInt(argInt(args, "approvals", 0)))
         o.put("lastFrameType", JsonString(argStr(args, "lastFrameType", "")))
         o.put("replyPreview", JsonString(argStr(args, "replyPreview", "")))
@@ -4006,8 +4018,28 @@ let gMigrateLock = Mutex()
 let gMigrate = MigrateState()
 
 /** 当前有没有真机（hdc list targets -v 里解析出来的设备数 > 0） */
-func migrateHasDevice(): Bool {
-    let hdc = hdcPathOr()
+/**
+ * 部署落档里的真机证据（0.39.40）：`(有记录且 deviceCount>0, 序列号)`。
+ *
+ * 为什么需要它：`migrateHasDevice()` 只在迁移**开始**那一刻查一次，之后插上设备也不会变。
+ * 界面上那行「100% 未连接真机」就是拿这个一次性快照当"现在"显示的（用户实测：
+ * 应用明明已经在真机上跑起来了，落档 `deploy.deviceCount=1`、`verify` 100%，界面还在说未连接）。
+ * 判据必须**都说清出处**：`hasDevice`=本次起始时；`deviceInRecord`=最近一次部署核实到。
+ */
+func deployDeviceOf(projName: String, projectPath: String): (Bool, String) {
+    if (projName.size == 0) {
+        return (false, "")
+    }
+    match (readJsonOrNone(resolveLqPath(projectPath, "deploy/${projName}.json"))) {
+        case Some(root) =>
+            let cnt = intFieldOf(root, "deviceCount", 0)
+            let serial = jsonStrField(root, "serial")
+            return (cnt > 0, serial)
+        case None => return (false, "")
+    }
+}
+
+func migrateHasDevice(): Bool {    let hdc = hdcPathOr()
     if (hdc == "") {
         return false
     }
@@ -4373,6 +4405,14 @@ public class MigrateStatusCommand <: CommandHandler {
         }
         var o = migrateStateJson(snap)
         o.put("ok", JsonBool(true))
+        // 设备状态的**两条口径**分开报（0.39.40）：
+        //   `hasDevice`       = 本次迁移**开始时**的检测结果（决定要不要跳过 deploy/verify）
+        //   `deviceInRecord`  = 落档里最近一次部署核实到的真机（`.lingqu/deploy/<工程>.json`）
+        // 之前界面只显示前者，于是"开始时没插设备、中途插上了"就一直写着「未连接真机」——
+        // 用户明明看见应用在真机上跑（落档 deploy 里 deviceCount=1、verify 100%）。
+        let (devRec, devSerial) = deployDeviceOf(snap.project, snap.path)
+        o.put("deviceInRecord", JsonBool(devRec))
+        o.put("deviceSerial", JsonString(devSerial))
         return o
     }
 }
@@ -5344,6 +5384,10 @@ public func build(): AppSpec {
         // WS：cjh 的对话/工具/审批都走 ws://127.0.0.1:<port>/ws（帧类型见 docs/实施路线图.md P1）
         .plugin(WsPlugin())
         .wire({ app =>
+            // 隐藏控制台（0.39.40）：GUI 子系统没有 console，于是每次 executeWithOutput 都会给
+            // 子进程新配一个黑窗口（hdc / cargo / hvigor / git / java / curl 各闪一下），
+            // cjh 里再拉 bash/find 也各自闪。先给本进程分一个**看不见**的 console，子进程继承它即可。
+            gConsoleHidden = ensureHiddenConsole()
             // 日志落盘：GUI 产物双击没控制台，报障时一个文件看全（C 桥 + 仓颉 + 页面 log:write）
             let _ = app.setLogToDefaultFile("lingqu")
 
