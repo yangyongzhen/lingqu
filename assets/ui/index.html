@@ -2400,6 +2400,8 @@ function switchScreen(name){
   });
   var w = document.querySelector('.work');
   if (w) { w.scrollTop = 0; }
+  // 各屏可以在被打开时做一次的自动准备（例如 ⑦ 进屏就按落档出矩阵）
+  try { if (window.__onScreen) { window.__onScreen(name); } } catch (e) {}
 }
 document.querySelectorAll('.step').forEach(function(b){
   b.addEventListener('click', function(){
@@ -5259,6 +5261,7 @@ withBridge(function(tauri){
    * 口径：没跑过的样本显示「未跑」且**不参与平均**（未验证 ≠ 0 分，也 ≠ 通过）。 */
   var BATCH = { ok: false, samples: 0, verified: 0, avgRate: -1, avgScore: -1,
                 totalHuman: 0, a4Pass: false, a1Pass: false, summary: '',
+                passed: 0, source: '',
                 rows: [], paths: {}, error: '' };
 
   function batchVerdictClass(v){
@@ -5279,19 +5282,28 @@ withBridge(function(tauri){
       a4Pass: r.a4Pass === true,
       a1Pass: r.a1Pass === true,
       summary: String(r.summary || ''),
+      source: String(r.sampleSource || ''),
       rows: (r.rows && r.rows.length) ? r.rows : [],
       paths: { md: String(r.md || ''), html: String(r.html || ''), json: String(r.json || '') },
       error: String(r.error || '')
     };
+    // "迁移成功"= 判定列的「达标」（单样本可用率 ≥80%）。这是验收线 A4 的同一把尺子。
+    var passed = BATCH.rows.filter(function(x){ return String(x.verdict || '') === '达标'; }).length;
+    BATCH.passed = passed;
+    var srcLabel = ({ explicit: '手填的样本', workspace: '工作区里发现的工程',
+                      remembered: '上次填过的样本', 'cwd-lingqu': '当前目录落档里的工程' })[BATCH.source] || '';
     var sum = $('batchSum');
     if (BATCH.error) {
       sum.style.color = 'var(--err)';
       sum.textContent = '生成矩阵失败：' + BATCH.error;
     } else if (BATCH.summary) {
       sum.style.color = '';
-      sum.textContent = BATCH.summary
+      // 「迁移成功」放最前面：用户问的"移植成功的项目在哪看"就是这一句
+      sum.textContent = '已迁移成功 ' + passed + ' / ' + BATCH.samples + ' 个'
+        + '（判定=达标，单样本可用率 ≥80%）　' + BATCH.summary
         + '　A4（平均可用率 ≥80%）：' + (BATCH.a4Pass ? '达标' : '未达标')
-        + '　A1（5 样本全部验证）：' + (BATCH.a1Pass ? '达标' : '未达成');
+        + '　A1（5 样本全部验证）：' + (BATCH.a1Pass ? '达标' : '未达成')
+        + (srcLabel ? '　样本来源：' + srcLabel : '');
     } else {
       sum.textContent = '还没生成——每个样本先各自跑一遍流程才有数据；没跑的样本会显示「未跑」且不参与平均。';
     }
@@ -5320,6 +5332,9 @@ withBridge(function(tauri){
         String(x.verdict || '')
       ];
       var tr = document.createElement('tr');
+      // 每行把手上的路径挂出来：这一行的数字是**从哪儿读出来的**必须能查
+      tr.title = (x.path ? ('工程路径：' + x.path) : '工程路径未知（按当前目录 .lingqu 读的档）')
+        + '\n判定：' + String(x.verdict || '') + '　8 步：' + x.stepDone + '/' + x.stepTotal;
       cells.forEach(function(c, i){
         var td = document.createElement('td');
         td.textContent = c;
@@ -5353,6 +5368,16 @@ withBridge(function(tauri){
   }
 
   $('btnBatch').addEventListener('click', runBatch);
+
+  // 进 ⑦ 迁移报告 就自动生成一次矩阵（纯读盘、秒级）：成果应当"进得去就看得见"，
+  // 而不是让人先猜"要不要点某个按钮"。只自动跑一次，之后仍可手动刷新。
+  var BATCH_AUTO = { done: 0 };
+  window.__onScreen = function(name){
+    if (name !== 'report' || BATCH_AUTO.done) { return; }
+    BATCH_AUTO.done = 1;
+    if (!$('batchSamples') || $('batchSamples').value) { return; }
+    runBatch();
+  };
 
   /* ===== AI 迁移技能（2026-11-01，AI 接入第 1 步）=====
    * cjh 的技能是 ~/.cjh/skills/<name>.md，正文拼进 system prompt。
@@ -5832,6 +5857,11 @@ withBridge(function(tauri){
       batchAvgRate: (typeof BATCH.avgRate === "number") ? BATCH.avgRate : -1,
       batchAvgScore: (typeof BATCH.avgScore === "number") ? BATCH.avgScore : -1,
       batchHuman: (typeof BATCH.totalHuman === "number") ? BATCH.totalHuman : 0,
+      // 「已迁移成功」= 判定列为「达标」（可用率 ≥80%）的样本数 + 样本来源（0.39.29）
+      batchPassed: (typeof BATCH.passed === "number") ? BATCH.passed : 0,
+      batchSource: String(BATCH.source || ''),
+      // 「已迁移成功 N / M 个」那整行文本：这就是用户问"移植成功的项目在哪"时要看到的话
+      batchSumText: (function(){ var n = document.getElementById('batchSum'); return n ? String(n.textContent || '') : ''; })(),
       batchA4: BATCH.a4Pass === true,
       batchA1: BATCH.a1Pass === true,
       batchHtml: (BATCH.paths && BATCH.paths.html) ? BATCH.paths.html : '',
@@ -5878,6 +5908,14 @@ withBridge(function(tauri){
     // 断点续迁先观测一次：让 ui_report 的 resume* 字段有值可断言（纯读盘，不会拖慢序列）
     setTimeout(function(){ loadResumeBoard(resumePathValue()); }, 200);
     setTimeout(function(){ reportUi('probe-initial'); }, 400);
+    // 5 样本矩阵自检（LINGQU_UI_PROBE=batch，0.39.29）：切到 ⑦ 迁移报告 → 进屏自动按落档出矩阵，
+    // 再回投 batchSamples/batchPassed/batchSource/batchSumText —— 证明"迁移成功的项目"进屏即见。
+    // 注意：要让这里出真数据，启动应用时得给 LINGQU_SAMPLES_ROOT（或 LINGQU_WORKSPACES）指向样本父目录。
+    if (mode === 'batch') {
+      setTimeout(function(){ switchScreen('report'); }, 1200);
+      setTimeout(function(){ reportUi('batch-auto'); }, 4500);
+      return;
+    }
     // 顶栏版面自检（LINGQU_UI_PROBE=layout，0.39.26）：三种"最容易把 48px 顶栏挤花"的状态各上报一次
     //   ①未选工程（那条红字）②某步覆盖了别的工程（橙色警示）③正常选了工程。
     // 判据：每次都 titlebarOverflow=false、projNoteLines=1、projBarClipped=false。

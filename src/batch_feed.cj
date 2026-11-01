@@ -2,8 +2,10 @@ package lingqu
 
 import lingqu.batch.*
 import lingqu.report.*
+import lingqu.scanner.*
 import std.collection.*
 import std.fs.*
+import stdx.encoding.json.*
 
 /*
  * `t2h:batch` 的收数层：把每个样本自己的 `.lingqu` 落档汇总成矩阵的一行。
@@ -16,6 +18,23 @@ import std.fs.*
  * 那是比"缺数据"更坏的错误。
  */
 
+/**
+ * 读一个样本的落档：**按该样本自己的工程路径解析**（`<工程>/.lingqu/…`）。
+ *
+ * 0.39.29 修复：这里原来一律是相对当前工作目录的 `.lingqu/...`，于是矩阵读的是
+ * **本仓/当前目录**的旧档，而不是样本工程自己的落档 —— 实测 m3u8dl-tauri 明明跑到了
+ * 可用率 100%，矩阵里却写着「未跑 / 25%」。同族问题在 `report_feed`（0.39.24）修过一遍，
+ * 这是漏网的第二处（AGENTS §4-75）。工程路径为空时 `resolveLqPath` 自动落回相对路径，老行为不丢。
+ */
+public func readSampleLq(projPath: String, rel: String): Option<JsonValue> {
+    return readJsonOrNone(resolveLqPath(projPath, rel))
+}
+
+/** 落档相对路径（步骤 + 工程名 → `.lingqu` 下的相对路径），单测钉住名字拼法 */
+public func sampleLqRel(step: String, projName: String): String {
+    return "${step}/${projName}.json"
+}
+
 /** 收集一个样本的一行（落档缺失时对应 `has*` 为 false） */
 public func collectBatchRow(projName: String, projPath: String, now: String): BatchRow {
     let row = BatchRow()
@@ -23,7 +42,7 @@ public func collectBatchRow(projName: String, projPath: String, now: String): Ba
     row.path = projPath
 
     // ② 扫描画像：评分 + 单元数 + 未知项
-    match (readJsonOrNone(".lingqu/scan/${projName}.json")) {
+    match (readSampleLq(projPath, sampleLqRel("scan", projName))) {
         case Some(scan) =>
             row.hasScan = true
             let metrics = objFieldOf(scan, "metrics")
@@ -35,7 +54,7 @@ public func collectBatchRow(projName: String, projPath: String, now: String): Ba
     }
 
     // ③ 依赖矩阵
-    match (readJsonOrNone(".lingqu/deps/${projName}.json")) {
+    match (readSampleLq(projPath, sampleLqRel("deps", projName))) {
         case Some(deps) =>
             let m = objFieldOf(deps, "metrics")
             let total = intFieldOf(m, "total", 0)
@@ -48,20 +67,20 @@ public func collectBatchRow(projName: String, projPath: String, now: String): Ba
     }
 
     // ⑤ 编译 / 装配 / 签名态
-    match (readJsonOrNone(".lingqu/build/${projName}.json")) {
+    match (readSampleLq(projPath, sampleLqRel("build", projName))) {
         case Some(build) =>
             row.hasBuild = true
             let gates = objFieldOf(build, "gates")
             row.buildOk = intFieldOf(build, "exitCode", -1) == 0 && boolFieldOf(gates, "passed")
         case None => ()
     }
-    match (readJsonOrNone(".lingqu/hap/${projName}.json")) {
+    match (readSampleLq(projPath, sampleLqRel("hap", projName))) {
         case Some(hap) =>
             row.hasHap = true
             row.hapOk = boolFieldOf(hap, "built") && boolFieldOf(objFieldOf(hap, "gates"), "passed")
         case None => ()
     }
-    match (readJsonOrNone(".lingqu/sign/${projName}.json")) {
+    match (readSampleLq(projPath, sampleLqRel("sign", projName))) {
         case Some(sign) =>
             let mode = objFieldOf(sign, "mode")
             row.signMode = jsonStrField(mode, "mode")
@@ -70,14 +89,14 @@ public func collectBatchRow(projName: String, projPath: String, now: String): Ba
     }
 
     // ⑥ 真机部署与验证
-    match (readJsonOrNone(".lingqu/deploy/${projName}.json")) {
+    match (readSampleLq(projPath, sampleLqRel("deploy", projName))) {
         case Some(dep) =>
             row.hasDeploy = true
             row.deployOk = boolFieldOf(objFieldOf(dep, "install"), "ok") &&
                 boolFieldOf(objFieldOf(dep, "start"), "ok")
         case None => ()
     }
-    match (readJsonOrNone(".lingqu/verify/${projName}.json")) {
+    match (readSampleLq(projPath, sampleLqRel("verify", projName))) {
         case Some(verify) =>
             let stats = objFieldOf(verify, "stats")
             let total = intFieldOf(stats, "total", 0)
@@ -165,6 +184,151 @@ public func discoverSampleNames(): ArrayList<String> {
             i -= 1
         }
         out[idx] = name
+    }
+    return out
+}
+
+// ============================================================
+// 样本发现（0.39.29）：从"只发现工程名"升级到"发现工程路径"
+// ============================================================
+//
+// 为什么要升级：0.38.0 起落档在 `<工程>/.lingqu/`，但 `discoverSampleNames()` 只从
+// **当前目录**的 `.lingqu` 里捡名字，捡到之后又没有路径可读 —— 于是矩阵要么读不到、
+// 要么读到本仓的旧档。真正的"我迁过哪些工程"要看**工作区里哪些目录带 `.lingqu`**。
+
+/** 显式给的样本路径会记在这里（一行一个），下次自动发现也带上，免得每回都手填 */
+public const BATCH_SAMPLES_FILE: String = ".lingqu/batch/samples.txt"
+
+/** 加进列表（去重，保持插入顺序） */
+func addUniqueStr(list: ArrayList<String>, v: String): Unit {
+    if (v.size == 0) {
+        return
+    }
+    for (x in list) {
+        if (x == v) {
+            return
+        }
+    }
+    list.add(v)
+}
+
+/** 拆根目录列表：`|` / `;` / 逗号 / 换行都能当分隔符，去空白去重（纯函数，单测覆盖） */
+public func splitRootList(raw: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let normalized = raw.replace("\r", "\n").replace("|", "\n").replace(";", "\n").replace(",", "\n")
+    for (part in normalized.split("\n", -1)) {
+        addUniqueStr(out, part.trimAscii())
+    }
+    return out
+}
+
+/**
+ * 候选根目录（纯函数）：`LINGQU_SAMPLES_ROOT` → `LINGQU_WORKSPACES` → `~/lingqu-workspaces`。
+ *
+ * 三者是**并集**（不是择一）：显式根最优先，工作区根常备，家目录默认工作区兜底。
+ */
+public func sampleRootsOf(samplesRootEnv: String, workspacesEnv: String, homeDir: String): ArrayList<String> {
+    let out = splitRootList(samplesRootEnv)
+    for (r in splitRootList(workspacesEnv)) {
+        addUniqueStr(out, r)
+    }
+    if (homeDir.trimAscii().size > 0) {
+        addUniqueStr(out, hostPath("${homeDir}/lingqu-workspaces"))
+    }
+    return out
+}
+
+/** 这个目录像不像"迁过的工程"：有 `.lingqu` 目录就算（落档都写在那儿） */
+func looksLikeMigratedProject(dir: String): Bool {
+    return exists(Path(dir + cjhPathSep() + ".lingqu"))
+}
+
+/**
+ * 在候选根下发现样本工程 → `(工程名, 工程绝对路径)`，同名只留第一个。
+ *
+ * 扫描深度为 1 层（根自身 + 其子目录）：再深就会把 `node_modules`/`targets` 之类扫进来。
+ */
+public func discoverSampleProjects(roots: ArrayList<String>): ArrayList<(String, String)> {
+    let out = ArrayList<(String, String)>()
+    let seenNames = ArrayList<String>()
+
+    for (root in roots) {
+        if (!exists(Path(root))) {
+            continue
+        }
+        if (looksLikeMigratedProject(root)) {
+            let name = sanitizeFileName(projectNameOf(root))
+            if (name.size > 0 && !seenNames.contains(name)) {
+                out.add((name, root))
+                seenNames.add(name)
+            }
+        }
+        var entries: Array<FileInfo>
+        try {
+            entries = Directory.readFrom(root)
+        } catch (e: Exception) {
+            let _ = e
+            continue
+        }
+        for (info in entries) {
+            if (!info.isDirectory()) {
+                continue
+            }
+            let child = root + cjhPathSep() + info.name
+            if (!looksLikeMigratedProject(child)) {
+                continue
+            }
+            let name = sanitizeFileName(info.name)
+            if (name.size == 0 || name.startsWith("tmp") || seenNames.contains(name)) {
+                continue
+            }
+            out.add((name, child))
+            seenNames.add(name)
+        }
+    }
+    return out
+}
+
+/** 记下显式样本路径（下次自动发现带上）；写盘失败只影响"下次要重填"，不阻断本次矩阵 */
+public func saveBatchSamplePaths(paths: ArrayList<String>): Unit {
+    if (paths.size == 0) {
+        return
+    }
+    let dir = ".lingqu/batch"
+    if (!exists(Path(dir))) {
+        try {
+            Directory.create(Path(dir), recursive: true)
+        } catch (e: Exception) {
+            let _ = e
+            return
+        }
+    }
+    var text = ""
+    for (p in paths) {
+        text += "${p}\n"
+    }
+    try {
+        File.writeTo(BATCH_SAMPLES_FILE, text.toArray())
+    } catch (e: Exception) {
+        let _ = e
+    }
+}
+
+/** 读回上次记的样本路径（不存在/读不了就当没有） */
+public func loadBatchSamplePaths(): ArrayList<String> {
+    let out = ArrayList<String>()
+    if (!exists(Path(BATCH_SAMPLES_FILE))) {
+        return out
+    }
+    var text = ""
+    try {
+        text = String.fromUtf8(File.readFrom(BATCH_SAMPLES_FILE))
+    } catch (e: Exception) {
+        let _ = e
+        return out
+    }
+    for (line in text.split("\n", -1)) {
+        addUniqueStr(out, line.trimAscii())
     }
     return out
 }

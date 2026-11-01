@@ -1612,6 +1612,10 @@ public class UiReportCommand <: CommandHandler {
         o.put("batchAvgRate", JsonInt(argInt(args, "batchAvgRate", -1)))
         o.put("batchAvgScore", JsonInt(argInt(args, "batchAvgScore", -1)))
         o.put("batchHuman", JsonInt(argInt(args, "batchHuman", 0)))
+        // 0.39.29：矩阵"已迁移成功几个" + 样本是从哪儿发现的（explicit/workspace/remembered/cwd-lingqu）
+        o.put("batchPassed", JsonInt(argInt(args, "batchPassed", 0)))
+        o.put("batchSource", JsonString(argStr(args, "batchSource", "")))
+        o.put("batchSumText", JsonString(argStr(args, "batchSumText", "")))
         o.put("batchA4", JsonBool(argBool(args, "batchA4", false)))
         o.put("batchA1", JsonBool(argBool(args, "batchA1", false)))
         o.put("batchHtml", JsonString(argStr(args, "batchHtml", "")))
@@ -3544,7 +3548,8 @@ public class BatchCommand <: CommandHandler {
         }
         let now = nowText()
         let samples = ArrayList<(String, String)>()
-        let names = ArrayList<String>()
+        // 样本是从哪儿来的（回投给界面/命令行，别让人猜"这些行是哪来的"）
+        var source = ""
 
         // ① 显式给了样本路径：按给的顺序，工程名与各命令落档用的名字保持一致
         if (raw.size > 0) {
@@ -3554,16 +3559,56 @@ public class BatchCommand <: CommandHandler {
                     continue
                 }
                 samples.add((name, p))
-                names.add(name)
+            }
+            if (samples.size > 0) {
+                source = "explicit"
             }
         }
 
-        // ② 没给就从落档目录里发现（同名去重，插入排序保证可复现）
+        // ② 没给就从工作区发现（0.39.29：发现的是**工程路径**，不只名字 ——
+        //    只发现名字会读不到样本自己的 `<工程>/.lingqu`，矩阵就会把"迁完的"显示成"未跑"）
+        if (samples.size == 0) {
+            let roots = sampleRootsOf(envOr("LINGQU_SAMPLES_ROOT", ""),
+                envOr("LINGQU_WORKSPACES", ""),
+                firstNonEmptyEnv(["USERPROFILE", "HOME"]))
+            for (pair in discoverSampleProjects(roots)) {
+                samples.add((pair[0], pair[1]))
+            }
+            if (samples.size > 0) {
+                source = "workspace"
+            }
+        }
+        // ③ 还没发现到：用上次显式给过、记在 `.lingqu/batch/samples.txt` 的路径
+        if (samples.size == 0) {
+            for (p in loadBatchSamplePaths()) {
+                let name = sanitizeFileName(projectNameOf(p))
+                if (name.size == 0) {
+                    continue
+                }
+                samples.add((name, p))
+            }
+            if (samples.size > 0) {
+                source = "remembered"
+            }
+        }
+        // ④ 最后的兜底：当前目录 `.lingqu` 里出现过的工程名（老行为，路径留空）
         if (samples.size == 0) {
             for (name in discoverSampleNames()) {
                 samples.add((name, ""))
-                names.add(name)
             }
+            if (samples.size > 0) {
+                source = "cwd-lingqu"
+            }
+        }
+        // 显式给了路径就记下来，下次自动发现也带上
+        if (raw.size > 0) {
+            let given = ArrayList<String>()
+            for (s in samples) {
+                if (s[1].size > 0) {
+                    given.add(s[1])
+                }
+            }
+            saveBatchSamplePaths(given)
         }
 
         let matrix = collectBatchMatrix(samples, now)
@@ -3620,6 +3665,10 @@ public class BatchCommand <: CommandHandler {
         res.put("a4Pass", JsonBool(summary.a4Pass))
         res.put("a1Pass", JsonBool(summary.a1Pass))
         res.put("summary", JsonString(summaryLine(matrix)))
+        // 样本从哪来的（explicit / workspace / remembered / cwd-lingqu）：
+        // 让界面与命令行都能说明"这 5 行是怎么被找到的"，而不是让人怀疑是编的
+        res.put("sampleSource", JsonString(source))
+        res.put("samplesFile", JsonString(BATCH_SAMPLES_FILE))
         res.put("rows", rowArr)
         res.put("outDir", JsonString(base))
         res.put("md", JsonString("${outDir}/matrix.md"))

@@ -5,6 +5,63 @@
 
 ---
 
+## [0.39.29] - 2026-11-02
+
+**主题**：把「**移植成功的项目**」真正摆到界面上 —— 而且摆的是**真数据**（原来那一栏读的是本仓的旧档）。
+
+### 现象（用户提问）
+
+> 「移植成功的项目在哪可以体现啊？界面上我没有看到有对应的地方」
+
+查下来是三件事叠在一起：
+1. 唯一能体现"多个工程迁移成果"的地方是 **⑦ 迁移报告 最下方的「5 样本迁移矩阵」**，藏得深、默认空、还要先点「生成矩阵」；
+2. 即使点了，**数字也是错的**：矩阵读落档走的是相对当前工作目录的 `.lingqu/...`，
+   读的是**本仓**的旧档，不是各样本工程自己的 `<工程>/.lingqu` —— 实测 m3u8dl-tauri 明明
+   跑到可用率 100%，矩阵里写着「未跑 / 25%」；
+3. 自动发现样本时只发现**工程名**、不带路径，天然无法定位到样本自己的落档。
+
+### 处置
+
+- **读档口径**（`src/batch_feed.cj`）：7 处 `readJsonOrNone(".lingqu/<步骤>/<工程>.json")`
+  全部改成 `readSampleLq(projPath, sampleLqRel(步骤, 工程名))` → 走 `resolveLqPath`
+  （先按工程解析、找不到再落回相对路径，老行为不丢）。这是 §4-75 那族的**第三处漏网**。
+- **样本发现**（`src/batch_feed.cj` 新增 `splitRootList` / `sampleRootsOf` /
+  `discoverSampleProjects` / `saveBatchSamplePaths` / `loadBatchSamplePaths`）：
+  按 `LINGQU_SAMPLES_ROOT` → `LINGQU_WORKSPACES` → `~/lingqu-workspaces`（并集）逐根扫一层子目录，
+  **挑出带 `.lingqu` 的工程目录**并带路径返回；显式填过的样本路径记进
+  `.lingqu/batch/samples.txt`，下次不用重填。`t2h:batch` 回投 `sampleSource`
+  （`explicit` / `workspace` / `remembered` / `cwd-lingqu`），**数据从哪来能查**。
+- **界面**：进 ⑦ 迁移报告 **自动生成一次矩阵**（纯读盘、秒级），摘要行改成先给一句
+  「**已迁移成功 N / M 个**（判定=达标，单样本可用率 ≥80%）」，再给 A4/A1 判定与**样本来源**；
+  每行 `title` 挂出该行的工程路径 —— 「这行数字是从哪个目录读的」必须能查。
+
+### 自动断言（§4-60 两处一起加）
+
+`ui_report` 新增 `batchPassed` / `batchSource` / `batchSumText`；新增探针模式
+**`LINGQU_UI_PROBE=batch`**：切到 ⑦ → 等自动矩阵生成 → 回投上面几个字段。
+
+### 实测
+
+**命令行**（`lingqu-cli batch`，`LINGQU_SAMPLES_ROOT=E:\test\rust` 自动发现）：
+
+| 样本 | 可用率 | 8 步 | 判定 |
+|---|---|---|---|
+| habit-tree | 100%（5/5） | 8/8 | **达标** |
+| m3u8dl-tauri | 100%（5/5） | 8/8 | **达标** |
+| cc-switch-harmonyos | 未跑 | 2/8 | 未验证 |
+| atomMqtt / tauri-mqtt-client-ohos | 未跑 | 0/8 | 未验证 |
+
+修复前同一命令输出的是「m3u8dl-tauri 未跑 / 25%」——因为它读的是本仓的旧档。
+
+**界面探针**（`LINGQU_UI_PROBE=batch`，`ui_report` 的 `batch-auto` 一行）：
+`batchSamples=5`、`batchPassed=2`、`batchAvgRate=100`、`batchA4=true`、`batchA1=false`、
+`batchSource=workspace`、`errorCount=0`，`batchSumText` 以「已迁移成功 2 / 5 个」开头。
+
+### 测试
+
+`src/tests/batch_sample_test.cj` 新增 3 例（`sampleLqRel` 7 个步骤路径 + 不带 `.lingqu/` 前缀、
+`splitRootList` 四种分隔符/去空白/去重、`sampleRootsOf` 顺序与去重）。单测 338 → **341**。
+
 ## [0.39.28] - 2026-11-02
 
 **主题**：顶栏「当前项目」胶囊**不再撒谎** —— 它原来是 HTML 里写死的一段示意文案。
