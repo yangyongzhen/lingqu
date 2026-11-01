@@ -1069,6 +1069,8 @@ body.ai-hidden .ai-show{display:block}
       <div class="dock-h">
         <span class="t"><span class="ico">✦</span>AI 助手</span>
         <span class="right">
+          <!-- 工具执行心跳（0.39.32）：长命令期间 cjh 不发正文增量，这里走秒说明"还在干活" -->
+          <span class="state" id="aiBusy" style="display:none"></span>
           <span class="state" id="aiState"><i class="dot"></i><span id="aiStateTxt">连接中…</span></span>
           <button class="iconbtn" id="aiNew" title="新建会话">＋</button>
           <button class="iconbtn" id="aiAbort" title="中断当前回合">■</button>
@@ -2789,6 +2791,8 @@ withBridge(function(tauri){
       '<div class="small muted">' + esc(note) + '</div></div></div>')); }
     CJ.curBubble = null;
     CJ.acc = '';
+    // 回合收尾一定要收秒表：done / error / 中断 都走这里，别让"⏳ 执行中 999s"挂在那儿
+    stopToolRun(false);
     // ④ 一键执行：回复里若有 `lingqu-cli …` 建议，就在气泡下方挂一排可点按钮
     attachCliSuggestions();
     // G4 决策回写：回复里若有 ```lingqu-decision 块，挂确认卡（点了才落 decisions.json）
@@ -3500,6 +3504,58 @@ withBridge(function(tauri){
     setTimeout(function () { b.textContent = '复制'; }, 1200);
   });
 
+  /* ---------- 工具执行心跳（0.39.32）----------
+   * 现象（用户实测）：长命令（构建/测试/hvigor）跑几分钟，聊天区一个字都不变，
+   * 看着像卡死 —— 但引擎下面其实有 bash 在跑（Windows 上还会闪一下控制台窗口）。
+   * 原因：cjh 的回合是「tool_start → 工具跑完 → tool_result」，工具执行期间**不发 delta**。
+   * 处置：收到 tool_start 就挂秒表（卡片上的 `执行中…` 每秒走秒 + 顶栏状态位），
+   * tool_result / done / error / 中断 一律收表 —— 让"还在干活"肉眼可辨，不用猜。
+   */
+  var TOOLRUN = { name: '', startedAt: 0, timer: 0, card: null };
+
+  function toolElapsedSec() {
+    if (!TOOLRUN.startedAt) { return 0; }
+    return Math.round((Date.now() - TOOLRUN.startedAt) / 1000);
+  }
+
+  function renderToolBusy() {
+    var st = $('aiBusy');
+    if (!st) { return; }
+    if (!TOOLRUN.startedAt) {
+      st.style.display = 'none';
+      st.textContent = '';
+      return;
+    }
+    st.style.display = '';
+    st.textContent = '⏳ ' + (TOOLRUN.name || 'tool') + ' · ' + toolElapsedSec() + 's';
+    st.title = '工具执行中：cjh 在工具跑完之前不会发正文增量（不是卡死）';
+  }
+
+  function startToolRun(name, card) {
+    stopToolRun(true);
+    TOOLRUN.name = String(name || 'tool');
+    TOOLRUN.startedAt = Date.now();
+    TOOLRUN.card = card || null;
+    TOOLRUN.timer = setInterval(function(){
+      var el = toolElapsedSec();
+      if (TOOLRUN.card) {
+        var s = TOOLRUN.card.querySelector('.st');
+        if (s) { s.textContent = '执行中… ' + el + 's'; }
+      }
+      renderToolBusy();
+    }, 1000);
+    renderToolBusy();
+  }
+
+  /** 收表：settleCard=false 时只清计时，不动卡片状态（卡片交给 tool_result 收尾） */
+  function stopToolRun(keepCardState) {
+    if (TOOLRUN.timer) { clearInterval(TOOLRUN.timer); TOOLRUN.timer = 0; }
+    TOOLRUN.name = '';
+    TOOLRUN.startedAt = 0;
+    TOOLRUN.card = keepCardState ? TOOLRUN.card : null;
+    renderToolBusy();
+  }
+
   function addToolCard(name, args) {
     var argsText = '';
     try { argsText = (typeof args === 'string') ? args : JSON.stringify(args || {}); } catch (e) { argsText = ''; }
@@ -3511,6 +3567,7 @@ withBridge(function(tauri){
     wrap.querySelector('.b').appendChild(card);
     insertNode(wrap);
     bump('toolCards');
+    startToolRun(name, card);   // 秒表跟着这张卡片走（长命令时"看着像卡死"的解药）
     return card;
   }
 
@@ -3525,12 +3582,13 @@ withBridge(function(tauri){
       var running = st && st.textContent.indexOf('执行中') >= 0;
       if (nm.textContent === name && running) { target = cards[i]; break; }
     }
-    if (!target) return;
+    if (!target) { stopToolRun(true); return; }
     var st2 = target.querySelector('.st');
     if (st2) {
       st2.textContent = isError ? '失败' : '完成';
       st2.className = 'st' + (isError ? ' err' : '');
     }
+    stopToolRun(true);   // 收表（卡片状态已在上一步写定）
     var tb = target.querySelector('.tb');
     if (tb) {
       var text = String(content == null ? '' : content);
@@ -5681,6 +5739,11 @@ withBridge(function(tauri){
       wsLastSendErr: CJ.lastSendErr || '',
       // 收到过的帧类型计数（"cjh 到底回了什么"的唯一证据；history_messages 说明是会话类帧）
       wsReconnects: (typeof CJ.reconnects === 'number') ? CJ.reconnects : 0,
+      // 工具执行心跳（0.39.32）：长命令期间"还在干活"的可断言位
+      aiToolRunning: (typeof TOOLRUN !== 'undefined' && TOOLRUN.startedAt) ? 1 : 0,
+      aiToolName: (typeof TOOLRUN !== 'undefined') ? String(TOOLRUN.name || '') : '',
+      aiToolElapsed: (typeof TOOLRUN !== 'undefined' && TOOLRUN.startedAt) ? toolElapsedSec() : 0,
+      aiBusyText: (function(){ var n = document.getElementById('aiBusy'); return n ? String(n.textContent || '') : ''; })(),
       currentProject: (typeof PROJECT !== 'undefined') ? String(PROJECT.path || '') : '',
       projectPromptCount: 1,
       pathFieldCount: (typeof PATH_FIELDS !== 'undefined') ? PATH_FIELDS.length : 0,
@@ -5957,6 +6020,16 @@ withBridge(function(tauri){
       setTimeout(function(){ setCurrentProject('E:/test/rust/m3u8dl-tauri'); }, 900);
       setTimeout(function(){ switchScreen('report'); }, 1200);
       setTimeout(function(){ reportUi('batch-auto'); }, 4500);
+      return;
+    }
+    // 工具心跳自检（LINGQU_UI_PROBE=toolrun，0.39.32）：模拟一次 tool_start → 等 4 秒 → 回投
+    // 再喂 tool_result → 回投。判据：执行中那次 aiToolRunning=1 且 aiToolElapsed≥3；
+    // 收尾那次 aiToolRunning=0。**不需要真跑长命令**就能证明"长任务时界面有活口"。
+    if (mode === 'toolrun') {
+      setTimeout(function(){ onFrame({ type: 'tool_start', name: 'bash', args: { command: 'sleep 4' } }); }, 1200);
+      setTimeout(function(){ reportUi('tool-run-busy'); }, 5200);
+      setTimeout(function(){ onFrame({ type: 'tool_result', name: 'bash', content: 'done' }); }, 5800);
+      setTimeout(function(){ reportUi('tool-run-idle'); }, 6600);
       return;
     }
     // 鸿蒙工程根自检（LINGQU_UI_PROBE=ohos，0.39.31）：真跑一次 hap（hvigor 增量），

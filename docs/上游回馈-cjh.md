@@ -219,6 +219,67 @@ cd /e/test/rust/m3u8dl-tauri && export OHOS_NDK_HOME="…" && "…/main.exe" bui
 cjh 已在工具描述与超时提示里写明；灵渠的任务书/技能里也**不要出现 `| tail` 示范**
 （本轮复查：`src/`、`assets/`、`skills/` 均无此写法，保持）。
 
+---
+
+## 8. Windows 上每条 bash 命令都闪一个控制台窗口（GUI 宿主里尤其刺眼）
+
+**现象**（灵渠 0.39.32 实测，用户报告）
+
+> 「右侧 AI 聊天窗口信息不更新了，但屏幕上仍不时看到 dos 窗口一闪而过，像是还在执行」
+
+在**GUI 宿主**（灵渠是 cj-tauri 窗口应用，用 `launchHidden` 起 cjh，所以 cjh 自己**没有控制台**）
+里跑 agent，每执行一条 bash 命令都会闪出一个黑色控制台窗口；命令跑得越勤（构建/测试/搜索），
+闪得越频繁。用户在长任务期间只能看着它闪 + 聊天区不动，很容易误判"卡死"。
+
+现场证据（`Get-CimInstance Win32_Process`，灵渠本机）：
+
+```
+14668 main.exe (cjh web，由灵渠 launchHidden 拉起 → 无控制台)
+└─ 18468 bash.exe        ← 持久会话（BashSession）
+   └─ 4820 bash.exe
+      └─ 15356 bash.exe  ← 每条命令
+      └─ conhost.exe     ← 这就是"闪一下"的那个窗口
+```
+
+**根因**：`src/tools/bash_session.cj:158` 的 `ensureStarted()` 用标准库 `launch` 起 shell：
+
+```cangjie
+let p = launch(this.shell.shellPath, Array<String>(0, repeat: ""), stdIn: Pipe, stdOut: Pipe, stdErr: Pipe)
+```
+
+`std.process.launch` 不带 `CREATE_NO_WINDOW`。当**父进程自己没有控制台**（GUI 子系统，或父进程也是被
+`CREATE_NO_WINDOW` 拉起的）时，Windows 会给子进程**新分配**一个控制台 → 于是每个 bash 都带一个
+`conhost.exe` 与一个可见窗口。同理，`registry.cj` / `builtin.cj` 里那些 `executeWithOutput(...)`
+出的子进程也一样。
+
+> 注：这条与「聊天区不动」是**两件事**，但用户看到的是同一个画面。聊天区不动是协议使然
+> （`tool_start` 之后工具跑完才 `tool_result`，中间没有 delta），灵渠 0.39.32 已在界面上加
+> 「⏳ 工具执行中 · Ns」秒表（`ui_report.aiToolRunning / aiToolElapsed / aiBusyText`）把"还在干活"
+> 显示出来。**窗口闪烁只能由 cjh 侧消除。**
+
+**建议（按代价从低到高）**
+
+1. **cjutil 增加一个隐藏启动的封装**（首选）：`launchHidden(cmd, argv, stdIn/stdOut/stdErr)`，
+   Windows 分支用 `CreateProcessW` 并把 `dwCreationFlags` 置 `CREATE_NO_WINDOW`
+   （**不要**用 `CREATE_NEW_CONSOLE` + `SW_HIDE`：`SW_HIDE` 对 console 不生效，窗口照样闪一下）。
+   POSIX 分支等价于现有 `launch`。`bash_session.cj` / `registry.cj` / `builtin.cj` 全换成它，
+   并给 `features` 报一个 `features.process.hidden_window = true`，客户端可据此判断。
+2. 若短期不便动 FFI：至少**在工具描述与 `features.shell` 里声明**"Windows 下每条 bash 会闪控制台窗口"，
+   让客户端能提前告诉用户（灵渠已在自己的 UI 上加了秒表，但无法消除窗口）。
+3. 长期可考虑：Windows 下持久会话走 `conhost.exe --headless` 或 ConPTY（`CreatePseudoConsole`），
+   顺带把"交互式命令也支持"补齐。
+
+**复现**
+
+```
+# 任意 Windows GUI 宿主（无控制台）里：
+cjh web --port 8765 --bind 127.0.0.1        # 用 launchHidden 起，确保 cjh 自己没有控制台
+# 然后在任意 WS 客户端发一句会让模型跑 bash 的话
+# 观察：Get-CimInstance Win32_Process | ? {$_.Name -eq 'conhost.exe'} 逐条增多
+```
+
+**当前状态**：仅记录（灵渠侧已做秒表 + 本机 issue 记录）；需要 cjh 侧加 `launchHidden` 才能根治。
+
 
 
 

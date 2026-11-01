@@ -1618,6 +1618,11 @@ public class UiReportCommand <: CommandHandler {
         o.put("batchSumText", JsonString(argStr(args, "batchSumText", "")))
         // 鸿蒙工程根（`<工程>/src-tauri/gen/ohos`）——DevEco Studio 打开的就是这个目录
         o.put("hapOhosDir", JsonString(argStr(args, "hapOhosDir", "")))
+        // 工具执行心跳（0.39.32）：长命令期间"还在干活"的可断言位
+        o.put("aiToolRunning", JsonInt(argInt(args, "aiToolRunning", 0)))
+        o.put("aiToolName", JsonString(argStr(args, "aiToolName", "")))
+        o.put("aiToolElapsed", JsonInt(argInt(args, "aiToolElapsed", 0)))
+        o.put("aiBusyText", JsonString(argStr(args, "aiBusyText", "")))
         o.put("batchA4", JsonBool(argBool(args, "batchA4", false)))
         o.put("batchA1", JsonBool(argBool(args, "batchA1", false)))
         o.put("batchHtml", JsonString(argStr(args, "batchHtml", "")))

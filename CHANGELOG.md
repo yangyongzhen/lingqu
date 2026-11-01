@@ -5,6 +5,46 @@
 
 ---
 
+## [0.39.32] - 2026-11-02
+
+**主题**：长命令期间聊天区**不再看着像卡死** —— 工具执行挂秒表；同时把「DOS 窗口一闪」查清并记进上游回馈。
+
+### 现象（用户实测）
+
+> 「右侧 AI 聊天窗口信息不更新了，但屏幕上仍不时看到 dos 窗口一闪而过，像是还在执行，这种现象正常吗？」
+
+### 根因（两件事，都不算 bug，但**界面没交代**）
+
+1. **聊天区不动**：cjh 的回合是 `tool_start → 工具跑完 → tool_result`，工具执行期间**不发 delta**
+   （ANTHROPIC/OpenAI 那一族 agent 的常规做法）。我们只在 `tool_start` 插了一张写着「执行中…」的工具卡，
+   没有秒表，也没有全局指示 —— 长命令（构建/测试/hvigor 几分钟）时确实像死机。
+2. **DOS 窗口一闪**：cjh 的持久 bash 会话用标准库 `launch` 起 shell，**不带 `CREATE_NO_WINDOW`**。
+   本应用是 GUI 子系统、cjh 又是我们用 `launchHidden` 拉起的（没有控制台），于是 Windows 给每个
+   bash 子进程**新分配**控制台 → 每次命令都闪一下 `conhost` 窗口。现场链路实测：
+   `main.exe(cjh) → bash → bash → bash + conhost.exe`。
+
+### 处置（我们这侧能做的部分）
+
+- **工具执行秒表**：收到 `tool_start` 就开始计时，工具卡状态每秒刷新成 `执行中… 12s`，
+  顶栏 AI 区同时显示 `⏳ bash · 12s`（悬停说明"工具跑完前不会有正文增量，不是卡死"）；
+  `tool_result` / `done` / `error` / 中断 一律收表（`finishTurn` 兜底，避免秒表挂死）。
+- `ui_report` 新增 `aiToolRunning` / `aiToolName` / `aiToolElapsed` / `aiBusyText`（§4-60 两处一起加）。
+- 新增探针模式 **`LINGQU_UI_PROBE=toolrun`**：模拟一次 `tool_start` → 4 秒后回投 → 喂 `tool_result`
+  → 再回投。**不用真跑长命令**就能断言心跳。
+- **上游回馈**：`docs/上游回馈-cjh.md` 新增第 8 条「Windows 上每条 bash 命令都闪一个控制台窗口」，
+  含现场链路、根因（`bash_session.cj:158` 的 `launch` 无 `CREATE_NO_WINDOW`）、复现步骤与三条建议
+  （首选 cjutil 加 `launchHidden`；并说明 `CREATE_NEW_CONSOLE + SW_HIDE` 不管用）。
+
+### 实测（`LINGQU_UI_PROBE=toolrun`）
+
+| 回投时刻 | `aiToolRunning` | `aiToolName` | `aiToolElapsed` | `toolCards` | `errorCount` |
+|---|---|---|---|---|---|
+| `tool-run-busy`（tool_start 后 4s） | **1** | `bash` | **4s** | 1 | 0 |
+| `tool-run-idle`（tool_result 后） | **0** | （空） | 0 | 1 | 0 |
+
+**未做（如实标注）**：控制台窗口无法在本仓消除 —— 需要 cjh 侧 `CreateProcessW + CREATE_NO_WINDOW`
+（FFI，属 cjh 仓的改动，要跑它自己的门禁）。已记为上游 issue，不做"假装治好"。
+
 ## [0.39.31] - 2026-11-02
 
 **主题**：迁完之后「**用 DevEco Studio 打开哪个目录**」界面上直接给出来。
