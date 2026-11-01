@@ -1464,6 +1464,19 @@ public class UiReportCommand <: CommandHandler {
         o.put("pickerLastPath", JsonString(argStr(args, "pickerLastPath", "")))
         o.put("clonePanelOpen", JsonBool(argBool(args, "clonePanelOpen", false)))
         o.put("cloneUrlFilled", JsonBool(argBool(args, "cloneUrlFilled", false)))
+        // 顶栏版面（0.39.26）：titlebarOverflow 必须 false、projNoteLines 必须 1、topbarH 必须 48。
+        // 这三条就是"非最大化窗口下顶部不折叠/不溢出"的自动判据（§4-60：两处一起加）。
+        o.put("topbarH", JsonInt(argInt(args, "topbarH", 0)))
+        o.put("titlebarOverflow", JsonBool(argBool(args, "titlebarOverflow", false)))
+        o.put("projNoteLines", JsonInt(argInt(args, "projNoteLines", 0)))
+        o.put("projNoteClipped", JsonBool(argBool(args, "projNoteClipped", false)))
+        o.put("projNoteText", JsonString(argStr(args, "projNoteText", "")))
+        o.put("projBarClipped", JsonBool(argBool(args, "projBarClipped", false)))
+        // 底部贴齐（0.39.26）：layoutGapBottom 必须 ≈0（.app 底边 - .body 底边），
+        // 否则"最大化后底部空一截"这类布局缺陷没人能自动发现。
+        o.put("layoutGapBottom", JsonInt(argInt(args, "layoutGapBottom", -1)))
+        o.put("bodyH", JsonInt(argInt(args, "bodyH", 0)))
+        o.put("appH", JsonInt(argInt(args, "appH", 0)))
         o.put("abortAt", JsonInt(argInt(args, "abortAt", 0)))
         o.put("scanR", JsonInt(argInt(args, "scanR", 0)))
         o.put("scanD", JsonInt(argInt(args, "scanD", 0)))

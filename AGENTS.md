@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.25**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.26**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -243,7 +243,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 87 | `hdc install` 报 `9568332 install sign info inconsistent` | 同包名**已装过另一套签名**的版本（重签后必然撞上）。调试机上正解是先 `bm uninstall -n <bundle>` 再装——`deploy` 已自动做一次并记进证据。反之 `10106102` 是**锁屏**（开发者模式禁止自动解锁），处置是"解锁后重试"，**不是** ability 名写错 |
 | 88 | 装配框架插件 `DialogPlugin()` 后 `cj-tauri check` 报「已注册命令 `dialog:message` 未在 capabilities 声明」 | 插件**一次性注册** `open`/`save`/`pickFolder`/`message` 四条，而命名权限集 `dialog:files` 只覆盖前三条 → 门禁按「已注册 ⊆ 已声明」判红。现在用 `dialog:default`（四条全覆盖）。**这是门禁口径的可改进点**：应先把 `permissions` 展开成命令名再比对，否则"想只申请最小权限集"反而过不了门禁（0.39.25 实测，用户只要 `pickFolder` 却被迫拿到 `message`） |
 | 89 | 当目录**已存在**时调 `Directory.create(Path(p), recursive: true)` 抛 `FSException: The input path ... is already exists`（第二次克隆同名仓库时撞到，报的是"建不了父目录"） | **`recursive: true` 只保证"路径中间的父级会建出来"，不保证"已存在也返回成功"**——与 `mkdir -p` 语义不同。要先 `if (!exists(Path(p)))` 再 create。§4-76 那条讲的是"父级不存在"要怎么建，这条讲的是"已经存在"不能被当成错误（0.39.25 实测） |
-
+| 90 | 最大化窗口后**底部空一大截**（内容不拉伸到底），而小窗口看着正常 | `.app` 原来是 `display:grid;grid-template-rows:48px auto 1fr`，而第二行那个面板（克隆条）默认 `display:none` —— **`display:none` 的子元素不再是 grid item**，于是 `.body` 落进第 2 行（`auto`），第 3 行的 `1fr` 空着没人占。判据：`.app` 底边 − `.body` 底边 必须 ≈0（`ui_report.layoutGapBottom`）。修法：外层改**纵向 flex**（`.body{flex:1 1 auto;min-height:0}`），隐藏项自然不占位；若坚持 grid，就把隐藏项写成 `height:0;overflow:hidden` 而不是 `display:none` |
+| 91 | 窄窗口适配的媒体查询**完全不生效**，元素该缩的时候不缩 | 元素上带着**行内 `style="...min-width:260px"`** —— 行内样式优先级高于样式表，媒体查询压不住它。**尺寸策略只写在样式表里**；行内 style 只用于一次性的定位微调。实测：`#projPath` 的行内 `min-width:260px` 让 `@media(max-width:1300px){min-width:80px}` 形同虚设，1264 宽时顶栏仍被撑爆（0.39.26） |
 ---
 
 ## 5. 文档与提交

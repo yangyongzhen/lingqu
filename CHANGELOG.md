@@ -5,6 +5,62 @@
 
 ---
 
+## [0.39.26] - 2026-11-02
+
+**主题**：顶栏在**非最大化窗口**下不再折行/溢出，且**最大化后底部能拉伸对齐**——两个都是布局口径的
+硬错误，不是审美问题。
+
+### 现象（用户两轮反馈）
+
+1. 窗口没最大化时，顶部那行字"折叠"了；尤其红字 `未选工程：所有步骤都跑不了` 折成好几行、
+   溢出压到标题上。
+2. 修完上一条后，**最大化窗口时底部空出一大截**，内容不拉伸到底。
+
+### 根因（两条都不是 CSS 写丑了，是布局基线错了）
+
+1. **红字自己换行**：`#projNote` 没有任何 nowrap/省略约束，而顶栏是固定 48px 的一行 —— 文案一长就折，
+   折出来的第二行直接溢出到标题区。1170px 级窗口下 `有 N 个步骤用了别的工程：迁移画像、依赖树…`
+   这种句子必然折行。
+2. **`.app` 用 grid 固定三行**（`48px auto 1fr`），而第二行的克隆面板默认 `display:none`：
+   **`display:none` 的子元素不再是 grid item**，于是 `.body` 落进第 2 行（`auto`），
+   第 3 行的 `1fr` 空着没人占 —— 小窗口时 `auto` 恰好等于内容高度所以"看着没事"，
+   最大化时才暴露出底部那一大截空白。
+3. 顺带发现：`#projPath` 上带着**行内 `style="min-width:260px"`**，行内样式压过样式表，
+   我加的 `@media(max-width:1300px){min-width:80px}` 形同虚设 → 1264 宽时工程条仍被撑爆。
+
+### 处置
+
+- 顶栏整条 `flex-wrap:nowrap; overflow:hidden`，`#projBar` 与 `#projPath` 都可收缩（`min-width:0`，
+  输入框宽度策略**只写在样式表里**，删掉行内 style）。
+- 提示文案改**短句上屏 + 全文进 `title`**：`⚠ 未选工程`、`⚠ N 步用了别的工程`（悬停看详情），
+  并给 `#projNote` 加 `white-space:nowrap; text-overflow:ellipsis`（真挤才截）。
+- 窄窗按优先级让位：`<1560px` 撤"当前项目"胶囊 → `<1360px` 撤 logo 副标题 → `<1300px` 三个按钮收成
+  图标（📁 / ⤓ / ▾，文字进 title）+ 输入框最小宽 80 → `<1120px` 撤"当前工程"标签。
+- **`.app` 改成纵向 flex**（`.titlebar`、`#clonePanel` 都是 `flex:0 0 auto`，`.body{flex:1 1 auto;min-height:0}`）：
+  隐藏项自然不占位，不再依赖"隐藏后还剩几行"。
+
+### 自动断言（两处一起加，§4-60）
+
+`ui_report` 新增 6 个字段：`topbarH` / `titlebarOverflow` / `projNoteLines` / `projNoteClipped` /
+`projNoteText` / `projBarClipped` / `layoutGapBottom` / `bodyH` / `appH`。
+判据：`titlebarOverflow=false`、`projNoteLines=1`、`projBarClipped=false`、`layoutGapBottom≈0`。
+新增探针模式 **`LINGQU_UI_PROBE=layout`**：把三种状态（未选工程 / 某步覆盖 / 正常）各上报一次。
+
+### 实测（`LINGQU_UI_PROBE=layout`，两份窗口尺寸都跑过）
+
+| 窗口 | 状态 | gapBottom | noteLines | overflow | barClipped |
+|---|---|---|---|---|---|
+| 1264×801（默认） | 未选工程 | 0 | 1 | false | false |
+| 1264×801 | 1 步覆盖 | 0 | 1 | false | false |
+| 1264×801 | 正常 | 0 | 0 | false | false |
+| 1884×1061（模拟最大化） | 同上三种 | 0 | 1 / 1 / 0 | false | false |
+
+大窗那轮是把 `cj-tauri.toml` 临时改成 1900×1100 跑的，**跑完已恢复 1280×840 并重新 sync**。
+
+### 坑
+
+AGENTS §4-90（grid 固定行 + 隐藏子元素 → 剩余行错位）、§4-91（行内 style 压过媒体查询）。
+
 ## [0.39.25] - 2026-11-02
 
 **主题**：选工程从"手敲路径一条路"变成**三条路并存**（手敲 / 原生目录框 / 从 Git 克隆），

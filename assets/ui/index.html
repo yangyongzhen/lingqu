@@ -37,8 +37,35 @@ body{background:var(--bg);color:var(--fg);
 ::-webkit-scrollbar-track{background:transparent}
 
 /* ============ 骨架布局 ============ */
-.app{height:100%;display:grid;grid-template-rows:48px auto 1fr}
-.titlebar{display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);z-index:5}
+.app{height:100%;display:flex;flex-direction:column;min-height:0}   /* 纵向 flex：克隆面板隐藏时不占位（grid 固定行会留空行，实测最大化后底部不拉伸） */
+.titlebar{display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);
+  border-bottom:1px solid var(--line);z-index:5;height:48px;overflow:hidden;flex-wrap:nowrap;flex:0 0 auto}
+/* 顶部工程条在**非最大化**窗口下必须"只缩不折"：
+   里面那句红色提示（未选工程 / 某步用了别的工程）以前会自己换行，
+   48px 的行高装不下 → 溢出压到下一行、把标题挤花（2026-11-01 实测）。
+   现在：整条 nowrap + 提示单行省略 + 完整文案进 title（悬停可看）。 */
+#projBar{flex:1 1 auto;min-width:0;overflow:hidden;flex-wrap:nowrap;white-space:nowrap}
+#projBar .btn{flex:0 0 auto}
+#projPath{flex:1 1 380px;min-width:140px}   /* 宽度策略只写在 CSS 里：行内 min-width 会压过媒体查询 */
+#projNote{flex:0 1 auto;min-width:0;max-width:28ch;margin-top:0;line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px}
+/* 窄窗口按优先级依次让位：先撤"当前项目"胶囊（占位信息），再撤 logo 副标题，
+   最后把三个按钮收成图标（文字进 title，鼠标悬停仍有说明）——48px 一行里挤不下就换形态，不换行。 */
+@media (max-width:1560px){ .tb-proj{display:none} }
+@media (max-width:1360px){ .logo small{display:none} }
+@media (max-width:1300px){
+  #projPath{min-width:80px}
+  #projNote{max-width:none}   /* 短文案不该被省略号截：交给 flex 压，真挤了才截 */
+  #btnProjOpen,#btnProjClone,#btnProjRecent{padding-left:7px;padding-right:7px}
+  #btnProjOpen{font-size:0}
+  #btnProjOpen::before{content:'📁';font-size:13px}
+  #btnProjClone{font-size:0}
+  #btnProjClone::before{content:'⤓';font-size:14px}
+  #btnProjRecent{font-size:0}
+  #btnProjRecent::before{content:'▾';font-size:14px}
+}
+@media (max-width:1120px){ #projBar .projLabel{display:none} }
+@media (max-width:1040px){ #btnMigrateTop{padding-left:8px;padding-right:8px} .titlebar{gap:8px;padding:0 10px} }
 .logo{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:.2px;white-space:nowrap}
 .logo .mark{width:24px;height:24px;border-radius:8px;display:grid;place-items:center;font-size:12px;color:#fff;font-weight:700;
   background:linear-gradient(135deg,var(--acc),var(--acc2))}
@@ -69,7 +96,7 @@ body{background:var(--bg);color:var(--fg);
   font-family:inherit;font-size:13px;line-height:1;padding:5px 8px;border-radius:8px}
 .iconbtn:hover{color:var(--fg);background:var(--panel2)}
 
-.body{display:grid;grid-template-columns:240px 1fr 372px;min-height:0;transition:none}
+.body{display:grid;grid-template-columns:240px 1fr 372px;min-height:0;transition:none;flex:1 1 auto}
 body.ai-hidden .body{grid-template-columns:240px 1fr}
 
 /* ============ 左栏：流程 ============ */
@@ -473,7 +500,7 @@ input[readonly].echo{border-color:transparent!important;background:transparent!i
 input[readonly].echo:hover{border-color:var(--line)!important;background:var(--panel2)!important;color:var(--fg)}
 input.echo.ovr{border-color:var(--warn)!important;color:var(--warn)!important;background:var(--warnsoft)!important}
 
-#clonePanel{display:none;gap:8px;align-items:center;flex-wrap:wrap;
+#clonePanel{display:none;flex:0 0 auto;gap:8px;align-items:center;flex-wrap:wrap;
   padding:8px 14px;background:var(--panel2);border-bottom:1px solid var(--line);font-size:12px}
 #clonePanel.open{display:flex}
 #clonePanel .cpTitle{color:var(--dim);font-size:11px;white-space:nowrap}
@@ -505,7 +532,7 @@ body.ai-hidden .ai-show{display:block}
          避免「8 个框各填一遍、填错一个就对着别的工程干活」。 -->
     <div id="projBar">
       <span class="projLabel">当前工程</span>
-      <input id="projPath" class="mono" placeholder="粘贴工程路径，或用「选择…」/「克隆…」（所有步骤都用它）" style="flex:1 1 380px;min-width:260px">
+      <input id="projPath" class="mono" placeholder="粘贴工程路径，或用右侧「选择…」「克隆…」（所有步骤都用它）">
       <button class="btn" id="btnProjOpen" title="弹系统目录选择框（也可以直接在左边手敲路径）">选择…</button>
       <button class="btn" id="btnProjClone" title="从 Git 地址克隆下来，并设为当前工程">克隆…</button>
       <button class="btn" id="btnProjRecent" title="最近用过的工程">最近 ▾</button>
@@ -5607,6 +5634,43 @@ withBridge(function(tauri){
       pickerLastPath: (typeof PICK !== 'undefined') ? String(PICK.lastPath || '') : '',
       clonePanelOpen: !!(document.getElementById('clonePanel') && document.getElementById('clonePanel').classList.contains('open')),
       cloneUrlFilled: !!((document.getElementById('cloneUrl') || {}).value),
+      // 顶栏版面（0.39.26）：非最大化窗口下最容易坏的就是这一条 48px 的横条。
+      // 判据：titlebarOverflow 必须 false（没有内容溢出把标题挤花）、
+      //       projNoteLines 必须是 1（红字不许折行）、topbarH 必须等于 48。
+      topbarH: (function(){ var t = document.querySelector('.titlebar'); return t ? t.clientHeight : 0; })(),
+      titlebarOverflow: (function(){
+        var t = document.querySelector('.titlebar');
+        if (!t) { return false; }
+        // scrollHeight 比 clientHeight 大 → 有内容被挤到行高外（就是"字体折叠"的现场）
+        return (t.scrollHeight - t.clientHeight) > 1;
+      })(),
+      projNoteLines: (function(){
+        var n = document.getElementById('projNote');
+        if (!n || !n.textContent) { return 0; }
+        var lh = parseFloat(getComputedStyle(n).lineHeight) || 14;
+        return Math.round(n.scrollHeight / lh);
+      })(),
+      projNoteClipped: (function(){
+        var n = document.getElementById('projNote');
+        if (!n) { return false; }
+        return n.scrollWidth > (n.clientWidth + 1);   // 单行省略号生效 = 有截断（可接受）
+      })(),
+      projNoteText: (function(){ var n = document.getElementById('projNote'); return n ? String(n.textContent || '') : ''; })(),
+      // 底部贴齐（0.39.26）：.app 底边与 .body 底边之差必须 ≈0。
+      // 起因：.app 曾是 grid `48px auto 1fr`，克隆面板 display:none 时不算 grid item，
+      // .body 落到第 2 行(auto)、第 3 行(1fr)空着 —— 最大化后底部空一大截。
+      layoutGapBottom: (function(){
+        var a = document.querySelector('.app'), b = document.querySelector('.body');
+        if (!a || !b) { return -1; }
+        return Math.round(a.getBoundingClientRect().bottom - b.getBoundingClientRect().bottom);
+      })(),
+      bodyH: (function(){ var b = document.querySelector('.body'); return b ? Math.round(b.getBoundingClientRect().height) : 0; })(),
+      appH: (function(){ var a = document.querySelector('.app'); return a ? Math.round(a.getBoundingClientRect().height) : 0; })(),
+      projBarClipped: (function(){
+        var b = document.getElementById('projBar');
+        if (!b) { return false; }
+        return b.scrollWidth > (b.clientWidth + 1);
+      })(),
       abortSource: String(CJ.abortSource || ''),
       abortAt: Number(CJ.abortAt || 0),
       wsFrameTypes: (function(){
@@ -5798,6 +5862,26 @@ withBridge(function(tauri){
     // 断点续迁先观测一次：让 ui_report 的 resume* 字段有值可断言（纯读盘，不会拖慢序列）
     setTimeout(function(){ loadResumeBoard(resumePathValue()); }, 200);
     setTimeout(function(){ reportUi('probe-initial'); }, 400);
+    // 顶栏版面自检（LINGQU_UI_PROBE=layout，0.39.26）：三种"最容易把 48px 顶栏挤花"的状态各上报一次
+    //   ①未选工程（那条红字）②某步覆盖了别的工程（橙色警示）③正常选了工程。
+    // 判据：每次都 titlebarOverflow=false、projNoteLines=1、projBarClipped=false。
+    if (mode === 'layout') {
+      setTimeout(function(){ setCurrentProject(''); reportUi('layout-no-project'); }, 1200);
+      // 覆盖态必须**先有当前工程**再加覆盖，否则又落回"未选工程"那条分支（第一次探针就写错了）
+      setTimeout(function(){
+        setCurrentProject('E:/test/rust/m3u8dl-tauri');
+        PATH_OVERRIDE['scanPath'] = 'D:/tmp/another-project-worktree';
+        syncProjectEchoes();
+        reportUi('layout-with-override');
+      }, 2400);
+      setTimeout(function(){
+        delete PATH_OVERRIDE['scanPath'];
+        setCurrentProject('E:/test/rust/m3u8dl-tauri');
+        syncProjectEchoes();
+        reportUi('layout-normal');
+      }, 3600);
+      return;
+    }
     setTimeout(function(){ openSettings(); }, 1200);
     // WS 通道自检：连上就发一条真实提问，靠 frames/delta/replyPreview 断言"通道真的通了"
     setTimeout(function(){
@@ -5970,14 +6054,23 @@ function renderProjectNote(){
   var n = $('projNote');
   if (!n) { return; }
   var ovr = Object.keys(PATH_OVERRIDE).filter(function(k){ return String(PATH_OVERRIDE[k]||'').length > 0; });
-  var txt = '';
-  if (!String(PROJECT.path||'').length) { txt = '未选工程：所有步骤都跑不了'; }
-  else if (ovr.length > 0) {
-    txt = '⚠ 有 ' + ovr.length + ' 个步骤用了别的工程：' +
-          ovr.map(function(k){ return (PATH_LABELS[k]||k); }).join('、');
+  // 顶栏只有 48px 高，提示必须**一行说完**：短句上屏 + 全文进 title。
+  // 以前这里是整句（"未选工程：所有步骤都跑不了" / "⚠ 有 3 个步骤用了别的工程：迁移画像、依赖树、改造执行"），
+  // 非最大化窗口会折成好几行、溢出压到标题上（2026-11-01 实测）。
+  var short = '';
+  var full = '';
+  if (!String(PROJECT.path||'').length) {
+    short = '⚠ 未选工程';
+    full = '未选工程：所有步骤都跑不了（在左边输入路径，或点「选择…」/「克隆…」）';
+  } else if (ovr.length > 0) {
+    short = '⚠ ' + ovr.length + ' 步用了别的工程';
+    full = '这些步骤单独用了别的工程：' + ovr.map(function(k){ return (PATH_LABELS[k]||k); }).join('、');
   }
-  n.textContent = txt;
+  n.textContent = short;
+  n.title = full;
   n.style.color = (!String(PROJECT.path||'').length || ovr.length > 0) ? 'var(--err)' : 'var(--muted)';
+  // 让 reportUi 能断言"提示没被折行/没被截断"
+  window.__projNoteFull = full;
 }
 
 /** 把当前工程同步到所有回显框（覆盖项保留自己的值） */
