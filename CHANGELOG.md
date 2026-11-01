@@ -5,6 +5,43 @@
 
 ---
 
+## [0.39.13] - 2026-11-02
+
+**主题**：把「口令密文」这一环打通——**纯仓颉 AES-128-GCM + hvigor AesGcmKit 兼容**。
+这是路线 A 里最容易"静默失败"的一步：算错一位，hvigor 只会说"签名失败"，不会说 GCM 错了。
+
+### 决定性验证（本机实测，两边独立实现互证）
+
+    # 用本机现成的 ~/.ohos/config/material 解 habit-tree 已有口令密文
+    仓颉实现（src/compiler/aes_gcm_kit.cj）：loadWorkKey + decryptPasswordHex → 通过（GCM 认证过了）
+    Node 实现（DevEco 自带 node，走 OpenSSL）独立复算：
+      workKey     = b730dc2388f8e70c645ac48fea7f22e4
+      storePassword → "LtjnTDt7h8"（10 位字母数字，与 flutter 随机口令形态一致）
+      keyPassword   → "LtjnTDt7h8"
+    → 两边逐字节一致 ⇒ 我们**能自己生产 hvigor 解得开的口令密文**，不必再"抄别人的密文"
+
+### Added
+
+- `src/compiler/aes_gcm.cj`：**纯仓颉 AES-128-GCM**（296 行）。
+  为什么自己写：仓颉 std / stdx 1.0.5.1 **没有 AES**——`stdx.crypto.crypto` 只给 `SM4`，
+  标准库 `std.crypto.cipher` 只有 `BlockCipher` 接口；且本机实测 **SM4-GCM 直接抛**
+  `CryptoException: Encrypt failed due to create tag error`（CBC/ECB/CTR 才可用）。
+  实现用 NIST SP 800-38D 的 TC1/TC2/TC4 向量核对（期望值又用本机 Node/OpenSSL 独立复算），
+  另测非 96bit nonce、多块、tag 篡改拒绝、换 key 拒绝。
+- `src/compiler/aes_gcm_kit.cj`：AesGcmKit 兼容层
+  - `hmacSha256` / `pbkdf2HmacSha256`（stdx 没有 PBKDF2，自写；4 组公开向量核对）
+  - `lossyUtf8Bytes`：非法 UTF-8 序列 → U+FFFD（Node `toString('utf8')` 同语义；
+    不做这一步 rootKey 必然不对）
+  - `loadWorkKey(materialDir)`：读 `material/{ac,ce,fd/0..2}`（每目录恰好 1 个文件）→
+    `PBKDF2(10000,16)` → AES-GCM 解出 workKey；错误逐条带原因
+  - `encryptPasswordHex` / `decryptPasswordHex`：载荷 `[len(4BE)|IV(12)|ct|tag(16)]` → hex
+  - `randomBytes`（`SecureRandom`：**注意 `nextBytes(buf)` 是填缓冲区，不是给长度返回数组**）
+- 8 例新单测（AES 4 + kit 4），合计 **310 例**。
+
+### 说明（仍未验证）
+
+路线 A 的**联网部分**（OAuth 登录、团队/设备、证书、profile）仍未写；本轮只把"材料生产"里
+最危险的密码学环节做穿。`m3u8dl-tauri` 的 `signed=true` 尚未发生。
 ## [0.39.12] - 2026-11-02
 
 **主题**：自动签名「路线 A」（AGC 云生成）开工，第一批落地的是**纯函数地层**：
