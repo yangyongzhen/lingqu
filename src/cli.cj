@@ -166,6 +166,7 @@ public func cliUsage(): String {
     text += "  lingqu-cli build --path E:/work/habit-tree --verifyOnly\n"
     text += "  lingqu-cli sign --path E:/work/habit-tree\n"
     text += "  lingqu-cli sign --login                 # 自动签名第一步：AGC 登录（浏览器授权一次）\n"
+    text += "  lingqu-cli sign --auto --path E:/work/habit-tree   # 自动签名全流程（设备/证书/profile/写回）\n"
     text += "  lingqu-cli resume --path E:/work/habit-tree\n"
     text += "  lingqu-cli report --path E:/work/habit-tree\n\n"
     text += "说明：命令与界面上的按钮一一对应（同一份实现），结果同时落工程里的 .lingqu/。\n"

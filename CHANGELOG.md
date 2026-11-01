@@ -5,6 +5,58 @@
 
 ---
 
+## [0.39.19] - 2026-11-02
+
+**主题**：把「回调判定」抽成纯函数并**放宽到只认 quit**——连续三次登录失败都出在"一次异常回调
+弄死整次会话"，以及"_回调页被用户手动打开_"。
+
+### Fixed（三个实测出来的坑）
+
+1. **缺 `tempToken`/`siteId` 的回调会终止会话**：浏览器/华为页面的预检跳转就是这种形态——
+   实测进程当场退出、端口不再监听，用户再登录必然失败。现在**只有显式 `quit` 才终止**。
+2. **`code` 不一致硬拒绝**：华为回调里自带它自己的 `code`，与我们的防伪 code 天然不同 →
+   正常登录被我们判成 `Bad code`。现在 `code` **只核对不拒绝**（安全边界改为：
+   只绑 `127.0.0.1` + 一次性服务 + Host 白名单 + tempToken 仍要过华为校验）。
+3. **`/callback` 被用户手动打开**（连续两次）：回调页现在**直接给出可点的登录页链接**，
+   并写清"这是内部地址，别手动开"。
+
+### Added
+
+- `judgeCallback(code, tempToken, siteId, quit, expectCode)` **纯函数**（+`CallbackVerdict`）：
+  三条规则一处实现，handler 只执行动作；4 例单测覆盖（正常 / code 不一致仍放行 /
+  缺参数与非大陆站点只忽略 / 只有 quit 终止），合计 **325 例**。
+- 回调证据落文件：`~/.lingqu/agc/login-callback.log`（记 code 长度、siteId、code 是否匹配——
+  **不记 tempToken 明文**），下次出问题不用再靠猜。
+
+### 说明（仍未验证）
+
+真实授权仍未完成（本轮结束时重新起了一次登录并给出链接）。因此 AGC 侧（团队/设备/证书/profile）
+与 `m3u8dl-tauri` 的 `signed=true` 都还没发生。
+## [0.39.18] - 2026-11-02
+
+**主题**：自动签名的**编排层**落地——登录之后的一整条链现在是一条命令。
+（真实授权仍未完成，所以 `signed=true` 还没拿到；代码已就位，token 一到即可连跑。）
+
+### Added
+
+- `src/compiler/sign_apply.cj`：
+  - `autoSign(inp, token)`：① 令牌 → ② 团队 → ③ 设备（已注册跳过 / 否则注册）→
+    ④ 材料命名 + 本地没有 p12 就 `hap-sign-tool` 生成密钥与 CSR → ⑤ 证书（按 `auto_debug_<teamId>.cer`
+    精确复用，没有就用 CSR 新建并下载 .cer）→ ⑥ 按**新包名**申请 debug profile（带 deviceList）→
+    下载 `.p7b` → ⑦ 用 `material/` 加密口令 → `applySigningConfig` 写回（先 `.bak`）
+  - `AutoSignOutcome`：**逐步日志**（一行一步）+ 各文件路径 + `passwordLen`（只回长度，绝不回口令）
+  - 复用旧 p12 时沿用工程里现有的口令密文；没有现成密文就要求删掉 p12 重新生成（不猜口令）
+  - 每一步失败都带"是哪一步"，不出"跑完了但不知道哪步没做"的结果
+- `t2h:sign --auto --path <工程>`（或 `LINGQU_SIGN_AUTO=1`）：组装 `bundleName`（AppScope）、
+  UDID / deviceType（hdc）、令牌（`~/.lingqu/agc`），跑完整编排并按 JSON 回投。
+- 2 例新单测（无令牌必须**秒级**报"先去登录"且一步不走；`AutoSignOutcome` 落档结构里不得出现口令），
+  合计 **321 例**。
+
+### 说明（仍未验证）
+
+真实账号授权尚未完成（等一次浏览器点击）。因此 `autoSign` 的网络部分（团队/设备/证书/profile）
+在本机**还没有真跑过**；`m3u8dl-tauri` 的 `signed=true` 尚未发生。
+已就位并可复跑的离线证据仍是 0.39.16 的那条：**hvigor 能解开我们造的 AesGcmKit 口令密文**。
 ## [0.39.17] - 2026-11-02
 
 **主题**：修掉「登录链接被 shell 拆开」这个真 bug——它就是用户"网页登录失败"的直接原因。

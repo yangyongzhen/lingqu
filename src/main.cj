@@ -2436,6 +2436,104 @@ public class SignCommand <: CommandHandler {
             eprintln("[lingqu][sign:reencrypt] ok=${outError == ""} bp=${bpPath} storePwdLen=${pwd.size}")
             return res3
         }
+        // ---- `--auto`：自动签名全流程（需要先 `--login` 过） ----
+        //
+        // 一条命令把「设备 → 证书 → 新包名 profile → 按 DevEco 命名落盘 → 写 build-profile」跑完。
+        // 属于**长任务**（要跑 hvigor 之外的多步网络 + java），但每一步都是秒级到十几秒，
+        // 不像一键迁移那样分钟级，所以这里同步返回（CLI/agent 都适用）；界面侧另走后台轮询。
+        if (argBool(args, "auto", false) || envOr("LINGQU_SIGN_AUTO", "") == "1") {
+            var res4 = JsonObject()
+            let projPath = argStr(args, "path", "")
+            if (projPath == "") {
+                res4.put("ok", JsonBool(false))
+                res4.put("error", JsonString("要给工程路径（--path）"))
+                return res4
+            }
+            let tomlPath = cargoTomlPathOf(projPath)
+            if (tomlPath == "") {
+                res4.put("ok", JsonBool(false))
+                res4.put("error", JsonString("${projPath} 不像 Tauri 工程（找不到 src-tauri/Cargo.toml）"))
+                return res4
+            }
+            let srcDir = tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+            let ohosDir = hostPath("${srcDir}/gen/ohos")
+            let bp = "${ohosDir}/build-profile.json5"
+            if (!exists(Path(bp))) {
+                res4.put("ok", JsonBool(false))
+                res4.put("error", JsonString("找不到 ${bp}（先跑 `cargo tauri ohos init`）"))
+                return res4
+            }
+            // bundleName：AppScope/app.json5
+            var bundle = ""
+            let appJson = "${ohosDir}/AppScope/app.json5"
+            if (exists(Path(appJson))) {
+                try {
+                    bundle = json5ValueAfter(String.fromUtf8(File.readFrom(appJson)), "bundleName")
+                } catch (e: Exception) {
+                    let _ = e
+                }
+            }
+            if (bundle == "") {
+                res4.put("ok", JsonBool(false))
+                res4.put("error", JsonString("读不到 ${appJson} 里的 bundleName"))
+                return res4
+            }
+            // 设备：UDID + deviceType
+            let hdc = hdcPathOr()
+            if (hdc == "") {
+                res4.put("ok", JsonBool(false))
+                res4.put("error", JsonString("找不到 hdc（设 DEVECO_HOME / DEVECO_SDK_HOME）"))
+                return res4
+            }
+            var udid = envOr("LINGQU_SIGN_UDID", "")
+            var deviceType = "4"
+            if (udid == "") {
+                try {
+                    let (_, out, errOut) = executeWithOutput(hdc, ["shell", "bm", "get", "--udid"])
+                    udid = parseUdid(String.fromUtf8(out) + "\n" + String.fromUtf8(errOut))
+                } catch (e: Exception) {
+                    let _ = e
+                }
+            }
+            if (udid == "") {
+                res4.put("ok", JsonBool(false))
+                res4.put("error", JsonString("拿不到设备 UDID（设备没连？）"))
+                return res4
+            }
+            try {
+                let (_, out2, errOut2) = executeWithOutput(hdc,
+                    ["shell", "getprop", "hw_sc.build.os.deviceType"])
+                deviceType = deviceTypeOf(String.fromUtf8(out2) + "\n" + String.fromUtf8(errOut2))
+            } catch (e: Exception) {
+                let _ = e
+            }
+            // 令牌
+            let tokOpt = loadAgcToken()
+            var token = AgcLoginOutcome()
+            match (tokOpt) {
+                case Some(v) => token = v
+                case None =>
+                    res4.put("ok", JsonBool(false))
+                    res4.put("error", JsonString("还没有登录令牌：先跑 `lingqu-cli sign --login` 完成一次浏览器授权"))
+                    return res4
+            }
+            let inp = AutoSignInput()
+            inp.configDir = ohosConfigDir()
+            inp.product = argStr(args, "product", "default")
+            inp.projectRoot = ohosDir
+            inp.bundleName = bundle
+            inp.buildProfile = bp
+            inp.udid = udid
+            inp.deviceType = deviceType
+            let result = autoSign(inp, token)
+            res4 = result.toJson()
+            res4.put("bundleName", JsonString(bundle))
+            res4.put("udid", JsonString(udid))
+            res4.put("deviceType", JsonString(deviceType))
+            eprintln("[lingqu][sign:auto] ok=${result.ok} bundle=${bundle} cert=${result.certName} " +
+                "err=${result.error}")
+            return res4
+        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")

@@ -168,3 +168,42 @@ func arrLenOf(root: JsonValue, key: String): Int64 {
         case _ => return 0
     }
 }
+
+// ============================================================
+// 0.39.18：自动签名编排层（不联网即可验的部分）
+// ============================================================
+
+@Test
+public func testAutoSignFailsFastWithoutToken(): Unit {
+    // 没有令牌时必须**立刻**报"先去登录"，不能先跑去连 AGC（那样既慢又难排障）
+    let inp = AutoSignInput()
+    inp.bundleName = "com.a.b"
+    inp.udid = "AABB"
+    let tok = AgcLoginOutcome()          // 空令牌
+    let r = autoSign(inp, tok)
+    @Assert(r.ok, false)
+    @Assert(r.error.contains("--login"), true)
+    @Assert(r.steps.size, 0)             // 一步都没走
+    // 只有 accessToken 没有 userId 也算没有令牌（AGC 头要 uid）
+    let tok2 = AgcLoginOutcome()
+    tok2.accessToken = "x"
+    @Assert(autoSign(inp, tok2).ok, false)
+}
+
+@Test
+public func testAutoSignOutcomeJsonShape(): Unit {
+    let o = AutoSignOutcome()
+    o.add("① 一")
+    o.add("② 二")
+    o.teamId = "t1"
+    o.certName = "auto_debug_t1.cer"
+    o.passwordLen = 10
+    let j = o.toJson()
+    let steps = arrLenOf(j, "steps")
+    @Assert(steps, 2)
+    @Assert(strOf(j, "teamId"), "t1")
+    @Assert(strOf(j, "certName"), "auto_debug_t1.cer")
+    @Assert(j.toString().contains("\"passwordLen\":10"), true)
+    // 落档里**不能**出现任何口令明文/密文（只有长度）
+    @Assert(j.toString().contains("storePassword"), false)
+}

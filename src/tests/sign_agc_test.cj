@@ -155,3 +155,55 @@ public func testLoginUrlCarriesAmpersands(): Unit {
     // 提醒未来改这段代码的人：url 里带 & 就绝不能交给 shell 解析
     @Assert(u.split("&", -1).size >= 3, true)
 }
+
+// ============================================================
+// 0.39.19：回调判定（纯函数）——把"哪个回调该死、哪个只该忽略"钉死
+// ============================================================
+//
+// 这几条全是实测踩出来的：
+//   · 缺 tempToken/siteId 的预检跳转，曾经直接终止整次登录（进程退出、端口不再监听）
+//   · 华为回调自带 code，与我们生成的不一致 → 硬比对会把正常登录判成 Bad code
+//   · 非大陆站点要拒，但不该终止（用户可能换账号重试）
+
+@Test
+public func testJudgeCallbackAcceptsValidCallback(): Unit {
+    let v = judgeCallback("abc", "tmp", "1", false, "abc")
+    @Assert(v.decision, "accept")
+    @Assert(v.tempToken, "tmp")
+    @Assert(v.siteId, "1")
+    @Assert(v.reason, "")                       // 一切正常时不该有噪音
+}
+
+@Test
+public func testJudgeCallbackToleratesCodeMismatch(): Unit {
+    // code 不一致：**仍然 accept**，只留一句记录（华为回调自带 code）
+    let v = judgeCallback("huaweiCode", "tmp", "1", false, "ourCode")
+    @Assert(v.decision, "accept")
+    @Assert(v.reason.contains("已放行"), true)
+}
+
+@Test
+public func testJudgeCallbackIgnoresMalformedButKeepsWaiting(): Unit {
+    // 缺 tempToken → ignore（不能 quit，也不能 accept）
+    let a = judgeCallback("c", "", "1", false, "c")
+    @Assert(a.decision, "ignore")
+    @Assert(a.reason.contains("tempToken"), true)
+    // 缺 siteId → ignore
+    let b = judgeCallback("c", "t", "", false, "c")
+    @Assert(b.decision, "ignore")
+    // 非大陆站点 → ignore（不是 accept、也不是 quit）
+    let c = judgeCallback("c", "t", "2", false, "c")
+    @Assert(c.decision, "ignore")
+    @Assert(c.reason.contains("大陆"), true)
+}
+
+@Test
+public func testJudgeCallbackOnlyQuitEndsSession(): Unit {
+    // 只有显式 quit 才结束会话——这是"别让一次杂请求弄死登录"的核心
+    let v = judgeCallback("c", "t", "1", true, "c")
+    @Assert(v.decision, "quit")
+    @Assert(v.reason.contains("取消"), true)
+    // quit 优先于一切（即使参数齐全也不该 accept）
+    let w = judgeCallback("c", "t", "1", true, "c")
+    @Assert(w.tempToken, "")
+}

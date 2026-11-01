@@ -61,6 +61,67 @@ class LoginCallbackState {
     public var quit: Bool = false
     public var code: String = ""
     public var rejectReason: String = ""
+    /** 第一次到达的回调原始 query（排障证据） */
+    public var rawQuery: String = ""
+    /** 本次登录页 URL（回环回调页上直接给用户点，省得用户去找终端） */
+    public var loginUrl: String = ""
+}
+
+/**
+ * 一次回调的**判定结果**（纯函数产出，便于单测；handler 只负责执行动作）。
+ *
+ * 取值：`accept` = 收下 tempToken 去换 JWT；`ignore` = 只回 400 继续等；`quit` = 用户取消，收尾。
+ */
+public class CallbackVerdict {
+    public var decision: String = "ignore"
+    public var reason: String = ""
+    /** tempToken/siteId 在 accept 时才有意义 */
+    public var tempToken: String = ""
+    public var siteId: String = ""
+
+    public func toJson(): JsonObject {
+        var o = JsonObject()
+        o.put("decision", JsonString(this.decision))
+        o.put("reason", JsonString(this.reason))
+        return o
+    }
+}
+
+/**
+ * 判定一次回调该怎么做（**纯函数**，不碰网络/状态）。
+ *
+ * 三条经过实测校准的规则（0.39.19，都是踩出来的）：
+ *   ① **只有显式 `quit` 才终止会话**——缺参数的回调（浏览器/华为页面的预检跳转）以前会直接
+ *      把整次登录废掉，进程当场退出、端口不再监听；
+ *   ② **`code` 不匹配不拒绝**——华为回调里自带它自己的 `code`，硬比对会把正常登录判成 Bad code；
+ *      真正的安全边界是「只绑 127.0.0.1 + 一次性服务 + Host 白名单 + tempToken 还要过华为校验」；
+ *   ③ **非大陆站点**（`siteId != "1"`）不收，但也不终止（用户可能换账号重试）。
+ */
+public func judgeCallback(code: String, tempToken: String, siteId: String, quit: Bool,
+    expectCode: String): CallbackVerdict {
+    let v = CallbackVerdict()
+    if (quit) {
+        v.decision = "quit"
+        v.reason = "登录被取消（浏览器侧 quit）"
+        return v
+    }
+    if (tempToken == "" || siteId == "") {
+        v.decision = "ignore"
+        v.reason = "回调缺 tempToken/siteId（可能是页面预检跳转），已忽略、继续等待"
+        return v
+    }
+    if (!isChinaSite(siteId)) {
+        v.decision = "ignore"
+        v.reason = "非大陆站点账号（siteId=${siteId}），已忽略；请用大陆站点账号重试"
+        return v
+    }
+    v.decision = "accept"
+    v.tempToken = tempToken
+    v.siteId = siteId
+    if (code != expectCode) {
+        v.reason = "回调 code 与本机生成的不一致（已放行，仅记录）"
+    }
+    return v
 }
 
 /**
@@ -127,36 +188,52 @@ class LoginCallbackHandler <: HttpRequestHandler {
             case Some(v) => quit = true
             case None => ()
         }
-        if (gotCode != this.expectCode) {
-            // 同上：旧链接/伪造回调不该把整个登录会话废掉（实测踩到——上一轮贴的链接失效后
-            // 用户仍点它，code 对不上，于是整次登录被判失败）
-            res.status(400)
-            res.body("Bad code".toArray())
-            return
+        // `code` 只做**核对与记录**，不做硬拒绝：
+        // 实测（0.39.19）华为回调里的 `code` 与我们生成的不一致（它自己也带一个 code 参数），
+        // 硬比对会把正常登录判成 Bad code。安全边界另有其物：只绑 127.0.0.1、一次性服务、
+        // Host 白名单，且 tempToken 还要拿去华为校验——伪造的 tempToken 过不了那一关。
+        if (this.state.rawQuery == "") {
+            this.state.rawQuery = "code=${gotCode}&siteId=${siteId}&codeMatch=${gotCode == this.expectCode}"
         }
-        if (quit) {
-            this.state.quit = true
-            this.state.rejectReason = "登录被取消（浏览器侧 quit）"
-            res.status(302)
-            res.header("Location", loginRedirectUrl(false))
-            res.body(loginPageHtml(false, "已取消登录").toArray())
-            this.state.done.store(true)
-            return
+        // 所有分支判定收进纯函数 `judgeCallback`（单测覆盖），handler 只执行动作。
+        // 这样"哪个回调该死、哪个只该忽略"这条规则只有一处实现。
+        if (this.state.rawQuery == "") {
+            this.state.rawQuery = "codeLen=${gotCode.size}&siteId=${siteId}" +
+                "&codeMatch=${gotCode == this.expectCode}"
         }
-        if (tempToken == "" || siteId == "") {
-            res.status(400)
-            res.body("Bad Request".toArray())
-            this.state.rejectReason = "回调缺 tempToken 或 siteId"
-            this.state.done.store(true)
-            return
+        let verdict = judgeCallback(gotCode, tempToken, siteId, quit, this.expectCode)
+        match (verdict.decision) {
+            case "quit" =>
+                this.state.quit = true
+                this.state.rejectReason = verdict.reason
+                res.status(302)
+                res.header("Location", loginRedirectUrl(false))
+                res.body(loginPageHtml(false, "已取消登录").toArray())
+                this.state.done.store(true)
+                return
+            case "ignore" =>
+                this.state.rejectReason = verdict.reason
+                if (!isChinaSite(siteId) && tempToken != "") {
+                    // 站点不对时给一句人话（不是 400 裸响应）
+                    res.status(200)
+                    res.header("Content-Type", "text/html; charset=utf-8")
+                    res.body(loginPageHtml(false, verdict.reason).toArray())
+                } else {
+                    res.status(400)
+                    res.header("Content-Type", "text/html; charset=utf-8")
+                    res.body(("<!doctype html><meta charset=\"utf-8\"><title>内部回调地址</title>" +
+                        "<body style=\"font-family:system-ui;padding:40px;color:#333\">" +
+                        "<h2>这是内部回调地址</h2><p>它只用于接收华为登录页的跳转，<b>不要手动打开</b>。</p>" +
+                        "<p><a href=\"" + this.state.loginUrl + "\" style=\"font-size:18px\">" +
+                        "👉 点这里去华为登录页（同一条有效链接）</a></p>" +
+                        "<p style=\"color:#888\">或者回到终端里复制打印出来的那条 /console/DevEcoIDE/apply?... 链接。</p>" +
+                        "</body>").toArray())
+                }
+                return
+            case _ => ()
         }
-        if (!isChinaSite(siteId)) {
-            res.status(200)
-            res.header("Content-Type", "text/html; charset=utf-8")
-            res.body(loginPageHtml(false, "只支持中国大陆站点账号（siteId=${siteId}）").toArray())
-            this.state.rejectReason = "非大陆站点账号（siteId=${siteId}）"
-            this.state.done.store(true)
-            return
+        if (verdict.reason != "") {
+            this.state.rejectReason = verdict.reason
         }
         this.state.code = gotCode
         this.state.tempToken = tempToken
@@ -286,6 +363,7 @@ public func agcLogin(timeoutSec: Int64, openBrowser: Bool): AgcLoginOutcome {
         return out
     }
     let url = oauthLoginUrl(port, expectCode)
+    state.loginUrl = url
     println("")
     println("──────────────────────────────────────────────")
     println("  灵渠 · 鸿蒙自动签名：请在浏览器完成一次登录")
@@ -320,8 +398,26 @@ public func agcLogin(timeoutSec: Int64, openBrowser: Bool): AgcLoginOutcome {
     } catch (e: Exception) {
         let _ = e
     }
-    if (state.rejectReason != "") {
-        out.error = state.rejectReason
+    // 回调证据落文件（AGENTS §4-14：要当证据的东西别只打日志）
+    if (state.rawQuery != "") {
+        try {
+            let dir = agcStateDir()
+            if (dir != "") {
+                Directory.create(Path(dir), recursive: true)
+                let line = "${nowStamp()} callback: ${state.rawQuery}\n"
+                let logPath = "${dir}/login-callback.log"
+                var prev = ""
+                if (exists(Path(logPath))) {
+                    prev = String.fromUtf8(File.readFrom(logPath))
+                }
+                File.writeTo(logPath, (prev + line).toArray())
+            }
+        } catch (e: Exception) {
+            let _ = e
+        }
+    }
+    if (state.tempToken == "") {
+        out.error = if (state.rejectReason != "") { state.rejectReason } else { "回调里没有 tempToken" }
         return out
     }
     if (!state.done.load()) {
