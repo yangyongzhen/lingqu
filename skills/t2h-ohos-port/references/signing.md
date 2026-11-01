@@ -1,26 +1,38 @@
 # 鸿蒙真机签名（HAP 直装）
 
 > 语料来源：2026-10-31 在**鸿蒙 PC `HAD-W32`**（HarmonyOS 7.0.0.111 SP12C00E100R13P5 / API 26）
-> 上的端到端实测，含 DevEco 6.1.1.300 + hvigor 6.24.4 + hdc 3.2.0d。每条结论都能在本机复现。
-> **结论先讲**：真机直装**不需要打开 DevEco、也不需要重新登录华为账号**——只要机器上还留着
-> 当年自动签名生成的素材，并且那份 profile 的 `device-ids` 里有这台设备的 UDID。
+> 上的端到端实测，含 DevEco 6.1.1.300 + hvigor 6.24.4 + hdc 3.2.0d。
+> **2026-11-02 追加**：在鸿蒙 PC `3QC0124B20000048` 上把**路径 C 全自动化**跑通了
+> （`m3u8dl-tauri` → `signed=true` + `install bundle successfully`），本篇据此更正了两处旧结论。
+> 每个结论都能在本机复现；完整复盘见 `docs/自动签名实战复盘.md`。
+>
+> **结论先讲**：真机直装**不需要打开 DevEco、也不需要每次登录华为账号**——
+> ① 机器上还留着当年自动签名素材时，直接复用（路径 B，连账号都省）；
+> ② 没有素材 / 换了包名 / 换了设备时，用 `t2h:sign --auto` 让**云侧现签**（路径 C，一次授权即可）。
 
-## 1. 三条路，先看清差别
+## 1. 四条路，先看清差别
 
 | 路径 | 能不能装到 **HarmonyOS**（华为发行版）真机 | 要不要账号 | 要不要 IDE |
 |---|---|---|---|
 | A. SDK 自带的 **OpenHarmony 默认材料**（`toolchains/lib/OpenHarmony.p12`） | ❌ 实测被拒（见 §2） | 不要 | 不要 |
 | **B. 复用 `~/.ohos/config` 里自动签名的 debug 材料** | ✅ 实测 `install bundle successfully` | **不要** | **不要** |
-| C. flutter 那套自动化（OAuth 登录 + AGC 建证书/注册设备） | ✅ | 要（一次性授权） | 不要 |
+| **C. 本项目 `t2h:sign --auto`（OAuth 登录 + AGC 建证书/注册设备/签 profile）** | ✅ **实测 `signed=true` + 装机成功（2026-11-02）** | 要（**一次性**授权，令牌留本机） | **不要** |
+| D. DevEco 里手点「Automatically generate signature」 | ✅ | 要 | 要 |
 
 - 路径 A 失败原因：**HarmonyOS 设备只信任华为签发的证书链**；OpenHarmony 默认材料是自签的，直装报
   `9568322 not trusted app source`。所以"SDK 里有 p12 就能签"是错觉。
-- 路径 C 的做法（[flutter_flutter e2793de](https://gitcode.com/oh-flutter/flutter_flutter/commit/e2793de97e8744b5f675da52d72e7076420bca3c)）：
+- 路径 C 的做法（参照 [flutter_flutter e2793de](https://gitcode.com/oh-flutter/flutter_flutter/commit/e2793de97e8744b5f675da52d72e7076420bca3c)）：
   `material: DevEco-identical file naming + hap-sign-tool P12/CSR`、`auth: OAuth loopback login`、
   `cloud/device/profile: AGC APIs + hdc 设备注册`、`keymanager: DevEco DecipherUtil-compatible 口令加密`，
   在 `assembleHap` 前把 `signingConfigs` 写进 `build-profile.json5`。
-  **它省掉的是 IDE，不是账号**——适合"干净机器 + 有账号"的流水线。
-- 路径 B 是本项目推荐的：**连账号都省**，适用于"这台机器以前用 DevEco 自动签名装过应用"的情况。
+- 路径 B 与 C 的选择：**有材料可用就 B（最省），否则 C**。`t2h:sign --path <工程>`（离线体检）
+  会告诉你当前属于哪种。
+
+> ⚠️ **更正旧结论**：本文件早期写过"口令是 AesGcmKit 密文，**我们造不出来，只能搬**"。
+> 2026-11-02 已否掉——纯仓颉实现 AES-128-GCM + AesGcmKit 的 workKey 推导后，
+> **我们自己造的密文 hvigor 解得开**（把 habit-tree 的密文整段替换成我们造的 → `Finished :default@SignHap`
+> + `BUILD SUCCESSFUL`）。配方见 `docs/自动签名实战复盘.md` §2.4。
+> 所以路径 C 不必依赖"别处现成的密文"。
 
 ## 2. 路径 A 为什么不行（实测原文，别再试）
 
@@ -79,9 +91,40 @@ D:\oh\DevEcoStudio\sdk\default\openharmony\toolchains\hdc.exe shell bm get --udi
 > 连下面"把 signingConfigs 抄回工程"这一步也自动化了：**apply 模式**（点 ⑤ 屏「写回签名配置」，
 > 或置 `LINGQU_SIGN_APPLY=1`）会找一个**用同一套材料**的 donor 工程（`LINGQU_SIGN_DONOR=<已有工程>`，
 > 否则扫 `~/DevEcoStudioProjects`、`~/Documents`、`~/Desktop`），把它的 `signingConfigs` 原样搬进
-> `build-profile.json5`——**含 DevEco 加密口令**（那是 AesGcmKit 密文，我们造不出来，只能搬），
-> 改前自动备份 `.lingqu/sign/<工程>.build-profile.json5.bak`，写完立刻重判。机制细节（为什么口令只能搬）
-> 见 `docs/鸿蒙自动签名机制.md` §3.7。
+> `build-profile.json5`——含口令密文，改前自动备份 `.lingqu/sign/<工程>.build-profile.json5.bak`，
+> 写完立刻重判。机制细节见 `docs/鸿蒙自动签名机制.md` §3.7。
+> （apply 模式仍是"搬"；要**自己造**密文就给 p12 一份自己掌的口令，见 §3.4 与复盘 §2.4。）
+
+## 3.4 路径 C：`t2h:sign --auto`（没有可用材料时）
+
+```bash
+lingqu-cli sign --tool-check                  # 先确认 java / hap-sign-tool.jar / hdc 都在
+lingqu-cli sign --login                       # 唯一的人工介入：浏览器点一次授权
+lingqu-cli sign --path <工程>                  # 离线体检：本机材料能不能装这台设备
+lingqu-cli sign --auto --path <工程>           # 复用本机材料，跑完整的 AGC 链
+lingqu-cli sign --auto --newKeys --path <工程> # 材料来路不明/口令丢了时用（旧材料改名留底）
+lingqu-cli hap    --path <工程>                # 期望 signed=true
+lingqu-cli deploy --path <工程> --start        # 期望 installed=true / started=true
+```
+
+它做的十件事（每件失败都会指到步骤号）：
+
+```text
+① 令牌（~/.lingqu/agc/，AES-128-GCM 落盘）→ ② 团队 → ③ 设备（已注册跳过）
+④ 材料命名（DevEco 同名规则）= 本地 p12/CSR（hap-sign-tool，随机口令不进日志）
+⑤ 证书（**按有效期**挑可用；没有就新建；配额满则删自己的过期件腾位）
+⑥ 按**工程自己的 bundleName** 申请 debug profile（deviceList 放**云端设备 id**）
+⑦ 用 ~/.ohos/config/material 的 workKey 加密口令 → 写回 build-profile.json5（先 .bak）
+```
+
+**四条硬判据**（错在这儿会报很远的错误）：
+
+1. 证书可用性看 `expireTime`/`status`，**不看名字**（同名旧证书可能早过期）。
+2. profile 的 `device-ids` 必须含本机 UDID，`bundle-name` 必须等于工程 `AppScope/app.json5` 的 `bundleName`。
+3. 换密钥对后**不能**复用云端同名证书（它绑旧公钥）→ 删旧建新 + 重下本地 `.cer`。
+4. 密文能不能沿用，判据是 `sign --reencrypt` 能不能解开；`GCM tag mismatch` = 必须换材料。
+
+完整复盘（六个坎的现象/根因/处置）见 `docs/自动签名实战复盘.md` §3。
 
 ### 3.3 配方（全程命令行，6 步）
 
@@ -130,18 +173,47 @@ $env:OHOS_HOME="$deveco\sdk\default\openharmony"
 | 码 | 含义 | 处置 |
 |---|---|---|
 | **9568322** | `signature verification failed due to not trusted app source`——装的不是设备信任的证书，或 profile 没有本机 UDID | 换**绑定本机 UDID 的 debug profile**（§3）；release/上架 profile 直装必失败 |
+| **9568332** | `install sign info inconsistent`——同包名已装过**另一套签名**的版本（换材料后必然如此） | `bm uninstall -n <bundle>` 后重装（`t2h:deploy` 会自动做一次） |
 | **9568269** | `install file path invalid`——hdc 发文件保留了源目录结构 | 先 `cd` 到 HAP 所在目录再 `file send` 文件名；或直接 `hdc install -r <绝对路径>` |
-| **10106102** | `aa start` 被拒：设备在锁屏 | 解锁后重试；自动化流程要留等待点 |
+| **10106102** | `aa start` 被拒：设备在锁屏（开发者模式禁止自动解锁） | 解锁后重试；自动化流程要留等待点。**与 ability/bundle 名无关**，别去改名字 |
+
+hvigor 侧（`assembleHap` 失败时）：
+
+| 码 | 含义 | 处置 |
+|---|---|---|
+| **00303074** | `bundleName in app.json5 … does not match the bundleName in the generated SigningConfigs` | profile 是按包名签发的 → 给**这个**包名签一份（`sign --auto`） |
+| **00303242** | `Signature material verification failed, as: Unsupported state or unable to authenticate data` | 口令密文解不开（`material/` 换了 / 口令丢了）→ `sign --auto --newKeys` |
+| **00303107** | `Invalid storeFile` | 材料文件缺失（路径错或文件被删） |
+
+AGC 侧（`ret.code`）：
+
+| 码 | 含义 | 处置 |
+|---|---|---|
+| **205389848** | `certList is invalid` | 证书已过期或类型不符 → 按有效期挑、给 debug profile 用 debug 证书 |
+| **205389872** | `certificate number exceeds limit` | 证书配额满（过期件占位）→ 删自己的过期件后重试 |
+| **205389858** | `UDID is repeat` | 该 UDID 已注册 → **视为已注册**，不是错误 |
+| **205389857** | 设备名重复 | 换一个 `deviceName`（带随机 nonce）重试 |
 
 ## 5. 什么时候**必须**要账号（别误判）
 
 - 机器上**没有**任何 `~/.ohos/config/*.p7b`（换机器、重装系统、清过用户目录）→ 路径 B 不可用；
 - 有材料但**profile 的 device-ids 里没有当前设备**（换了 / 新增了设备）→ 需要重新注册设备；
-- 这两种情况才需要：DevEco 里点一次「自动签名」（账号登录），或走路径 C 的 OAuth+AGC 流程。
+- 有材料但**profile 的 `bundle-name` 不是要装的包名**（新包名 / tauri 的 `com.atomgit.*` 一类）→
+  需要为这个包名现签一份；
+- 以上三种情况 → 走**路径 C**（`t2h:sign --auto`，一次授权即可，之后不需要再登录），
+  或 DevEco 里点一次「自动签名」。
 
 > 实测反例（值得记住）：某台机器重装 DevEco 6.1.1 后一度以为"debug 签名材料丢了"，
 > 实际是**材料还在 `~/.ohos/config`、只是工程的 `build-profile.json5` 被重置成空 `signingConfigs`**。
 > 先把配置抄回去再判断，不要先怀疑材料。
+
+## 5.1 三条"看着成功其实没用"的假象
+
+1. `hvigor assembleHap` 在 `signingConfigs` 为空时**也会产出 `entry-default-signed.hap`**
+   （用 SDK 自带的 OpenHarmony 材料）——有 signed 文件 ≠ 能装。
+2. `cert/list` 里有同名证书 ≠ 能用（可能已过期）；`provision add` 返回 200 ≠ 成功
+   （要看 `ret.code == 0`）。
+3. `hdc install` 退出码 0 ≠ 装上了（只能按输出文本判）。
 
 ## 6. 验证纪律（别只看"命令成功"）
 
