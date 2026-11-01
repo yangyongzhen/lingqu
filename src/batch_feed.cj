@@ -27,7 +27,15 @@ import stdx.encoding.json.*
  * 这是漏网的第二处（AGENTS §4-75）。工程路径为空时 `resolveLqPath` 自动落回相对路径，老行为不丢。
  */
 public func readSampleLq(projPath: String, rel: String): Option<JsonValue> {
-    return readJsonOrNone(resolveLqPath(projPath, rel))
+    let p = projPath.trimAscii()
+    // 工程目录**根本不存在**（改名/删掉/路径敲错）时，不要落回 `.lingqu/<rel>`：
+    // 那会把本仓里同名工程的旧档**冒名**算到这个样本头上（§4-96 的核心教训——
+    // 矩阵读错档时显示的是"别人的成绩"）。路径存在但还没 `.lingqu` 时仍允许兜底，
+    // 兼容 0.38.0 之前留在仓库根下的老落档。
+    if (p.size > 0 && !exists(Path(hostPath(p)))) {
+        return None
+    }
+    return readJsonOrNone(resolveLqPath(p, rel))
 }
 
 /** 落档相对路径（步骤 + 工程名 → `.lingqu` 下的相对路径），单测钉住名字拼法 */

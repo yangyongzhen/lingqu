@@ -5263,6 +5263,8 @@ withBridge(function(tauri){
                 totalHuman: 0, a4Pass: false, a1Pass: false, summary: '',
                 passed: 0, source: '',
                 rows: [], paths: {}, error: '' };
+  // samples 是我们在 runBatch 里自动拼的（当前工程 + 最近工程），还是用户手填的
+  var BATCH_INPUT_AUTO = { used: 0 };
 
   function batchVerdictClass(v){
     if (v === '达标') { return 'v-ok'; }
@@ -5290,8 +5292,12 @@ withBridge(function(tauri){
     // "迁移成功"= 判定列的「达标」（单样本可用率 ≥80%）。这是验收线 A4 的同一把尺子。
     var passed = BATCH.rows.filter(function(x){ return String(x.verdict || '') === '达标'; }).length;
     BATCH.passed = passed;
-    var srcLabel = ({ explicit: '手填的样本', workspace: '工作区里发现的工程',
-                      remembered: '上次填过的样本', 'cwd-lingqu': '当前目录落档里的工程' })[BATCH.source] || '';
+    // 后端只知道"你给了 samples"，不知道是手填的还是我们自动拼的 —— 这里按实际来源改口，
+    // 免得把"当前工程 + 最近用过的工程"说成"手填的样本"。
+    var srcLabel = ({ explicit: (BATCH_INPUT_AUTO.used ? '当前工程 + 最近用过的工程' : '手填的样本'),
+                      workspace: '工作区里发现的工程',
+                      remembered: '上次填过的样本',
+                      'cwd-lingqu': '当前目录落档里的工程' })[BATCH.source] || '';
     var sum = $('batchSum');
     if (BATCH.error) {
       sum.style.color = 'var(--err)';
@@ -5357,7 +5363,21 @@ withBridge(function(tauri){
     $('batchSum').textContent = '按样本落档生成矩阵…';
     var arg = {};
     var raw = ($('batchSamples') && $('batchSamples').value ? $('batchSamples').value : '').trim();
-    if (raw) { arg.samples = raw; }
+    if (raw) {
+      arg.samples = raw;
+      BATCH_INPUT_AUTO.used = 0;
+    } else {
+      // 没手填就用「**我用过的工程**」（当前工程 + 最近工程，localStorage 里就有）：
+      // 这是最贴近用户心里的"我迁过哪些"的一份清单，也省得先配环境变量。
+      var list = [];
+      var cur = String((typeof PROJECT !== 'undefined' && PROJECT.path) || '');
+      if (cur) { list.push(cur); }
+      projectRecent().forEach(function(x){ if (list.indexOf(x) < 0) { list.push(x); } });
+      if (list.length) {
+        arg.samples = list.join('|');
+        BATCH_INPUT_AUTO.used = 1;
+      }
+    }
     invoke('t2h:batch', arg).then(function(r){
       renderBatch(r || {});
     }).catch(function(e){
@@ -5912,6 +5932,8 @@ withBridge(function(tauri){
     // 再回投 batchSamples/batchPassed/batchSource/batchSumText —— 证明"迁移成功的项目"进屏即见。
     // 注意：要让这里出真数据，启动应用时得给 LINGQU_SAMPLES_ROOT（或 LINGQU_WORKSPACES）指向样本父目录。
     if (mode === 'batch') {
+      // 先设一个当前工程（会被记进"最近工程"），让矩阵走「我用过的工程」这条路
+      setTimeout(function(){ setCurrentProject('E:/test/rust/m3u8dl-tauri'); }, 900);
       setTimeout(function(){ switchScreen('report'); }, 1200);
       setTimeout(function(){ reportUi('batch-auto'); }, 4500);
       return;
