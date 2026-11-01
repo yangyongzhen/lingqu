@@ -5,6 +5,51 @@
 
 ---
 
+## [0.39.35] - 2026-11-02
+
+**主题**：查清 `ws_read_failed · Invalid utf8 byte sequence` —— **大帧被 WS 分片、cjh 不拼续帧**。
+
+### 现象（用户实测）
+
+> 读取 WebSocket 帧失败（多半是单帧超过实现上限）：IllegalArgumentException: Invalid utf8 byte sequence.
+> code=ws_read_failed
+
+### 排查（两步就定位了）
+
+1. **对照实验（node 直连 cjh `/ws`）**：1KB / 4KB / 8KB / 12KB / 32KB / 100KB 的**单帧**中文全部被正常接收，
+   只有 300KB 收到显式的 `frame_too_large`（符合 cjh 256KB 上限）。
+   ⇒ **不是 cjh 的读侧上限**，而是"我们发出去的那帧本身不完整"。
+2. **分档探针（本仓 `LINGQU_UI_PROBE=wssend`）**：一次运行内按 4KB / 16KB / 40KB / **81KB** 各发一条中文，
+   结果 `wsErrCodes=ws_read_failed:1` —— **只有最大那档失败**。
+
+### 根因
+
+- 客户端 `w.write(TextWebFrame, text.toArray())`（cj-tauri `plugin_ws.cj:241`），
+  stdx 的 WebSocket 在大负载时**自行分片**（后续帧是 `ContinuationWebFrame`）；
+- cjh 的 `ws_handler.cj` 只处理 `TextWebFrame`，**续帧落到 `case _ => ()` 被丢弃**；
+- cjh 拿到截断的 payload → `String.fromUtf8` 在建中间被切开的多字节字符上抛
+  `Invalid utf8 byte sequence` → 回 `ws_read_failed`，这一轮就这么断了。
+
+### 处置（本仓能做的）
+
+- `wsSend` 加**出站帧体检 + 60KB 守卫**：
+  - 出站前洗掉孤立代理项（`lone surrogate` 会编码成非法 UTF-8）；
+  - `chat` 正文超过 60KB → 截断并明确提示（`ui_report.wsTruncated` 计数），**不让整条消息变成 cjh 读不了的帧**；
+  - 回投 `wsSendCount / wsLastSendBytes / wsLastSendType / wsErrCodes / wsLastErrCode / wsTruncated`。
+- 新增探针 `LINGQU_UI_PROBE=wssend`（分档发大帧，直接把 cjh 的错误码抓回来）。
+- 上游：`docs/上游回馈-cjh.md` 新增第 9 条，给出「cjh 拼续帧」的具体改法（二十来行）与更优替代
+  （任务书落文件、只发路径）。
+
+### 实测
+
+| 探针发送 | 结果 |
+|---|---|
+| 4KB / 16KB / 40KB 中文 | 无错误帧 |
+| **81KB 中文** | cjh 回 `ws_read_failed`（`ui_report.wsErrCodes=ws_read_failed:1`） |
+| node 直连单帧 100KB | 正常；300KB → `frame_too_large` |
+
+**未做（如实标注）**：根治要 cjh 侧拼续帧（上游）；本仓只做了止血（60KB 守卫）+ 可定位（错误码回投）。
+
 ## [0.39.34] - 2026-11-02
 
 **主题**：修「**回合结束了却说 AI 在绕圈**」的假停滞 —— 活动量不能只看落档和轨迹，还要看**页面收到的帧**。

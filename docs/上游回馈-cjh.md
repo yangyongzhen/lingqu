@@ -280,6 +280,49 @@ cjh web --port 8765 --bind 127.0.0.1        # 用 launchHidden 起，确保 cjh 
 
 **当前状态**：仅记录（灵渠侧已做秒表 + 本机 issue 记录）；需要 cjh 侧加 `launchHidden` 才能根治。
 
+---
+
+## 9. 大帧被分片后，续帧（continuation frame）被丢弃 → `ws_read_failed: Invalid utf8 byte sequence`
+
+**现象**（灵渠 0.39.35 实测，用户报告）
+
+聊天区弹出：
+
+```
+读取 WebSocket 帧失败（多半是单帧超过实现上限）：IllegalArgumentException: Invalid utf8 byte sequence.
+code=ws_read_failed
+```
+
+**证据（灵渠侧分档探针 `LINGQU_UI_PROBE=wssend`）**
+
+一次运行里按 4KB / 16KB / 40KB / 81KB 各发一条中文 JSON，结果 `wsErrCodes = ws_read_failed:1`
+——**只有最大那档**失败。对照实验：用 node 直连 `/ws` 发 1KB~100KB **单帧**中文全部正常，
+300KB 才收到显式的 `frame_too_large`（符合 cjh 的 256KB 上限）。
+
+⇒ **不是 cjh 的读侧上限问题，而是"大负载被拆成多帧、续帧没人拼"**。
+
+**根因**
+
+- cj-tauri 的 WS 客户端是 `w.write(TextWebFrame, text.toArray())`（`src/plugins/ws/plugin_ws.cj:241`），
+  由 stdx 的 WebSocket 实现在大负载时自行**分片**（首帧 opcode=1、后续 opcode=0）；
+- cjh 的 `src/web/ws_handler.cj` 的 `messageLoop` 只处理 `TextWebFrame` / `Binary` / `Close` / `Ping` / `Pong`，
+  **`ContinuationWebFrame` 落到 `case _ => ()` 被丢弃**；
+- 于是 cjh 拿到的是**第一个分片**（被截断的 payload），`frameToText` 里
+  `String.fromUtf8(bytes)` 在截断处正好切断一个多字节 UTF-8 字符 → `IllegalArgumentException:
+  Invalid utf8 byte sequence` → 回 `ws_read_failed`。
+
+**建议（按代价）**
+
+1. **cjh 侧拼续帧**（正解，二十来行）：`TextWebFrame` 若 `!frame.fin` 则缓存 payload，
+   后续 `ContinuationWebFrame` 依次 append，直到 `fin` 再交给 `handleWsMessage`；
+   顺带把 `fin`/opcode 也记进日志，便于排障。
+2. 客户端侧：把超大文本改成"落文件 + 只发路径"（灵渠已在本仓先做**60KB 截断守卫**作为止血，
+   并在 `ui_report.wsTruncated` 计数；根治仍需第 1 条）。
+
+**灵渠侧的临时处置**（0.39.35）：`wsSend` 对 `chat` 正文做 60KB 上限守卫（截断 + 明确提示），
+并把出站帧体检回投 `ui_report`：`wsSendCount / wsLastSendBytes / wsLastSendType /
+wsErrCodes / wsLastErrCode / wsTruncated`，下次同类问题一句话就能定位。
+
 
 
 

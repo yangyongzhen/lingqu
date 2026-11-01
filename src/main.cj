@@ -1442,6 +1442,17 @@ public class UiReportCommand <: CommandHandler {
         // WS 发送可观测（0.37.0）：发送失败数 / 最后一次失败原因 / 收到的帧类型计数
         o.put("wsSendFail", JsonInt(argInt(args, "wsSendFail", 0)))
         o.put("wsLastSendErr", JsonString(argStr(args, "wsLastSendErr", "")))
+        // 出站帧体检（0.39.35）：为了定位 cjh 的 `ws_read_failed`（Invalid utf8 byte sequence）
+        o.put("wsSendCount", JsonInt(argInt(args, "wsSendCount", 0)))
+        o.put("wsLastSendBytes", JsonInt(argInt(args, "wsLastSendBytes", 0)))
+        o.put("wsLastSendType", JsonString(argStr(args, "wsLastSendType", "")))
+        o.put("wsLoneSurrogate", JsonInt(argInt(args, "wsLoneSurrogate", 0)))
+        o.put("wsLastSendSanitized", JsonBool(argBool(args, "wsLastSendSanitized", false)))
+        o.put("wsErrCodes", JsonString(argStr(args, "wsErrCodes", "")))
+        o.put("wsLastErrCode", JsonString(argStr(args, "wsLastErrCode", "")))
+        o.put("wsProbeSent", JsonInt(argInt(args, "wsProbeSent", 0)))
+        o.put("wsProbeLastHint", JsonInt(argInt(args, "wsProbeLastHint", 0)))
+        o.put("wsTruncated", JsonInt(argInt(args, "wsTruncated", 0)))
         o.put("wsFrameTypes", JsonString(argStr(args, "wsFrameTypes", "")))
         // 断线重连次数（0.39.5）：重连不设上限后，用它断言"页面真的在重连"
         o.put("wsReconnects", JsonInt(argInt(args, "wsReconnects", 0)))

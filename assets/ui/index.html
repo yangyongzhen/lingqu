@@ -3678,8 +3678,54 @@ withBridge(function(tauri){
   }
 
   /* ---------- 发帧 / 连接 ---------- */
+  /* ---------- WS 发送（0.39.35：先洗掉"非法 UTF-8 来源"，再记账）----------
+   * 现象（用户实测）：cjh 回 `ws_read_failed` + `IllegalArgumentException: Invalid utf8 byte sequence`。
+   * 探针结论（node 直连 /ws 发 1KB~100KB 中文单帧全部 OK，300KB 才回 frame_too_large）：
+   *   **cjh 的读侧没毛病，是我们发出去的这帧不是合法 UTF-8。**
+   * 最可能的来源：JS 字符串里的**孤立代理项**（lone surrogate）——比如把一段含 emoji 的文本
+   * 按 UTF-16 码元 slice 到一半（`str.slice(0, n)` 就会这么干），编码成 UTF-8 时就成了非法字节。
+   * 处置：发送前把孤立代理项洗掉（宁可少一个表情，也别把整条消息变成 cjh 读不了的帧），
+   * 并把「发出去多少字节 / 洗掉几次 / 最近一次发的是什么类型」回投 ui_report —— 下次能直接定位。
+   */
+  function sanitizeForWs(s){
+    var text = String(s == null ? '' : s);
+    var fixed = text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+                    .replace(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '$1');
+    var n = text.length - fixed.length;
+    if (n > 0) {
+      CJ.loneSurrogate = (CJ.loneSurrogate || 0) + n;
+      CJ.lastSendSanitized = true;
+    }
+    return fixed;
+  }
+
   function wsSend(obj) {
-    return invoke('ws:send', { text: JSON.stringify(obj) }).catch(function(e){
+    var payload = sanitizeForWs(JSON.stringify(obj));
+    // 单帧上限守卫（0.39.35 实测踩到）：
+    // 探针按 4KB/16KB/40KB/81KB 分档发中文消息，**只有最大那档**换来 cjh 的
+    // `ws_read_failed · Invalid utf8 byte sequence` —— 说明 stdx 的 WS write 在大负载上会
+    // **分片（continuation frame）**，而 cjh 只处理 TextWebFrame、不拼续帧 → 读到被截断的半帧
+    // （截在 UTF-8 字符中间就是"非法字节序列"）。这不是 cjh 的读侧上限（node 直连发 100KB 单帧没事）。
+    // 本仓的处置：超过 60KB 的 chat 正文**先截断并说清楚**（宁可少一段，也不要整条消息变成 cjh 读不了的帧）；
+    // 根治要么 cjh 侧拼续帧（已记 docs/上游回馈-cjh.md），要么把任务书改成"落文件 + 只发路径"。
+    var WS_CHAT_MAX = 60000;
+    if (obj && obj.type === 'chat' && typeof obj.message === 'string' &&
+        new TextEncoder().encode(payload).length > WS_CHAT_MAX) {
+      var msg = obj.message;
+      var head = msg.slice(0, Math.floor(msg.length * WS_CHAT_MAX / new TextEncoder().encode(payload).length));
+      obj = Object.assign({}, obj, { message: head + '\n\n…（正文过长，已在本机截断到 ' + WS_CHAT_MAX + ' 字节以内再发送；完整原文见「一键迁移」准备现场的落档）' });
+      payload = sanitizeForWs(JSON.stringify(obj));
+      CJ.wsTruncated = (CJ.wsTruncated || 0) + 1;
+      addError('消息过长（>' + WS_CHAT_MAX + ' 字节），已截断发送——过长帧会被 WS 分片，cjh 读不全', 'ws_send_truncated');
+    }
+    CJ.lastSendType = String((obj && obj.type) || '');
+    try { CJ.lastSendBytes = new TextEncoder().encode(payload).length; } catch (e) { CJ.lastSendBytes = payload.length; }
+    CJ.sendCount = (CJ.sendCount || 0) + 1;
+    if (CJ.lastSendBytes > 200000) {
+      // cjh 单帧上限 256KB（/api/capabilities 的 ws.max_frame_bytes）：留出余量提前示警
+      addError('发出的消息 ' + CJ.lastSendBytes + ' 字节，接近 cjh 单帧上限（256KB）——可能被拒', 'ws_send_big');
+    }
+    return invoke('ws:send', { text: payload }).catch(function(e){
       // 发送失败必须可观测：以前只 addError，ui_report 里只有 errorCount 一个数，
       // 分不清"没发出去"和"cjh 没回"（0.37.0 就是被这一点误导去加 REST 接口的）
       CJ.sendFail = (CJ.sendFail || 0) + 1;
@@ -3800,6 +3846,12 @@ withBridge(function(tauri){
     } else if (t === 'error') {
       finishTurn('');
       addError(cjhErrText(m), m.code);
+      // 错误帧留痕（0.39.35）：`ws_read_failed` 这类只在收到时才能判定成因，
+      // 不记下来就只能靠事后猜（本轮就是这么被卡住的）
+      CJ.errCodes = CJ.errCodes || {};
+      var ec = String(m.code || 'unknown');
+      CJ.errCodes[ec] = (CJ.errCodes[ec] || 0) + 1;
+      CJ.lastErrCode = ec;
     } else if (t === 'cancelled') {
       // was_running=false 是事实（那一帧到达时没有在跑的回合），不是错误
       finishTurn('已取消（was_running=' + (m.was_running ? 'true' : 'false') + '）');
@@ -5787,6 +5839,22 @@ withBridge(function(tauri){
       // WS 发送可观测（0.37.0 的教训：发送失败以前是静默的，会把"没发出去"误判成"cjh 没回"）
       wsSendFail: (typeof CJ.sendFail === 'number') ? CJ.sendFail : 0,
       wsLastSendErr: CJ.lastSendErr || '',
+      // 出站帧体检（0.39.35）：字节数 / 类型 / 洗掉过多少次孤立代理项（非法 UTF-8 的来源）
+      wsSendCount: (typeof CJ.sendCount === 'number') ? CJ.sendCount : 0,
+      wsLastSendBytes: (typeof CJ.lastSendBytes === 'number') ? CJ.lastSendBytes : 0,
+      wsLastSendType: String(CJ.lastSendType || ''),
+      wsLoneSurrogate: (typeof CJ.loneSurrogate === 'number') ? CJ.loneSurrogate : 0,
+      wsLastSendSanitized: CJ.lastSendSanitized === true,
+      // 收到过的错误帧按 code 计数（`ws_read_failed` / `frame_too_large` …）
+      wsErrCodes: (function(){
+        var m = CJ.errCodes || {}; var out = [];
+        Object.keys(m).forEach(function(k){ out.push(k + ':' + m[k]); });
+        return out.join(',');
+      })(),
+      wsLastErrCode: String(CJ.lastErrCode || ''),
+      wsProbeSent: (typeof CJ.probeSent === 'number') ? CJ.probeSent : 0,
+      wsProbeLastHint: (typeof CJ.probeLastHint === 'number') ? CJ.probeLastHint : 0,
+      wsTruncated: (typeof CJ.wsTruncated === 'number') ? CJ.wsTruncated : 0,
       // 收到过的帧类型计数（"cjh 到底回了什么"的唯一证据；history_messages 说明是会话类帧）
       wsReconnects: (typeof CJ.reconnects === 'number') ? CJ.reconnects : 0,
       // 工具执行心跳（0.39.32）：长命令期间"还在干活"的可断言位
@@ -6073,6 +6141,22 @@ withBridge(function(tauri){
       setTimeout(function(){ setCurrentProject('E:/test/rust/m3u8dl-tauri'); }, 900);
       setTimeout(function(){ switchScreen('report'); }, 1200);
       setTimeout(function(){ reportUi('batch-auto'); }, 4500);
+      return;
+    }
+    // 出站帧体检自检（LINGQU_UI_PROBE=wssend，0.39.35）：分档发大帧，看 cjh 在多大时开始
+    // 回 `ws_read_failed / Invalid utf8 byte sequence` —— 用来判定"是我们发错了"还是"分片了"。
+    if (mode === 'wssend') {
+      var sizes = [4096, 16384, 40960, 81920];
+      sizes.forEach(function(n, i){
+        setTimeout(function(){
+          // 中文填充：3 字节/字，按字符数给够，确保是**同一个合法字符串**被切开时才出问题
+          var pad = '汉'.repeat(Math.ceil(n / 3));
+          wsSend({ type: 'probe_size', bytesHint: n, pad: pad });
+          CJ.probeSent = (CJ.probeSent || 0) + 1;
+          CJ.probeLastHint = n;
+        }, 1200 + i * 1500);
+      });
+      setTimeout(function(){ reportUi('ws-send-probe'); }, 1200 + sizes.length * 1500 + 1500);
       return;
     }
     // 断线恢复自检（LINGQU_UI_PROBE=history，0.39.33）：喂一帧真实形状的 history_messages，
