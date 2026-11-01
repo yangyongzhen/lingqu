@@ -5,6 +5,31 @@
 
 ---
 
+## [0.39.31] - 2026-11-02
+
+**主题**：迁完之后「**用 DevEco Studio 打开哪个目录**」界面上直接给出来。
+
+### 现象（用户提问）
+
+> 「我要打开移植成功后的 DevEco Studio 的工程，它在哪呢？」
+
+答案是 `<Tauri 工程>/src-tauri/gen/ohos`，但**界面上一个字都没提** —— 后端 `t2h:hap` 早就回投了
+`ohosDir`，前端从来没显示（用户只能去翻文档或猜路径约定）。
+
+### 处置
+
+- ⑤ 构建打包 屏的 HAP 卡片下新增一行：
+  **「鸿蒙工程（DevEco Studio →「打开」选这个目录）：<ohosDir> [复制路径]」**，
+  数据来自 `t2h:hap` 的 `ohosDir` 回投（不是前端拼的）—— hvigor 真跑过才显示。
+- `ui_report` 新增 `hapOhosDir`（§4-60 两处一起加）。
+- 新增探针模式 **`LINGQU_UI_PROBE=ohos`**：切到 ⑤ 屏 → 真跑一次 `t2h:hap` → 回投 `hapOhosDir`。
+
+### 实测（`LINGQU_UI_PROBE=ohos`，m3u8dl-tauri 真跑装配）
+
+`ui_report` 的 `hap-done` 一行：
+`hapBuilt=true / hapSigned=true / hapBytes=8257155 / hapRawfile=0 / hapArm64=true /
+hapGate=pass / hapOhosDir=E:/test/rust/m3u8dl-tauri/src-tauri/gen/ohos / errorCount=0`。
+
 ## [0.39.30] - 2026-11-02
 
 **主题**：0.39.29 上线后自己复查发现的两个"成绩冒名"问题 —— 都在同一栏（5 样本矩阵）上。

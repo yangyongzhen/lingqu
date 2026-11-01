@@ -900,6 +900,7 @@ body.ai-hidden .ai-show{display:block}
             <span>HAP 闸：<b id="hapGate">—</b></span>
           </div>
           <div class="sethint" id="hapNote">装配前会先补 `ohpm install --all`；未配签名配置时产出的是 debug/unsigned HAP（真机安装见 T5-5）。</div>
+          <div class="sethint" id="hapOhosDirNote" style="margin-top:4px"></div>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="signCard">
           <div class="legend" style="margin:0 0 6px">
@@ -4736,6 +4737,24 @@ withBridge(function(tauri){
       note.style.color = 'var(--err)';
       note.textContent = r.error ? String(r.error).split('\n')[0] : '尚未装配。';
     }
+    // 「迁完之后想用 DevEco Studio 打开工程」是高频问题（0.39.31 用户实测问到）：
+    // 鸿蒙工程根 = `<Tauri 工程>/src-tauri/gen/ohos`，后端在 hap 结果里回投 ohosDir，
+    // 这里直接显示出来并提供复制 —— 不让用户去猜路径约定。
+    var od = String(r.ohosDir || '');
+    var odNote = $('hapOhosDirNote');
+    if (odNote) {
+      if (od) {
+        odNote.innerHTML = '鸿蒙工程（DevEco Studio →「打开」选这个目录）：'
+          + '<span class="mono">' + escHtml(od) + '</span> '
+          + '<button class="btn sm" id="btnCopyOhos">复制路径</button>';
+        var cb = $('btnCopyOhos');
+        if (cb) { cb.onclick = function(){ copyText(od); }; }
+        odNote.title = od;
+      } else {
+        odNote.textContent = '';
+      }
+    }
+    window.__hapOhosDir = od;
   }
   function runHap(path){
     var note = $('hapNote');
@@ -5882,6 +5901,8 @@ withBridge(function(tauri){
       batchSource: String(BATCH.source || ''),
       // 「已迁移成功 N / M 个」那整行文本：这就是用户问"移植成功的项目在哪"时要看到的话
       batchSumText: (function(){ var n = document.getElementById('batchSum'); return n ? String(n.textContent || '') : ''; })(),
+      // 鸿蒙工程根（DevEco 打开的目录）：hap 结果里回投，界面上直接显示 + 可复制（0.39.31）
+      hapOhosDir: String(window.__hapOhosDir || ''),
       batchA4: BATCH.a4Pass === true,
       batchA1: BATCH.a1Pass === true,
       batchHtml: (BATCH.paths && BATCH.paths.html) ? BATCH.paths.html : '',
@@ -5936,6 +5957,14 @@ withBridge(function(tauri){
       setTimeout(function(){ setCurrentProject('E:/test/rust/m3u8dl-tauri'); }, 900);
       setTimeout(function(){ switchScreen('report'); }, 1200);
       setTimeout(function(){ reportUi('batch-auto'); }, 4500);
+      return;
+    }
+    // 鸿蒙工程根自检（LINGQU_UI_PROBE=ohos，0.39.31）：真跑一次 hap（hvigor 增量），
+    // 再回投 hapOhosDir —— 证明"迁完之后 DevEco 该打开哪个目录"界面上看得到。
+    if (mode === 'ohos') {
+      setTimeout(function(){ setCurrentProject('E:/test/rust/m3u8dl-tauri'); switchScreen('build'); }, 900);
+      setTimeout(function(){ runHap('E:/test/rust/m3u8dl-tauri'); }, 1500);
+      setTimeout(function(){ reportUi('hap-ohos'); }, 150000);
       return;
     }
     // 顶栏版面自检（LINGQU_UI_PROBE=layout，0.39.26）：三种"最容易把 48px 顶栏挤花"的状态各上报一次

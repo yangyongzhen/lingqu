@@ -1616,6 +1616,8 @@ public class UiReportCommand <: CommandHandler {
         o.put("batchPassed", JsonInt(argInt(args, "batchPassed", 0)))
         o.put("batchSource", JsonString(argStr(args, "batchSource", "")))
         o.put("batchSumText", JsonString(argStr(args, "batchSumText", "")))
+        // 鸿蒙工程根（`<工程>/src-tauri/gen/ohos`）——DevEco Studio 打开的就是这个目录
+        o.put("hapOhosDir", JsonString(argStr(args, "hapOhosDir", "")))
         o.put("batchA4", JsonBool(argBool(args, "batchA4", false)))
         o.put("batchA1", JsonBool(argBool(args, "batchA1", false)))
         o.put("batchHtml", JsonString(argStr(args, "batchHtml", "")))
