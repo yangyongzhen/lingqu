@@ -95,11 +95,10 @@ class LoginCallbackHandler <: HttpRequestHandler {
         let port = this.state.port
         let okHost = h == "127.0.0.1:${port}" || h == "localhost:${port}"
         if (!okHost) {
+            // 只回 400，**不终止等待**：可能只是某个杂请求/旧链接打进来
             res.status(400)
             res.header("Connection", "close")
             res.body("Bad Host".toArray())
-            this.state.rejectReason = "回调 Host 不是本机回环：${host}"
-            this.state.done.store(true)
             return
         }
         var query = ""
@@ -129,10 +128,10 @@ class LoginCallbackHandler <: HttpRequestHandler {
             case None => ()
         }
         if (gotCode != this.expectCode) {
+            // 同上：旧链接/伪造回调不该把整个登录会话废掉（实测踩到——上一轮贴的链接失效后
+            // 用户仍点它，code 对不上，于是整次登录被判失败）
             res.status(400)
             res.body("Bad code".toArray())
-            this.state.rejectReason = "回调 code 与本机生成的不一致（可能是伪造的回调）"
-            this.state.done.store(true)
             return
         }
         if (quit) {

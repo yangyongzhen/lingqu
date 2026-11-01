@@ -5,6 +5,39 @@
 
 ---
 
+## [0.39.15] - 2026-11-02
+
+**主题**：AGC 云侧动作（设备 / 证书 / profile / 安全下载）落地——登录之后的整条链已经写完，
+只等一次真实授权即可连跑。
+
+### Added
+
+- `src/compiler/sign_cloud.cj`
+  - **纯函数**（全部单测）：`parseDeviceList` / `deviceRegistered`（UDID 大小写不敏感）/
+    `parseCertList` / `findCertByName`（命名是确定性的，所以"要不要新建"= 一次名字精确匹配）/
+    `deviceTypeOf`（`liteWearable` 必须先于 `wearable` 判，否则子串会吃掉前者）/
+    `buildDeviceAddBody` / `buildCertAddBody` / `buildProvisionBody`（`deviceList` 只在 debug 带、
+    空 ACL 不带该键）/ `parseProvisionAdd` / **`isSafeDownloadUrl`**（SSRF 护栏）/
+    `upperAscii` `lowerAscii` `digitsOnlyValue`
+  - **动作层**：`agcDeviceList`（分页 start=1 起、每页 100）/ `agcEnsureDevice`（已注册就跳过，
+    名字重复自动换 nonce 重试一次）/ `agcCertList` / `agcCertAdd` /
+    `agcDownloadObject`（`objects/url/reapply` 换临时链 → **先校验 sha256 再落盘**）/
+    `agcProvisionDebug`（申请 → 下载 `.p7b` → **下载完立即删云端 profile**，与 flutter 一致）
+- 8 例新单测（`src/tests/sign_cloud_test.cj`），合计 **318 例**。
+
+### Fixed（单测当场抓到的两个真缺陷）
+
+1. **SSRF 护栏漏判 IPv6 字面量**：按第一个 `:` 切 host 时，`https://[::1]/a` 会被切成 `[`，
+   于是"本机回环"没被拦住。改成：带方括号的 IPv6 整段取到 `]`；其余含 `:` 的 host 一律拒（不猜）。
+2. **一次错 code 的回调会废掉整次登录**（`sign_login.cj`）：Host 不合规 / code 不匹配以前都会
+   `done.store(true)` 终止会话——实测代价是：上一轮贴给用户的登录链接在会话重启后 code 变了，
+   用户仍点旧链接 → 整次登录被判失败。现在这两种情况**只回 400 并继续等**（只有 `quit` 才终止）。
+
+### 说明（仍未验证）
+
+真实账号授权**还没完成**：本轮结束时重新起了一次登录（新的 code），等人点击。
+因此 jwtToken 校验之后的团队/设备/证书/profile 申请、以及 m3u8dl-tauri 的 `signed=true` 尚未发生。
+另：`hap-sign-tool` 的 keypair/CSR 生成（全新材料的路径）也还没接。
 ## [0.39.14] - 2026-11-02
 
 **主题**：路线 A 的**登录环节**落地——OAuth loopback（本机回调 + 防伪 code + Host 白名单）→
