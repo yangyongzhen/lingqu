@@ -96,8 +96,17 @@ body{background:var(--bg);color:var(--fg);
   font-family:inherit;font-size:13px;line-height:1;padding:5px 8px;border-radius:8px}
 .iconbtn:hover{color:var(--fg);background:var(--panel2)}
 
-.body{display:grid;grid-template-columns:240px 1fr 372px;min-height:0;transition:none;flex:1 1 auto}
+/* 版面三列：左栏 240 固定 / 内容自适应 / 右栏 AI 助手（宽度由 --ai-w 决定，可拖动，0.39.39）。
+   中间那 6px 是拖条（#aiResizer）。参考 cjnote（cj-tauri/examples/cjnote）的 --ai-w 方案：
+   宽度写进 CSS 变量、夹取下限/上限、双击复位、窗口变窄时按新空间重夹。 */
+.body{display:grid;grid-template-columns:240px 1fr 6px var(--ai-w, 372px);min-height:0;transition:none;flex:1 1 auto}
 body.ai-hidden .body{grid-template-columns:240px 1fr}
+body.resizing,body.resizing *{cursor:col-resize!important;user-select:none}
+/* ============ 左右拖条 ============ */
+#aiResizer{grid-column:3;cursor:col-resize;background:transparent;position:relative;z-index:3}
+#aiResizer::before{content:'';position:absolute;left:2px;top:0;bottom:0;width:2px;background:var(--line)}
+#aiResizer:hover::before,#aiResizer.dragging::before{background:var(--acc);width:3px;left:1.5px}
+body.ai-hidden #aiResizer{display:none}
 
 /* ============ 左栏：流程 ============ */
 .rail{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
@@ -1071,6 +1080,9 @@ body.ai-hidden .ai-show{display:block}
       </section>
 
     </main>
+
+    <!-- 拖动调整 AI 面板宽度（0.39.39，移植自 cjnote）：拖条夹在内容区与右栏之间 -->
+    <div id="aiResizer" title="拖动调整聊天窗宽度（双击恢复默认 372px）"></div>
 
     <!-- ==================== 右栏：AI 助手 ==================== -->
     <aside class="dock" id="dock">
@@ -2437,6 +2449,83 @@ document.querySelectorAll('.seg').forEach(function(seg){
     });
   });
 });
+
+/* ---------- AI 面板宽度可拖动（0.39.39，移植自 cjnote 的 --ai-w 方案）----------
+ * 用户要求：「让聊天窗口可拖动调整宽度」，并指定 cjnote（cj-tauri/examples/cjnote）已实现、
+ * 可作为参考。那里面的三条关键经验直接照搬：
+ *   ① 宽度写进 CSS 变量 `--ai-w`，不直接改元素 style（媒体查询/折叠态才好配合）；
+ *   ② 夹取要**跟窗口走**：`min(上限, 窗口宽 − 左栏 − 两条拖条 − 内容区保底)`，
+ *      否则窄窗口上"拖到最大"会把中间内容挤成 0，那不是用户想要的最宽；
+ *   ③ 窗口 resize 后按新空间重夹一次，但**折叠态要跳过**（display:none 量出来是 0，
+ *      会把用户存的宽度冲成下限 —— cjnote 踩过，这里也照它规避）。
+ * 与 cjnote 的差异：偏好存 `localStorage`（本仓没有 store:set 插件，避免为一次界面偏好
+ * 新增命令三处联动），键名 `lingqu.aiw`。
+ */
+var AI_W_KEY = 'lingqu.aiw';
+var AI_MIN = 260, AI_MAX = 960, AI_DEFAULT = 372, WORK_MIN = 320, RAIL_W = 240;
+// 生效宽度放这里（**不要塞进 CJ**：CJ 在脚本更靠后才初始化，这里执行时它还是 undefined）
+var AIW_STATE = { w: AI_DEFAULT, drag: 0 };
+
+function aiPanelVisible() { return !document.body.classList.contains('ai-hidden'); }
+function availableAiW() {
+  var rail = document.querySelector('.rail');
+  var railW = rail ? rail.getBoundingClientRect().width : RAIL_W;
+  // 两条 6px 拖条里只有一条在本版存在；留 12 是把未来的左栏拖条位置一起扣掉
+  return Math.max(AI_MIN, window.innerWidth - railW - 12 - WORK_MIN);
+}
+function clampAiW(w) {
+  var max = Math.min(AI_MAX, availableAiW());
+  return Math.max(AI_MIN, Math.min(max, Math.round(Number(w) || AI_DEFAULT)));
+}
+function applyAiW(w) {
+  var px = clampAiW(w);
+  document.documentElement.style.setProperty('--ai-w', px + 'px');
+  AIW_STATE.w = px;
+  return px;
+}
+function persistAiW() {
+  try { localStorage.setItem(AI_W_KEY, String(Math.round(document.getElementById('dock').getBoundingClientRect().width))); } catch (e) { /* 无 localStorage 时只是不记忆 */ }
+}
+function initAiResizer() {
+  var rz = document.getElementById('aiResizer');
+  if (!rz) { return; }
+  rz.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = document.getElementById('dock').getBoundingClientRect().width;
+    rz.classList.add('dragging');
+    document.body.classList.add('resizing');
+    function onMove(ev) {
+      // 拖条在右栏左缘：往左拖 = 变宽，所以增量取负
+      applyAiW(startW - (ev.clientX - startX));
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      rz.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      AIW_STATE.drag = (AIW_STATE.drag || 0) + 1;
+      persistAiW();
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+  rz.addEventListener('dblclick', function () {
+    applyAiW(AI_DEFAULT);
+    try { localStorage.setItem(AI_W_KEY, String(AI_DEFAULT)); } catch (e) { /* 同上 */ }
+  });
+  window.addEventListener('resize', function () {
+    if (!aiPanelVisible()) { return; }   // 折叠态别量（会得 0，把存的值冲掉）
+    applyAiW(document.getElementById('dock').getBoundingClientRect().width);
+  });
+}
+function loadAiW() {
+  var w = AI_DEFAULT;
+  try { var v = localStorage.getItem(AI_W_KEY); if (v) { var n = parseInt(v, 10); if (!isNaN(n)) { w = n; } } } catch (e) { /* 用默认值 */ }
+  applyAiW(w);
+}
+loadAiW();
+initAiResizer();
 
 /* ---------- AI 面板折叠（三条入口同一函数，状态只存内存） ---------- */
 function aiHidden(){ return document.body.classList.contains('ai-hidden'); }
@@ -5932,6 +6021,15 @@ withBridge(function(tauri){
         var d = document.getElementById('dock');
         return d ? Math.round(d.getBoundingClientRect().width) : 0;
       })(),
+      // 聊天窗宽度可拖动（0.39.39）：aiW=生效宽度（CSS 变量 --ai-w），
+      // aiResizerOk=拖条真的在（cursor 是 col-resize 才算可拖），aiDrags=拖过的次数
+      aiW: AIW_STATE.w,
+      aiResizerOk: (function(){
+        var r = document.getElementById('aiResizer');
+        if (!r) { return false; }
+        try { return getComputedStyle(r).cursor === 'col-resize'; } catch (e) { return false; }
+      })(),
+      aiDrags: AIW_STATE.drag || 0,
       aiBubbleW: (function(){
         var b = document.querySelector('#aiChat .msg .bubble');
         return b ? Math.round(b.getBoundingClientRect().width) : 0;
@@ -6364,6 +6462,29 @@ withBridge(function(tauri){
         ] });
       }, 1200);
       setTimeout(function(){ reportUi('history-restored'); }, 2600);
+      return;
+    }
+    // 聊天窗宽度拖动自检（LINGQU_UI_PROBE=resize，0.39.39）：
+    // 真的派发 mousedown/mousemove/mouseup（跟人手拖一样走同一条代码路径），分四次回投：
+    //   resize-baseline（默认宽）→ resize-dragged（往左拖 160px 变宽）→
+    //   resize-clamped（拖到远超上限，必须停在夹取上限内）→ resize-reset（双击回默认）。
+    // 判据看 aiDockW / aiW / aiResizerOk；`aiDockW` 必须真的变、且不越夹取范围。
+    if (mode === 'resize') {
+      var rzEl = document.getElementById('aiResizer');
+      function rzX() { var r = rzEl.getBoundingClientRect(); return r.left + r.width / 2; }
+      function dragTo(dx) {
+        var x0 = rzX();
+        rzEl.dispatchEvent(new MouseEvent('mousedown', { clientX: x0, bubbles: true }));
+        window.dispatchEvent(new MouseEvent('mousemove', { clientX: x0 + dx, bubbles: true }));
+        window.dispatchEvent(new MouseEvent('mouseup', { clientX: x0 + dx, bubbles: true }));
+      }
+      setTimeout(function(){ reportUi('resize-baseline'); }, 1200);
+      setTimeout(function(){ dragTo(-160); reportUi('resize-dragged'); }, 1800);
+      setTimeout(function(){ dragTo(4000); reportUi('resize-clamped'); }, 2400);
+      setTimeout(function(){
+        rzEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        reportUi('resize-reset');
+      }, 3000);
       return;
     }
     // 连接横跳自检（LINGQU_UI_PROBE=flap，0.39.38）：断 WS 的判据是**纯函数** `wsKeepDecision`，

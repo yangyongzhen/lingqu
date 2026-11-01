@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.38**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.39**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -252,6 +252,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 96 | 「5 样本矩阵」把**迁完的工程显示成未跑**（m3u8dl-tauri 可用率 100% 却写「未跑 / 25%」），用户也就找不到"移植成功的项目在哪看" | 两条叠在一起：① `batch_feed.cj` 的 7 处读档**全是相对当前工作目录**的 `.lingqu/...`（§4-75 那族的第三处漏网，改 `report_feed` 时没 grep 全）；② 自动发现样本时**只捡工程名、不带路径**，天然定位不到样本自己的落档。处置：读档统一走 `readSampleLq(projPath, sampleLqRel(步骤, 名))`（内部 `resolveLqPath`），发现改成扫候选根（`LINGQU_SAMPLES_ROOT` / `LINGQU_WORKSPACES` / `~/lingqu-workspaces`）里**带 `.lingqu` 的目录**并带回路径。**判据：凡"多工程并排"的功能，每一行都必须能说出自己的工程路径**（现在 `title` 就挂着）——说不出来就一定会读错档 |
 | 101 | 接续旧会话时服务商回 400：`The reasoning_content in the thinking mode must be passed back to the API` | **思考模式的模型要求把上一轮 assistant 的 `reasoning_content` 原样回传**，而 cjh 的 `ChatMessage` 只有 role/content/toolCalls、`SessionStore` 也只存 role/content/name/tool_call_id —— **reasoning 从来没落库**。所以：新会话一定正常，**接续旧会话（resume / 重启后恢复）必然 400**。判据：报错文案里出现 `reasoning_content`；`服务商返回错误：` 这句出自 **cjh 自带网页 UI**（`static_assets.cj:1116`），不是灵渠的文案（看到它就说明当时在浏览器里开着 `127.0.0.1:8765`）。本仓处置：**识别到该 400 自动 `new_session`**（界面历史仍保留），别让人被隐性规则卡死；根治要 cjh 侧 `ChatMessage` 加 reasoning + 落盘 + 回传（`docs/上游回馈-cjh.md` 第 10 条，0.39.36 实测） |
 | 103 | 页脚在「WS 已连接 · 帧 26 · s…」↔「未连接」之间**反复横跳**，用户问"连接存在 bug？" | **一次状态误判不允许掐连接**：`renderStatus` 原先是"`t2h:cjh_status` 回非 running 就 `wsClose()`"，而引擎忙于 SSE 流时 `/api/health` 会超过 3s 超时 → 判成 `missing` → 关连接 → 800ms 后又连上。证据：0.39.37 探针日志里同一窗口出现 `cjhState:"running"` → `"missing"` → `"running"`，而 `wsState` 一直是 `connected`、工具帧正常在收。判据收成纯函数 `wsKeepDecision(running, streak, busy)`：**判掉 1 次只算疑似（grace）、连续 2 次且不在干活才 close**；有工具在跑/有回合气泡一律不断。配套三件事：① 页脚写清 `连接中…（第 N 次）` / `新会话（旧会话 s… 已弃用）`（自愈弃用会话后帧号后面不会空着）；② `noteWsEvent()` 记最近 8 条「谁动了连接」（`conn(#N)`/`closed(帧N)`/`close(status-miss2)`）回投 `ui_report.wsEventText` —— 下次问"为什么断了"不用猜；③ `LINGQU_UI_PROBE=flap` 表驱动断言 4 条判据（`flapFail` 为空才算过）。**排查提示**：若 cjh 日志里每 5 秒一条 `Agent.interrupt` 而你没点停止，先看有没有浏览器标签开着 cjh 自带网页 UI（`127.0.0.1:8765`）——它的断开/重连会触发 cjh 的取消策略（0.39.38 实测） |
+| 104 | 「聊天窗宽度不可拖动」——需要照 `cjnote` 的做法加拖条 | 参考 `cj-tauri/examples/cjnote/ui/index.html` 的 `#ai-resizer` + `--ai-w`，**三条要点全部照抄**：① 宽度写 **CSS 变量**（`--ai-w`），不直接改元素 `style`——折叠态/媒体查询才配合得上；② 夹取**跟窗口走**：`min(上限, 窗口宽 − 左栏 − 拖条 − 内容区保底)`，否则窄窗口「拖到最大」会把中间内容挤成 0；③ `resize` 后按新空间重夹，但**折叠态必须跳过**——`display:none` 量出来是 0，会把用户存的宽度冲成下限（cjnote 踩过）。本仓落成四列 grid `240px 1fr 6px var(--ai-w,372px)` + `#aiResizer`（`col-resize`、双击复位、`localStorage['lingqu.aiw']`，本仓没 `store:set` 就别为一次界面偏好去加命令三处联动）。断言用 `ui_report` 的 `aiDockW/aiW/aiResizerOk/aiDrags` + `LINGQU_UI_PROBE=resize`（派发真实 mousedown/mousemove/mouseup）：实测 372 → 532（左拖 160）→ 260（越过下限被夹）→ 372（双击复位），`1fr` 内容列同步缩放。**另一个坑**：这段初始化代码执行得比 `var CJ = {…}` 早，别在里面写 `CJ.xxx = …`（`CJ` 那时还是 `undefined`，运行期直接 TypeError）——用独立的 `AIW_STATE`（0.39.39 实测） |
 ---
 
 ## 5. 文档与提交

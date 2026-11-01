@@ -5,6 +5,55 @@
 
 ---
 
+## [0.39.39] - 2026-11-02
+
+**主题**：聊天窗宽度**可拖动**（左右拖条 + 双击复位 + 记住宽度），参考本仓上游示例 cjnote。
+
+### 需求
+
+> 让聊天窗口可拖动调整宽度，这个调整宽度功能，在 cjnote 这个项目里是已实现的，可作为参考。
+
+参考实现：`cj-tauri/examples/cjnote` 的 `#ai-resizer` + `--ai-w` 方案
+（`ui/index.html:127-132`、`2003-2064`）。三条经验直接照搬：
+
+1. **宽度写进 CSS 变量 `--ai-w`**，不直接改元素 `style` —— 折叠态/媒体查询才好配合；
+2. **夹取要跟窗口走**：`min(上限, 窗口宽 − 左栏 − 拖条 − 内容区保底)`，
+   否则窄窗口"拖到最大"会把中间内容挤成 0，那不是用户想要的最宽；
+3. **`resize` 后按新空间重夹一次**，但**折叠态必须跳过**（`display:none` 量出来是 0，
+   会把用户存的宽度冲成下限 —— cjnote 踩过，这里同样规避）。
+
+### 处置（本仓）
+
+- 版面 `.body` 从三列 `240px 1fr 372px` 改成四列
+  `240px 1fr 6px var(--ai-w, 372px)`，中间的 6px 拖条 = `#aiResizer`
+  （`cursor:col-resize`，hover/拖动时高亮成一根 3px 竖线）。
+- 拖条在**右栏左缘**：往左拖变宽（增量取负），夹取 `260 ~ min(960, 窗口可用)`；
+  **双击复位** 372px；拖动结束写 `localStorage['lingqu.aiw']`，启动时读回。
+  与 cjnote 的差异：偏好存 `localStorage`（本仓没有 `store:set` 插件，
+  不为一次界面偏好去加命令三处联动）。
+- `body.ai-hidden` 时拖条与面板一起隐藏（`#aiResizer{display:none}`）。
+- `ui_report` 新增 `aiW`（生效宽度）/ `aiResizerOk`（拖条真的可拖）/ `aiDrags`（拖过几次），
+  白名单两处同时加；原有的 `aiDockW` 继续当"真的变宽了"的判据。
+- 新增探针 `LINGQU_UI_PROBE=resize`：派发真实的 `mousedown/mousemove/mouseup`（走人手同一条代码路径）。
+
+### 证据（`LINGQU_UI_PROBE=resize` 实跑）
+
+| tag | aiDockW | aiW | resizerOk | drags | gridColumns |
+|---|---|---|---|---|---|
+| `resize-baseline` | 372 | 372 | true | 0 | `240px 646px 6px 372px` |
+| `resize-dragged`（左拖 160） | **532** | 532 | true | 1 | `240px 486px 6px 532px` |
+| `resize-clamped`（右拖 4000） | **260** | 260 | true | 2 | `240px 758px 6px 260px` |
+| `resize-reset`（双击） | **372** | 372 | true | 2 | `240px 646px 6px 372px` |
+
+即：能变宽、到下限会停住（不越界）、双击回默认；同时 `1fr` 的内容列跟着缩放，版面没有破。
+
+### 未验证
+
+- 只在 1264×801 视口上验过；更窄窗口（<900px）下 260px 下限 + 内容区 320px 保底
+  是否会挤到横向滚动，没有实测。
+- 鸿蒙（ArkWeb）侧未验证：`getComputedStyle(cursor)`、`MouseEvent` 派发在 ArkWeb 上的行为
+  与 WebView2 可能不同，真机需复跑 `LINGQU_UI_PROBE=resize`。
+
 ## [0.39.38] - 2026-11-02
 
 **主题**：「WS 已连接 ↔ 未连接」不再反复横跳 —— 一次状态误判不足以掐掉连接，且断开原因留痕。

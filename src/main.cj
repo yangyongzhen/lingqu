@@ -1374,9 +1374,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("sessionRetired", JsonString(argStr(args, "sessionRetired", "")))
         // 连接横跳判据的页内自检（0.39.38）：flapCases=断言条数，flapFail=失败明细（空=全过）
         o.put("flapCases", JsonInt(argInt(args, "flapCases", 0)))
-        o.put("flapFail", JsonString(argStr(args, "flapFail", "")))
-        // WS 状态流水（0.39.38）：最近 8 条「谁动了连接」（conn / closed / close(原因)）
+        o.put("flapFail", JsonString(argStr(args, "flapFail", "")))        // WS 状态流水（0.39.38）：最近 8 条「谁动了连接」（conn / closed / close(原因)）
         o.put("wsEventText", JsonString(argStr(args, "wsEventText", "")))
+        // 聊天窗宽度可拖动（0.39.39）：aiW=生效宽度、aiResizerOk=拖条可用、aiDrags=拖过几次
+        o.put("aiW", JsonInt(argInt(args, "aiW", 0)))
+        o.put("aiResizerOk", JsonBool(argBool(args, "aiResizerOk", false)))
+        o.put("aiDrags", JsonInt(argInt(args, "aiDrags", 0)))
         o.put("approvals", JsonInt(argInt(args, "approvals", 0)))
         o.put("lastFrameType", JsonString(argStr(args, "lastFrameType", "")))
         o.put("replyPreview", JsonString(argStr(args, "replyPreview", "")))
