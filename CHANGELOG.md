@@ -5,6 +5,61 @@
 
 ---
 
+## [0.39.44] - 2026-11-02
+
+**主题**：启动就带回上次的工程，左栏徽标立刻刷出来——不用每次开窗重新选一遍。
+
+### 现象/反馈（用户）
+
+> 加一条「启动时自动带回上次工程、并立刻刷徽标」
+
+### 根因（两层）
+
+1. **表层**：`initProjectBar` 只读 `localStorage['lingqu.proj']` 这一条键，键一空窗口就是
+   「⚠ 未选工程」、左栏六项全「未开始」（`railFail=no-path`），每次开窗都得重新选一遍。
+2. **真根因（本轮的意外发现）**：**本应用的页面里 localStorage 根本不能用**——
+   探针 `LINGQU_UI_PROBE=store` 实测 `storeProbe = before||SecurityError|about://`：
+   页面 origin 是 `about://`（不透明源），`localStorage.setItem` 直接抛 `SecurityError`。
+   也就是说"记住工程 / 记住聊天窗宽度 / 记住偏好开关"这些**从来没生效过**，只是被
+   `try{}catch{}` 吞掉了（AGENTS §4-111）。所以"记住上次工程"只能换一条通道。
+
+### 处置
+
+- **改走落档通道**（`localStorage` 那条留着做兜底，实机上恒为空）：
+  后端新增纯函数 `lastProjectOf(jsonText)` + `lastProjectFromReport()`，读上一次
+  `t2h:ui_report` 落的 `.lingqu/ui-report.json`（里面本来就有 `currentProject`），
+  由 `t2h:env` 的 `lastProject` 回投给页面；页面在 `loadEnv` 里发现自己没工程时
+  `setCurrentProject(lastProject)`，并立刻刷左栏徽标。
+- 前端保留纯函数 `pickRestoreProject(saved, recent)`：`saved` → `recent[0]` → 空
+  （第三档**不造默认值**，AGENTS §4-94）；输入容错 `undefined` / `null` / 非数组 / 全空白。
+- 回投 `ui_report`：`projRestored`（`saved` / `recent` / `backend` / `none`）、
+  `projRestorePath`、`restoreFail`、`storeProbe`；白名单同步加在 `src/main.cj`（§4-60）。
+- 新增两个探针：`LINGQU_UI_PROBE=restore`（表驱动断言纯函数 6 种输入 + 种一次工程供下次启动验真）、
+  `LINGQU_UI_PROBE=store`（写 localStorage → 刷新 → 读回，用 `stage|val|err|origin` 判定能否持久化）。
+- 新增单测 `src/tests/ui_state_test.cj`（5 例）：正常路径 / 反斜杠路径 / 缺键 / 类型不符 /
+  空文本与坏 JSON 不抛异常。
+
+### 证据
+
+- `LINGQU_UI_PROBE=store` → `storeProbe = before||SecurityError|about://`
+  （**localStorage 被拒**，这也解释了为什么之前"记住"的功能全都不灵）。
+- `LINGQU_UI_PROBE=restore` → `restoreFail = ''`（6 种输入全对）。
+- 真实冷启动（同一 WebView2 配置目录，重启两次）：
+  `projRestored=backend`、`projRestorePath=C:/Users/yang/Desktop/test/m3u8dl-tauri`、
+  `currentProject=` 同上、`railBadges=profile=已完成 … build=已完成 3/3 verify=已完成 2/2`、
+  `railFail=''`、`errorCount=0`、`wsState=connected`。
+- `cjpm test` TOTAL=348 FAILED:0。
+
+### 未验证 / 已知边界
+
+- 「上次的工程已被删除/移走」没有存在性校验（界面没有廉价的存在性探针）；
+  这种情形顶栏仍显示那个路径、徽标回落「未开始」，不会假装有数据。
+- 落档在 `.lingqu/ui-report.json`，所以"记住"的范围跟着**工作目录**走：换了 CWD 启动
+  （不同启动方式）就带不回来——与 ui-report 本身的落点一致，不算新问题。
+- **聊天窗宽度（`lingqu.aiw`）与偏好开关仍在用 localStorage，因此重启后不记忆**（同一个根因）。
+  这条没在本轮改：它们要么也走后端落档，要么等 cj-tauri 暴露"可持久化的偏好"能力。
+
+
 ## [0.39.43] - 2026-11-02
 
 **主题**：左栏徽标的口径从「通过」改成「已完成」——它表示"这一步检查跑过没有"，不是"合不合格"。

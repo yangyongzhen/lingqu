@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.43**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.44**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -46,10 +46,8 @@
 - 以"安全"为名，把**本该由 agent 动手**的操作锁成只能人点——注意区分：
   `cliRunAllowed` 限制的是「**界面代它执行**」，**不是**限制 agent 通过 bash 自己干。
 
-**依赖关系（这条决定优先级）**：这条方向能不能落地，取决于 **cjh 的能力**。
-0.37.0 实测的堵点是「cjh 只有 `/ws`、没有 REST 对话入口」——非 WebView 调用方（后端 / CLI / CI）
-驱动不了 agent 循环，见 `docs/上游回馈-cjh.md` 缺口 #2。**修它优先于再写任何界面**：
-器官不通，界面再漂亮也只是让人多戳几下。
+**依赖关系（这条决定优先级）**：这条方向能不能落地，取决于 **cjh 的能力**——
+器官不通，界面再漂亮也只是让人多戳几下（缺口清单见 `docs/上游回馈-cjh.md`）。
 
 - 主路径：`t2h:autoport_*`（准备现场 → 交任务书 → 盯落档 → 停滞/预算时叫人）
 - 兜底与工具：`t2h:migrate`（确定性流程，无 AI 也能跑，同时是 agent 的一只手）
@@ -149,8 +147,8 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 
 ## 4. 已踩坑清单（禁止重踩）
 
-> 逐条对应关系：签名那块（§4-74、§4-82~87）的**完整复盘**（现象→根因→排查→处置、协议细节、
-> 可复跑手册、复用清单）在 **`docs/自动签名实战复盘.md`**，遇到签名问题先读它再翻本表。
+> 签名那块（§4-74、§4-82~87）的**完整复盘**（现象→根因→排查→处置、复跑手册）在
+> **`docs/自动签名实战复盘.md`**，遇到签名问题先读它再翻本表。
 
 | # | 坑 | 正确做法 |
 |---|---|---|
@@ -255,9 +253,10 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 104 | 聊天窗宽度不可拖动 | 照 `cj-tauri/examples/cjnote` 的 `#ai-resizer` + `--ai-w`：① 宽度写 **CSS 变量**不写行内 style；② 夹取**跟窗口走**（`min(上限, 窗口宽 − 左栏 − 拖条 − 内容区保底)`）；③ `resize` 重夹但**折叠态跳过**（`display:none` 量出 0 会把宽度冲成下限）。本仓：四列 grid + `#aiResizer`（`col-resize`、双击复位、`localStorage` 键 `lingqu.aiw`）；断言 `aiDockW/aiW/aiResizerOk/aiDrags` + `LINGQU_UI_PROBE=resize`（0.39.39） |
 | 105 | 写「进度 100%　未连接真机」，可应用已在真机上跑起来 | **一次性快照不许当"现在"报**：`migrateHasDevice()` 只在迁移开始查一次。判据双口径：`hasDevice`（起始时，决定是否跳过 deploy/verify）+ `deviceInRecord/deviceSerial`（`deployDeviceOf()` 读 `.lingqu/deploy/<工程>.json`）。文案三档标来源：`真机已连接` / `真机已连接（部署记录 3QC…）` / `未连接真机（无部署记录）`。取证先看落档（`deploy.deviceCount`、`verify.ratePercent`）与 `hdc list targets -v`，别只信界面（0.39.40） |
 | 106 | DOS 黑窗一闪一闪（问过三次） | 本应用是 **GUI 子系统**：进程没有 console ⇒ `executeWithOutput`（hdc/cargo/hvigor/git/java/curl）每调一次 Windows 就给子进程**新配一个控制台窗口**；cjh（DETACHED）亦然。**单点修法**：`src/win_console.cj` 的 `ensureHiddenConsole()`（`AllocConsole` + `ShowWindow(SW_HIDE)`，FFI 要包 `unsafe`）让本进程持一个**看不见的** console，子进程继承；cjh 有隐藏控制台时改 `std.process.launch` 继承拉起（回落 `launchHidden`），句柄用 `CjhHandle` 收口。**断言**：`ui_report.consoleHidden=true` + spawn 一批子进程后 `conhost` 只 +1（不是每个子进程一个）；自拉起验证用 `LINGQU_CJH_PORT=8766`，别动用户的 8765（0.39.40） |
-| 107 | 页面某段代码"什么都不做、也不报错"（左栏徽标永远是空的） | **同一个 `<script>` 里可能是两个作用域**：业务代码在内层 IIFE（`invoke`/`CJ`/`projectPathValue`），文件末尾那段（`setCurrentProject`/左栏代码）在**外层**。外层引用内层符号抛 `ReferenceError`，**只落 `window.onerror`，调用方与 promise 都看不到**。处置：外层只"读 DOM + 画"，取数据走内层注册的桥（`window.__railBridge`）；任何"静默不生效"的界面逻辑，第一动作是**把 `window.__uiErrors` 回投 `ui_report`**；另：**改完 `index.html` 必须重建 `targets/desktop`**（只 `cjpm build` 业务包不够）（0.39.41） |
+| 107 | 页面某段代码"什么都不做、也不报错"（左栏徽标永远是空的） | **同一个 `<script>` 里可能是两个作用域**：业务代码在内层 IIFE（`invoke`/`CJ`/`projectPathValue`），文件末尾那段（`setCurrentProject`/左栏代码）在**外层**。外层引用内层符号抛 `ReferenceError`，**只落 `window.onerror`，调用方与 promise 都看不到**。处置：外层只"读 DOM + 画"，取数据走内层注册的桥（`window.__railBridge`）；任何"静默不生效"的界面逻辑，第一动作是**把 `window.__uiErrors` 回投 `ui_report`**；**改完 `index.html` 必须重建 `targets/desktop`**（只 `cjpm build` 业务包不够）。**第二条**：`localStorage` 在本应用里被拒（origin `about://` → `setItem` 抛 `SecurityError`，被 try/catch 吞了）⇒「记住工程/宽度/偏好」从来没生效过；要真记住只能走落档通道（见 §4-110），判据 `LINGQU_UI_PROBE=store`（0.39.44） |
 | 108 | 「AI 引擎缺失」，可浏览器打得开 8765；追问"状态轮询为啥偶发超时" | 实测：`/api/health` 空载 8~15ms、16 路并发 p90 9ms、8 路压重接口时 max 15ms —— **端点不慢**；慢在**我们自己**：`cjhHealthy()` 每次 `ClientBuilder().build()`→请求→`close()`，**每 2 秒换一条 TCP**；30 次探活后 8765 上留 **30 个 TIME_WAIT**（keep-alive 单连接新增 **0**），叠加 cjh 侧不回收 `CLOSE_WAIT`（上游第 11 条）⇒ 偶发建连 >3s 就判"引擎不在"。处置：① 探活**复用一条 keep-alive 客户端**（出错才重建）；② 判死要有证据：单次→重试 3 次→**20 秒宽容窗口**报 `running+unstable`；③ 界面用 `CJ.up` 兜底，**通道连着就不说缺失**。证据：修后轮询 50 秒 `TIME_WAIT=0`（0.39.42） |
 | 109 | 左栏徽标写「通过」被指不合适（"它只表示检查做没做，不涉及合不合格"） | **状态词要分清层次**：左栏徽标表示**"这一步检查跑过没有"** ⇒ 用 `已完成 / 部分完成 / 有失败 / 未开始`；"合不合格"属于判定，放在 `title` 与落档 note 里（`已完成（判定失败）（拿不到设备 UDID…）`）。**但失败不能藏**——`ok=false` 必须显式报「有失败 N/M」，否则是另一种瞒报。`.done` 勾只认「已完成」。顺带一条实测：**落档会过期**（签名体检记录停在"设备没连"的时刻，设备接上后要重跑那一步才刷新）（0.39.43） |
+| 110 | 每次开窗都要重新选工程（左栏六项全「未开始」） | **"存下来的工程"必须真的用上，而且"存哪儿"要有证据**：`localStorage` 在本应用被拒（§4-107）⇒ 改读落档——`t2h:env.lastProject` 来自上一次 `t2h:ui_report` 的 `currentProject`，页面据此 `setCurrentProject` 并立刻刷徽标；`pickRestoreProject` 只兜底。断言 `projRestored=backend` + 探针 `restore`/`store`（0.39.44） |
 ---
 
 ## 5. 文档与提交
@@ -318,8 +317,7 @@ python scripts/search_docs.py --query "HashMap add" --domain std --max-results 1
 python scripts/search_docs.py --query "string 切片" --domain language --view leaves
 ```
 
-> 本项目已靠它避开三个坑：`quote` 是关键字、`HashMap` 用 `add` 不是 `put`、只有零参 `trimAscii()`
-> （§4 第 20–22 条）。**这三条都是「按别的语言的习惯写」写出来的错，查一下就不会犯。**
+> 靠它避开过 `quote` 是关键字 / `HashMap` 用 `add` / 只有零参 `trimAscii()`（§4 第 20–22 条）——都是"按别的语言猜"猜出来的错。
 
 上游框架仓（**只记远程地址，不记本机路径**——换环境时 clone 到任意目录并 `export CJ_TAURI_ROOT=<它>`
 即可，`cjpm.toml` 里写的就是 `${CJ_TAURI_ROOT}`（0.13.1 起）；改这些仓之前先看它们自己的 AGENTS.md）：
@@ -329,18 +327,15 @@ python scripts/search_docs.py --query "string 切片" --domain language --view l
 | cj-tauri | **https://atomgit.com/qq8864/cj-tauri** | 外壳/UI 框架；`examples/ai-chat` 是 cjh 托管的参照实现 |
 | cjh | **https://atomgit.com/qq8864/cjh** | 内嵌 AI 引擎；WS 协议见 `src/web/protocol.cj`；集成指南见本仓 `docs/集成cjh.md` |
 
-**上游回馈纪律**：使用 cj-tauri / cjh 过程中发现**能力不满足、行为异常或有新坑**时，
-不要只在本地绕过——到对应仓**提 issue**（现象 → 根因 → 复现/证据 → 建议），有通用修法的
-进一步提 PR（方法见 `cj-tauri-contribute` skill）。这是框架自进化的通道，也是课题"工具
-开源"验收的生态贡献证据。
+**上游回馈纪律**：用 cj-tauri / cjh 时发现**能力不满足、行为异常或有新坑**，别只在本地绕过——
+到对应仓**提 issue**（现象 → 根因 → 复现/证据 → 建议），有通用修法的提 PR（见 `cj-tauri-contribute` skill）。
+这也是课题"工具开源"验收的生态贡献证据。
 
-**移植阻塞的 fork 先行策略**：移植过程中发现 **tauri / openharmony-ability 的能力不满足**
-（缺 API、行为缺陷、真机专属问题）时，**不要等上游修复**——直接在
-https://github.com/yangyongzhen/tauri 或 https://github.com/yangyongzhen/openharmony-ability
-下**建分支先解决**（`fix/<工程>-<问题>` 命名，commit 注明动机），用 patch rev 钉住继续推进移植；
-**后续再把分支内容整理成 PR 贡献回上游**。等上游 = 移植流水线停摆，fork 先行 = 不阻塞交付，
-两边不矛盾（记录来源：cc-switch 官方 feat/open-harmony 分支与 habit-tree 的 ability
-feat/0.3.0 patch 都是这条路的实证）。
+**移植阻塞的 fork 先行策略**：tauri / openharmony-ability 的能力不满足（缺 API、行为缺陷、
+真机专属问题）时**不要等上游**——在 https://github.com/yangyongzhen/tauri 或
+https://github.com/yangyongzhen/openharmony-ability 下建分支先解决（`fix/<工程>-<问题>`，
+commit 注明动机），用 patch rev 钉住继续推进，之后再整理成 PR 回上游。等上游 = 流水线停摆。
+（实证：cc-switch 的 feat/open-harmony 分支、habit-tree 的 ability feat/0.3.0 patch）
 
 鸿蒙侧工具与技能生态（P4/P5 构建·部署链与 skill 沉淀的直接相关方；gitcode 页面有反爬，
 **访问不到时按 atomgit 同路径域名试**）：
@@ -350,11 +345,5 @@ feat/0.3.0 patch 都是这条路的实证）。
 | **deveco-cli** | **https://atomgit.com/openharmony-sig/deveco-cli**（= gitcode.com/openharmony-sig/deveco-cli） | 集成 HarmonyOS 应用开发工具集（知识文档 + 精品 Skills，多智能体）。命令 `devecocli`：`devecocli build` 打 HAP、`devecocli run --device <serial>` 构建+安装+启动——habit-tree 真机部署链（P5）实际用它替代裸 hvigorw/hdc 序列 |
 | **harmonyos-agent-skills** | **https://atomgit.com/HarmonyOS_Skills/harmonyos-agent-skills**（= gitcode 同名仓，MIT） | 官方 HarmonyOS 应用开发 skills 集合——与本项目 `skills/t2h-ohos-port`（Tauri→鸿蒙移植 skill）同生态；新 skill 沉淀时参考其组织形态，成熟后可回馈 |
 
-拿到新环境后的一次性动作（路径不需要记，`setup.sh` 会问/给默认值）：
-
-```bash
-git clone https://atomgit.com/qq8864/cj-tauri.git
-git clone https://atomgit.com/qq8864/cjh.git
-CJ_TAURI_ROOT=<你 clone 的 cj-tauri 目录> ./scripts/setup.sh   # 环境体检（只校验，不改任何文件）
-```
+换环境后：clone 上面两个仓，再 `CJ_TAURI_ROOT=<cj-tauri 目录> ./scripts/setup.sh`（只体检、不改文件）。
 

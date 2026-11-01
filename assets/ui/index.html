@@ -2588,6 +2588,16 @@ withBridge(function(tauri){
   function loadEnv(){
     invoke('t2h:env').then(function(d){
       renderEnv(d);
+      // 启动带回上次工程（0.39.44）：**localStorage 在本应用里被 WebView2 拒**（实测 setItem 抛
+      // SecurityError，见 LINGQU_UI_PROBE=store），所以"记住的工程"只能由后端给——
+      // 它就是上一次 `t2h:ui_report` 落档里的 currentProject（`t2h:env` 的 lastProject）。
+      if (d && d.lastProject) {
+        var cur = (typeof PROJECT !== 'undefined') ? String(PROJECT.path || '') : '';
+        if (!cur) {
+          window.__projRestore = { path: String(d.lastProject), source: 'backend' };
+          setCurrentProject(String(d.lastProject));
+        }
+      }
       // 环境体检回包里带 uiProbe 标志：非空则自动跑一轮界面自检序列。
       // 这样「版面对不对、通道通不通」不再依赖肉眼看截图，CI / 无视觉能力场景也能验证。
       if (d && d.uiProbe) { window.__uiProbeMode = String(d.uiProbe); runUiProbe(); }
@@ -6231,6 +6241,14 @@ withBridge(function(tauri){
       historyIn: (typeof CJ.historyIn === 'number') ? CJ.historyIn : 0,
       historyShown: (typeof CJ.historyShown === 'number') ? CJ.historyShown : 0,
       currentProject: (typeof PROJECT !== 'undefined') ? String(PROJECT.path || '') : '',
+      // 启动带回上次工程（0.39.44）：saved＝记着的当前工程 / recent＝最近列表兜底 / none＝真没有
+      projRestored: (typeof window !== 'undefined' && window.__projRestore) ? String(window.__projRestore.source || '') : '',
+      projRestorePath: (typeof window !== 'undefined' && window.__projRestore) ? String(window.__projRestore.path || '') : '',
+      restoreFail: (typeof window !== 'undefined' && window.__restore) ? String(window.__restore.fail || '') : '',
+      // 存储自检（0.39.44）：before|after + 读回的值 + 抛错名，用来判定 localStorage 能否持久化
+      storeProbe: (typeof window !== 'undefined' && window.__store)
+        ? (String(window.__store.stage) + '|' + String(window.__store.val) + '|' + String(window.__store.err)
+           + '|' + String(window.__store.where || '')) : '',
       projectPromptCount: 1,
       pathFieldCount: (typeof PATH_FIELDS !== 'undefined') ? PATH_FIELDS.length : 0,
       stepPathOverride: (typeof PATH_OVERRIDE !== 'undefined') ? Object.keys(PATH_OVERRIDE).filter(function(k){ return String(PATH_OVERRIDE[k]||'').length > 0; }).join(',') : '',
@@ -6612,6 +6630,51 @@ withBridge(function(tauri){
       }, 13500);
       return;
     }
+    // 启动带回上次工程自检（LINGQU_UI_PROBE=restore，0.39.44）：判据是纯函数
+    // `pickRestoreProject(saved, recent)`，这里表驱动断言四种输入 + 两种垃圾输入，
+    // 断言完顺手把当前工程写一次 localStorage —— 好让**下一次正常启动**能证明
+    // `projRestored=saved` 这条真实路径（纯函数正确 ≠ 启动真的用上了它）。
+    if (mode === 'store') {
+      // 存储自检（0.39.44）：写一个键 → 刷新页面 → 读回。用来判定"本应用里 localStorage
+      // 到底能不能跨刷新持久化"（写两次启动都没生效，怀疑自定义 scheme 下不可用）。
+      // 判据：stage=after 且 val 非空 = 能持久化；err 非空 = 访问即抛；val 空 = 写不进去。
+      var after = (String(location.hash || '').indexOf('store-after') >= 0);
+      var sinfo = { stage: after ? 'after' : 'before', err: '', val: '',
+                    where: String(location.protocol || '') + '//' + String(location.host || '') };
+      try {
+        if (after) { sinfo.val = String(localStorage.getItem('lingqu.storeProbe') || ''); }
+        else { localStorage.setItem('lingqu.storeProbe', 'hello'); }
+      } catch (e) { sinfo.err = String((e && e.name) ? e.name : 'err'); }
+      window.__store = sinfo;
+      reportUi('store-probe');
+      if (!after) {
+        setTimeout(function(){ try { location.hash = 'store-after'; location.reload(); } catch (e) {} }, 600);
+      }
+      return;
+    }
+    if (mode === 'restore') {
+      var rcases = [
+        // [说明, saved, recent, 期望 path, 期望 source]
+        ['saved', 'E:/a/b', ['E:/a/c'], 'E:/a/b', 'saved'],
+        ['saved-trim', '  E:/a/b  ', [], 'E:/a/b', 'saved'],
+        ['recent', '', ['E:/a/c', 'E:/a/d'], 'E:/a/c', 'recent'],
+        ['recent-skip-blank', '   ', ['  ', 'E:/a/d'], 'E:/a/d', 'recent'],
+        ['none', '', [], '', 'none'],
+        ['none-garbage', null, null, '', 'none']
+      ];
+      var rfails = [];
+      rcases.forEach(function(c){
+        var got = pickRestoreProject(c[1], c[2]);
+        if (got.path !== c[3] || got.source !== c[4]) {
+          rfails.push(c[0] + '→' + got.source + ':' + got.path);
+        }
+      });
+      window.__restore = { cases: rcases.length, fail: rfails.join(' | ') };
+      reportUi('restore-cases');
+      // 写一次当前工程，供下一次启动验证 projRestored=saved
+      setTimeout(function(){ setCurrentProject('C:/Users/yang/Desktop/test/m3u8dl-tauri'); }, 1200);
+      return;
+    }
     // 连接横跳自检（LINGQU_UI_PROBE=flap，0.39.38）：断 WS 的判据是**纯函数** `wsKeepDecision`，
     // 这里直接对它做表驱动断言（不去驱动 DOM —— 直接调 renderStatus 会在"缺失"分支里改页面，
     // 探针要断的是判据本身）。判据四条：
@@ -6872,6 +6935,37 @@ function rememberProject(p){
   if (list.length > 8) { list = list.slice(0, 8); }
   try { localStorage.setItem(PROJECT.recentKey, JSON.stringify(list)); } catch (e) {}
   try { localStorage.setItem(PROJECT.key, p); } catch (e) {}
+}
+
+/** 只读取「上次记着的当前工程」，不做任何兜底（读不到就是空串）。 */
+function savedProject(){
+  try { return String(localStorage.getItem(PROJECT.key) || '').trim(); } catch (e) { return ''; }
+}
+
+/**
+ * 纯函数：启动时该把哪个工程带回来（0.39.44）。
+ *
+ * 起因（用户要求"启动时自动带回上次工程、并立刻刷徽标"）：`initProjectBar` 过去只读
+ * `lingqu.proj` 这一条键，键一空（换了 WebView2 配置目录、上次是探针起的、或从来没在这个
+ * 目录里选过工程）窗口就是「未选工程」，左栏六个徽标全「未开始」——每次开窗都得重新选一遍。
+ *
+ * 顺序：① 记着的当前工程（source='saved'）→ ② 最近列表里最新那条（source='recent'）
+ *      → ③ 都没有就返回空（source='none'）。
+ * **第三档不造默认值**（AGENTS §4-94：没有真实来源就空着，不许写死一个示例工程）。
+ * 输入容错：`undefined`/`null`/非数组/带空白的字符串一律当空处理，绝不抛异常。
+ */
+function pickRestoreProject(saved, recent){
+  var s = (saved === undefined || saved === null) ? '' : String(saved);
+  s = s.trim();
+  if (s.length > 0) { return { path: s, source: 'saved' }; }
+  if (Array.isArray(recent)) {
+    for (var i = 0; i < recent.length; i++) {
+      var one = (recent[i] === undefined || recent[i] === null) ? '' : String(recent[i]);
+      one = one.trim();
+      if (one.length > 0) { return { path: one, source: 'recent' }; }
+    }
+  }
+  return { path: '', source: 'none' };
 }
 
 function renderProjectNote(){
@@ -7176,7 +7270,13 @@ function openClonePanel(open){
 }
 
 (function initProjectBar(){
-  try { PROJECT.path = String(localStorage.getItem(PROJECT.key) || '').trim(); } catch (e) {}
+  // 启动即带回上次的工程（0.39.44）：昨天这里只读「当前工程」一条键，键一空窗口就是
+  // 「未选工程」、左栏六个徽标全「未开始」，用户每次开窗都得重新选。现在兜到「最近用过的
+  // 工程」，并在下面 refreshRailBadges() 里**立刻**刷一次徽标（不等 6 秒那一轮）。
+  var rest = pickRestoreProject(savedProject(), projectRecent());
+  PROJECT.path = rest.path;
+  if (rest.path && rest.source === 'recent') { rememberProject(rest.path); }  // 顺手把「当前工程」键补回去
+  window.__projRestore = rest;   // 回投 ui_report 的 projRestored / projRestorePath
   var top = $('projPath'), btnOpen = $('btnProjOpen'), btnRecent = $('btnProjRecent');
   var btnClone = $('btnProjClone'), btnGo = $('btnCloneGo'), btnCancel = $('btnCloneCancel');
   if (top) {

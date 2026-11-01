@@ -121,6 +121,42 @@ public class GitCloneCommand <: CommandHandler {
  * 把迁移所需的工具链一次性体检出来。
  * 判定口径：路径存在 = 就绪。版本号等「能跑起来才知道」的检查留给后续 t2h:doctor。
  */
+/**
+ * 纯函数：从 `t2h:ui_report` 落的 JSON 文本里取「上次的当前工程」（0.39.44）。
+ *
+ * 为什么"记住上次工程"要靠后端：本应用的页面跑在 WebView2 里，**localStorage 被拒**
+ * （实测 `setItem` 抛 `SecurityError`，见 `LINGQU_UI_PROBE=store` 自检），于是
+ * `localStorage['lingqu.proj']` 永远是空——"最近工程 / 聊天窗宽度 / 偏好开关"这些
+ * 记忆全部失效。真值只能来自落档：上一次 ui_report 的 `currentProject` 就是上次用的工程。
+ *
+ * 取不到（空文本 / 没这个键 / 不是字符串 / JSON 坏了）一律回空串，不抛异常。
+ */
+public func lastProjectOf(text: String): String {
+    if (text.size == 0) {
+        return ""
+    }
+    try {
+        return jsonStrField(JsonValue.fromStr(text), "currentProject")
+    } catch (e: Exception) {
+        let _ = e
+        return ""
+    }
+}
+
+/** 上次用过的工程：读 `.lingqu/ui-report.json`（上一次 ui_report 落的档，本来就带 currentProject）。 */
+func lastProjectFromReport(): String {
+    let p = ".lingqu/ui-report.json"
+    if (!exists(Path(p))) {
+        return ""
+    }
+    try {
+        return lastProjectOf(String.fromUtf8(File.readFrom(p)))
+    } catch (e: Exception) {
+        let _ = e
+        return ""
+    }
+}
+
 public class EnvCommand <: CommandHandler {
     public init() {}
 
@@ -187,6 +223,9 @@ public class EnvCommand <: CommandHandler {
         // 界面自检开关：置 1 时页面会自己跑一遍「开设置 → 折叠 → 展开 → 发一句」并逐步上报；
         // 置 approval 时改为发一条会触发危险操作审批的指令（验证审批卡）。
         res.put("uiProbe", JsonString(envOr("LINGQU_UI_PROBE", "")))
+        // 上次用过的工程（0.39.44）：页面启动时用它把工程带回来（localStorage 不可用，
+        // 见 lastProjectOf 的注释与 `LINGQU_UI_PROBE=store` 自检）。
+        res.put("lastProject", JsonString(lastProjectFromReport()))
         // 扫描探针：给了路径就在启动时跑一次 t2h:scan，把指标回投到 ui_report（无视觉也能验扫描器）
         res.put("scanPath", JsonString(envOr("LINGQU_SCAN_PATH", "")))
         // 编译探针（T5-1）：置 LINGQU_BUILD_PATH 就在启动时跑一次 t2h:build（交叉编译），
@@ -1494,6 +1533,13 @@ public class UiReportCommand <: CommandHandler {
         // 当前工程（0.39.8）：界面只有一个权威输入，其余 8 处是只读回显。
         // projectPromptCount 修好后必须为 1；stepPathOverride 非空说明某步用了别的工程。
         o.put("currentProject", JsonString(argStr(args, "currentProject", "")))
+        // 启动带回上次工程（0.39.44）：saved＝localStorage 记着的当前工程 /
+        // recent＝最近列表兜底 / none＝真没有（不造默认值）。restoreFail 为纯函数自检的失败项。
+        o.put("projRestored", JsonString(argStr(args, "projRestored", "")))
+        o.put("projRestorePath", JsonString(argStr(args, "projRestorePath", "")))
+        o.put("restoreFail", JsonString(argStr(args, "restoreFail", "")))
+        // 存储自检（0.39.44）："before|after|<读回值>|<抛错名>"——判定 localStorage 能否跨刷新持久化
+        o.put("storeProbe", JsonString(argStr(args, "storeProbe", "")))
         o.put("projectPromptCount", JsonInt(argInt(args, "projectPromptCount", 0)))
         o.put("pathFieldCount", JsonInt(argInt(args, "pathFieldCount", 0)))
         o.put("stepPathOverride", JsonString(argStr(args, "stepPathOverride", "")))
