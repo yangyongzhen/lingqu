@@ -5,6 +5,601 @@
 
 ---
 
+## [0.39.56] - 2026-11-02
+
+**主题**：**飞轮阶段 1——把"候选池"做成可操作的东西**（不联网、不碰用户工程）。
+
+### 背景
+
+0.39.55 让 agent 把经验落盘了，但"哪些值得进技能库/指纹库"还得人翻文件。阶段 1 把这件事变成
+**机器提议、人裁决**：按可判定的门槛筛候选、给每条配一段 PR 正文草稿、入库后一键移出候选池。
+
+### 处置
+
+| 面 | 内容 |
+|---|---|
+| `t2h:notes --action suggest` | 筛候选（**次数 ≥2 + 四段齐全 + 未入库**，`candidateLessons`）→ 写 `<工程>/.lingqu/notes/<工程>-candidates.md`（`--out` 可指定位置）+ **逐条 PR 正文草稿**（`renderPrDraft`：现象/根因/复现/修法 + 次数/工程 + 建议落点 + **提交前确认三问** + 三段式填空模板）。未命中台账里**同签名 ≥3 次**的也一并列出（`missSignatureList` + `missCountOf`）。回包给 `candidateCount / missCandidateCount / lessonTotal / missLedgerLines / candidates / missCandidates / out` |
+| `t2h:notes --action archive` | ① 把打了 `- 入库：<引用>` 的经验挪到 `<工程>-archived.md`（**先写归档件、成功后才重写主文件**；并入已有归档件时走 `mergeLessons` 去重）；② 台账到 `MISS_ROLL_MIN_LINES=200` 行就整体挪到 `diagnose/misses.<时间戳>.jsonl`——**先写归档件再重置台账**，不丢证据。回包给 `archivedNotes / keptNotes / archivePath / notesNote / missLedgerLines / missArchivePath / missNote` |
+| 落档格式扩展 | `LessonNote` 增 `archivedRef`（渲染为 `- 入库：…`，只在该字段非空时出现；解析宽容，老文件没有这行照样读） |
+| 新文档 | **`docs/经验入库规则.md`**：三条件 + 人的三追问、四个去处与选型判据、**四段 → `pitfalls.md` 三段**的映射表与完整示例（用真实那条 `hvigor 00308018`）、入库后回写标记与归档流程、命令速查与回包字段、七条反例、PR 前复核清单 |
+
+### 单测（9 例，`src/tests/notes_test.cj`）
+
+- 门槛：`isLessonComplete` / `isLessonArchived` / `candidateLessons`（次数不够、四段不齐、已入库三种都筛掉）；
+- 拆分与渲染：`splitArchivedLessons`、`renderPrDraft`（含"提交前确认三问"）、`renderCandidatesMd`（**没有候选要明说"没有"**，不造空表）；
+- 动作层：`archiveLessons` 搬走已入库的、主文件保留待裁决的、**第二次跑什么都不做**（不写空文件冒充"归档过了"）；
+- 台账：`missLedgerLineCount` / `missSignatureList`（紧凑行**和**美化多行都要认）/ `shouldRollMisses` / `missArchiveFileName`（时间戳里的 `:` 换掉）/ `rollMissesLedger`（没台账、未到阈值、到阈值三种路径 + 归档件内容完整）。
+
+### 单测当场抓到的 bug
+
+`missSignatureList` 原先按 `"sig":` 切片，遇到**美化输出**（`"sig": "x"`，冒号后带空格）会漏 →
+`missSignatureList(pretty).size` 断言 0≠1 报出来。改成"找 `"sig"` 键 → 跳过空白与冒号 → 读 JSON 字符串字面量"
+（`sigFieldOf` + `jsonStringAt`，能跳过 `\"`/`\\` 转义），紧凑与美化两种形态都认。
+
+### 证据
+
+```
+cjpm build      → 0 warning
+cjpm test       → TOTAL=396, FAILED=0, ERROR=0（+9 例）
+scripts/test.sh → 六项全绿（build-biz / test / check / js-syntax / build-app / build-cli）
+真 CLI          → suggest 产出 candidates.md（含 PR 草稿）；archive 把已入库条目挪走、主文件保留其余
+```
+
+### 未验证
+
+- `suggest`/`archive` 目前只有**单测 + 本机 CLI 跑通**，**还没有真实样本攒够 2 次经验**（阶段 1 的判据要等下一轮实跑）；
+- `--out` 写仓外路径时不做沙箱校验（工具本就允许写用户目录）；
+- 阶段 2（`t2h:pr_prepare` 草稿 PR）与阶段 3（CI + 评审后合并）未开始——见 `docs/AI自进化飞轮.md` §8。
+
+---
+
+## [0.39.55] - 2026-11-02
+
+**主题**：**踩坑经验自己长出来**——事实层早就是全自动的，认知层却一直靠人（每轮手写指纹 / 技能 / §4）。
+
+### 现象（用户提问查出来的）
+
+> 移植中的踩坑经验和技能会自动沉淀下来吗？
+
+诚实回答是「一半」：
+
+| 层 | 现状 |
+|---|---|
+| **事实层** | **全自动**：每步落档 `.lingqu/<步骤>/<工程>.json`、agent 轨迹 `.lingqu/agent/trace.jsonl`、迁移报告三件套 |
+| **认知层** | **靠人**：新坑 → 新指纹（FP-0xx）/ 技能条目（`skills/t2h-ohos-port`）/ AGENTS §4，全是每轮手写 |
+
+而 agent 的汇报留在会话里，**会话一压缩细节就淡了**（本轮实测出现过"21/24/30 条早期消息 → 摘要"）。
+于是下一个样本撞上同一个坑，还是从零查起——这与「数据从真实的来」是一体两面：真实的东西没落盘，就等于没有。
+
+### 处置（三件，一批）
+
+| 面 | 内容 |
+|---|---|
+| 落盘口子 | 新 `src/notes.cj` + 命令 **`t2h:notes`**（`action=list/append/export`）：写 `<工程>/.lingqu/notes/<工程>.md`，固定四段（现象 / 根因 / 复现 / 修法）+ 次数 / 工程 / 时间。**幂等**：同标题（归一化后）只累加次数、不重复堆；`lingqu-cli notes --path . --action export` 出全量 markdown |
+| 让 agent 自己记 | `src/autoport.cj` 任务书新增**强制一节**「把踩到的坑记下来」：踩到新坑就先把内容写成 JSON 文件，再 `lingqu-cli notes --action append --path <工程绝对路径> --body <json文件>`。路径**绝对**（§4-70：agent 的 bash cwd 是目标工程）。**为什么必须走文件**见下面的"硬限制" |
+| 不认识就攒证据 | `t2h:diagnose` 未命中指纹时，把日志归一签名（`missSignatureOf`：数字折叠成 `#`、空白压一格、ASCII 小写、截断 120）追加到 `<工程>/.lingqu/diagnose/misses.jsonl`，同签名累计次数并给 `missCandidateHint`（1 次先攒着 / 2 次可考虑 / ≥3 次**建议补指纹**）。回投 `missSignature / missCount / missHint / missLedger` |
+| 报告看得见 | `MigrationFacts.lessonCount/lessonsLine`：「做了什么」多一行「本地经验 N 条（标题…）」，「需要你做什么」多一行复核提示；产物清单列出 `.lingqu/notes/<工程>.md` |
+
+**纪律**：`notes` 只记 agent **跑过看过**的东西，不写猜测；台账只攒**证据**——指纹库会指导 agent 怎么改用户代码，
+所以进库仍要人确认（**不自动写**）。
+
+### 单测当场抓出的三个真 bug（都能过编译、跑起来必错）
+
+1. `lessonKeyOf` 逐字节 `String.fromUtf8([b])` → **中文标题必抛** `IllegalArgumentException: Invalid utf8 byte sequence`
+   （单个字节不是合法 UTF-8，与 §4-113 同族）。改成攒 `ArrayList<Byte>` 后整体解一次。
+2. `fieldAfterSpace` 取 `工程：` 的值时没在全角空格 `　` 处截断 → `project` 变成 `juCang　时间：2026-11-02 …`。
+3. `JsonObject.toJsonString()` 是**美化输出**（一条记录摊成 4 行、冒号后带空格）⇒ 台账"一条一行 + 按行计数"的前提不成立，
+   累计次数**永远返回 1**。改成手拼紧凑 JSONL，并让 `missCountOf` 两种形态都认。
+
+### 端到端实测又撞出一个**硬限制**：Windows 上仓颉程序接不了非 ASCII 的 argv
+
+拿真 CLI 跑 `notes --action append --title "中文标题探针"` 时**必崩**：
+
+```
+IllegalArgumentException: Invalid unicode scalar value.      ← PowerShell 传参
+IllegalArgumentException: Invalid utf8 byte sequence.        ← Git-Bash 传参
+```
+
+- **不是我们代码的问题**：连 `main.exe --help 中文` 都崩，异常在 `main(args: Array<String>)` 之前就抛，
+  cmd / PowerShell / Git-Bash 三种调用方一样，`chcp 65001` 也没用 ⇒ 是**运行时解 argv 的口径**问题（§4-119）。
+- **影响面**：凡是"中文内容当参数"的用法全废——经验正文、中文工程路径、中文标题都过不去。
+  agent 的 bash 同样受影响（它传的也是非 ASCII 字节）。
+- **处置**：`notes` 增 **`--body <json 文件>`**（`parseLessonBody` 纯函数解析，宽容：坏 JSON/缺字段不抛）；
+  agent 先把内容写成 UTF-8 JSON 文件（bash 写盘没问题），再让命令读文件。任务书与文档已改。
+- **实测证据**（`cli/target/release/bin/main.exe notes --path .lingqu/notes-probe --action append --body note-in.json`）：
+
+```
+{"ok": true, "result": "added:hvigor 00308018 不是签名问题", "bodyUsed": true, "count": 1}
+落档 .lingqu/notes/notes-probe.md：
+  ### hvigor 00308018 不是签名问题
+  - 现象：t2h:hap 报 00308018，日志里是 cargo tauri panic
+  - 根因：hvigorfile 的 tauri 钩子在非 dev 场景必然失败
+  - 修法：R2-PORT-015 注掉 .afterRun(buildRustCode)
+```
+
+> 中文内容**没有坏**（用 UTF-8 读回逐字正确）；PowerShell 里 `Get-Content` 看到的乱码是**读侧按 GBK 解码的显示假象**。
+
+### 证据
+
+```
+cjpm build      → 0 warning
+cjpm test       → TOTAL=387, FAILED=0, ERROR=0（新增 15 例：src/tests/notes_test.cj）
+scripts/test.sh → 六项全绿：build-biz / test / check / js-syntax / build-app / build-cli
+命令数 37（register 37 × capabilities 37，`cj-tauri check` 三方比对通过）
+真 CLI 实测     → notes --body 中文四段 → 落档逐字正确（above）
+```
+
+### 文档
+
+- 新增 **`docs/AI自进化飞轮.md`**：把这条"agent 自己记经验 → 攒未命中证据 → 机器提议 / 人裁决 → 固化成指纹·规则·技能 → 下一轮自动吃上"的闭环写成技术文档
+  （五层结构、七个环节的接口与判据、数据结构、度量指标、纪律与反例、已知边界、可复核验证清单、阶段 1–3 演进路线）。
+  在 `docs/会话交接.md` 的文档地图里加了入口。
+- **README 重写**（开源门面）：徽章行 + 目录导航 + 30 秒了解 + **「AI 自动进化飞轮」专章**（回路图 + 五条设计理由 + 四个观察指标）+
+  **三张真实截图**（`docs/imgs/workbench.png`、`docs/imgs/report.png` 为真实应用窗口截图，第三张为真机证据图）+
+  能力矩阵 + 快速开始 + **「测试与质量」专章**（六项门禁逐项、七种质量手段、本轮三个真 bug、为什么没有云端 CI）+
+  架构与目录树 + 命令表（37 条 `t2h:*` / 20 条 CLI）+ **平台与验证范围（含 Linux 未实跑）** + 文档地图 + 路线与质量目标表。
+  **README 面向开源读者**：不写课题名称、课题性质与交付期这类项目外部信息（按用户要求删除）；
+  原"验收标准（课题原文）"改写为「质量目标」，证据仍指向 `docs/需求追踪.md`。
+- 开源规范补齐：**`LICENSE`（MIT）**、**`CONTRIBUTING.md`**（开发流程、改动规矩、常见扩展点、提交信息格式、PR 清单）、
+  **`SECURITY.md`**（敏感数据边界表、已有安全设计、已知边界）、
+  **`.github/`**（Issue 模板：bug / feature；PR 模板，证据与文档勾选项内建）。
+- 截图口径：工作台与报告屏为 `CopyFromScreen` 抓取真实窗口（1280×840，像素体检 239 / 300 种颜色，非空白）；
+  报告内容 100% 来自落档，触发方式是 `LINGQU_UI_PROBE=risk` 走真实的 `t2h:report`。
+
+### 未验证
+
+- **agent 真的会在迁移途中调 `notes append` 吗**？任务书里是硬指令，但"指令写了"≠"它照做"——要等下一轮真实自动迁移跑到
+  踩坑处，看 `.lingqu/notes/<工程>.md` 有没有长出来。本轮只验了命令本身（单测 + 真 CLI 落档往返）。
+- 非 ASCII argv 的限制只在本机（Windows 10/11 + 仓颉 1.0.5）实测过；**Linux 侧未验**（那边 argv 是字节流，大概率没这问题）。
+- `--body` 的 JSON 只认 `title/symptom/cause/repro/fix` 五个键，其它键忽略；标题为空会拒绝写盘。
+- `misses.jsonl` 目前只有单测造的数据，**还没有真实样本**（`t2h:diagnose` 真跑未命中才会写）。
+- 本地经验**不会自动进 `skills/`**：这是有意的（prompt 漂移代价太大），整理进技能库仍要人 / PR 评审。
+
+---
+
+## [0.39.54] - 2026-11-02
+
+**主题**：**AI 自动迁移跑完自动出报告**——确定性流程早就会，AI 这条路漏了。
+
+### 现象（用户提问查出来的）
+
+> 当前跑完真机验证就结束了？那个迁移报告有没有生成？
+
+- 8 步流水线的最后一步就是 **verify**（`src/task.cj` 的 `TASK_STEPS` 到 `verify` 为止），**报告不在 8 步里**；
+- `t2h:migrate`（▶ 确定性流程）收尾**无条件**调 `t2h:report`（`main.cj:4435`，0.36.0 定的规矩）；
+- **`t2h:autoport_*`（🤖 开始 AI 自动迁移）没有任何出报告调用** ⇒ 纯 AI 跑完会出现
+  「8 步全绿、`finished=true`，但 `.lingqu/report/` 是空的」，A1 要的"每应用一份报告"全靠人记得点 ⑦ 屏。
+  juCang 那轮就是我自己手动补了一次 `report`——正好被用户问出来。
+
+### 处置
+
+| 面 | 内容 |
+|---|---|
+| 触发 | 页面在 `renderAiPort(st)` 里判 `st.finished === true && !AIP.autoReported` → 调一次 `autoReportAfterAi(path)`（幂等；新一轮开始时 `startAiPortScope` 把 `AIP.autoReported` 与 `window.__autoReport` 重置） |
+| 做什么 | `invoke('t2h:report', {path})` → 成功则把 ① 屏「AI 过程消息」补一行「已自动生成迁移报告：<md>　结论：…　风险：…」，并把 ⑦ 屏顺手渲染成这次结果（不强制切屏）；失败只留一行原因，不打断任何东西 |
+| 断言 | `ui_report` 增 `autoReportDone / autoReportPath / autoReportRisk / autoReportErr` |
+| 探针 | `LINGQU_UI_PROBE=autoreport`：喂一个"已跑完（finished=true）"的状态夹具，断言页面**自己**去出报告 |
+
+### 证据（清空报告目录后跑探针）
+
+```
+删除 …\juCang\.lingqu\report\*  → 启动 LINGQU_UI_PROBE=autoreport
+tag=auto-report-ok  autoReportDone=True  risk=中  err=
+  path=C:\Users\yang\lingqu-workspaces\juCang\.lingqu\report/juCang.md
+报告目录重新出现：juCang.md 4280 B / juCang.html 6190 B / juCang.json 6131 B（21:57:16）
+errorCount=0
+```
+
+### 未验证
+
+- 真实整轮 AI 迁移（21:45 那轮）跑完时**还没有这段代码**，所以"真实回合结束时自动触发"没在本轮亲眼见到——
+  探针证明的是同一段逻辑（同一入口 `renderAiPort`、同一判定 `finished`）。
+- 若报告生成失败（比如工程路径已删），界面只有一行错误，不会重试——按"手刹在人这边"的惯例没做自动重试。
+## [0.39.53] - 2026-11-02
+
+**主题**：把上一轮查出的两个"卡点"真解决——**HAP 装配过的**（新规则 R2-PORT-015）＋ **AI 回合的轮次预算抬上去**。
+
+### 背景（0.39.51 查出的两条）
+
+- juCang 的 `gen/ohos/entry/hvigorfile.ts` 带着 tauri 钩子，运行时 `cargo tauri ohos dev-eco-studio-script`
+  要读 dev server 的 addr 文件 → tauri-cli panic → hvigor `00308018` → HAP 装不出来 → 迁移停在那儿；
+- cjh `max_iterations: 40`，整应用迁移 41 轮就被截断，agent 没回合收尾。
+
+### 处置
+
+| 面 | 内容 |
+|---|---|
+| **新规则 R2-PORT-015**（`src/port/hvigor.cj`，auto 档） | 命中 `dev-eco-studio-script` 的 hvigorfile → **只注掉 `.afterRun(buildRustCode)` 那一行**（加 `lingqu: R2-PORT-015` 标记 + 4 行原因注释），文件其余结构一字不动；幂等；没有该脚本的工程**不判命中**（不乱改别人的钩子）；备份 `hvigorfile.ts.bak` 并接入 `revertPairs()`（5 → 6 条） |
+| **轮次预算**（`src/cjh_settings.cj`） | `ensureCjhIterationBudget`：`t2h:autoport_start` 开跑前把 `max_iterations` 抬到 **120**（`AUTOPORT_MIN_ITERATIONS`）；**只抬不降**；先走 live（`POST /api/settings`，引擎在跑也立刻生效），live 不通才落 `settings.json`（`settings.json.bak.autoport` 备份 + 文本定点修补，不重排 JSON）并注明"需重启 cjh"；结果回投 `t2h:autoport_start` 的 `iterationBudget` |
+
+### 证据（都是真跑）
+
+```
+1) R2-PORT-015：lingqu-cli port --path …\juCang --apply
+   rules=15；R2-PORT-015 applied=True tier=auto
+   hvigorfile.ts:  L25 `// lingqu: R2-PORT-015 注掉 tauri 的 Rust 构建钩子：它跑`
+                   L29 `// node.getTaskByName('default@ConfigureCmake')!.afterRun(buildRustCode);`
+   备份落地：.lingqu/port/juCang/ 下新增 hvigorfile.ts.bak
+
+2) 修后重跑装配：lingqu-cli hap --path …\juCang
+   修前：ok=false  built=false  hapBytes=0        firstError=00308018
+   修后：ok=true   built=true   hapBytes=15338218  （15.3 MB HAP 真的出来了）
+   仍 signed=false —— 签名材料还没配（下一步，见下）
+
+3) 轮次预算 live 生效：POST /api/settings {"maxIterations":120} → {"ok":true}
+   GET /api/settings → "maxIterations": 120（无需重启引擎）
+```
+
+- 单测 **372 例全 PASS**：新增 `hvigor_rule_test`（4 例：只注一行 / 幂等 / 不乱改别人的钩子 / 回滚表覆盖）
+  与 `cjh_settings_test`（3 例：读取 / 只抬不降 / 缺键插入 / camel 写法）。
+- 顺手把 `port_revert_test` 的 `revertPairs` 断言从 5 改成 6——那条用例存在的意义就是拦住"改了文件没进回滚表"。
+
+### 踩到的一个坑（已进 AGENTS §4-115）
+
+**同一个设置有两种拼写**：`~/.cjh/settings.json` 里是 `max_iterations`（snake），
+而 `GET /api/settings` 返回的是 `maxIterations`（camel）。只认一种的话，live 路径会误判"读不到"，
+白白回落到"改文件 + 需重启"。现在 `maxIterKeyOf()` 两种都认，单测钉住。
+
+### 未验证 / 下一步
+
+- **juCang 的签名没做**（`signed=false`）：`com.dicing.jucang` 这个包名本机没有材料，
+  要跑 `lingqu-cli sign --auto --path …\juCang`（AGC 云签发，**需要浏览器授权一次**，计入 A3 人工介入）。
+  签完才能 `deploy` → `verify`。
+- `autoport_start` 的预算是"设好了"，但**没真跑一轮 120 轮的迁移**验证它不再被截断**。
+- 规则只注掉 `.afterRun(` 那一行；若某个工程的钩子写法不同（没有 `.afterRun(`），规则会如实报"没找到，不动"。
+## [0.39.52] - 2026-11-02
+
+**主题**：把「迁移过程日志」换成**「AI 过程消息」**——用户要看的是 AI 说了什么。
+
+### 现象（用户实测）
+
+> 进度下面的迁移过程日志，看着没有什么用，不行还去掉吧，我以为能显示 ai 的响应信息呢，
+> 如果可以的话可以显示 AI 回复的信息
+
+### 判断
+
+0.39.50 那块记的是「每步开始 / 通过 / 未过 / 跳过」——而**上方进度条已经把 8 步状态全列了**，
+重复信息，看着确实没用；用户真正缺的是"AI 正在干什么、它说了什么"。
+
+### 处置
+
+| 面 | 改成 |
+|---|---|
+| ④ 屏（① 屏一键迁移）那块卡 | 标题「AI 过程消息」，只放两样：① **AI 真正的流式叙述**（`delta` 增量合并成段，120ms 合批重绘，Markdown 渲染）；② **工具失败摘要**（成功的不放——右栏有工具卡与 bash 原文）；回合结束补一行「回合结束：<原因>」；新一轮自动清空 |
+| 喂数来源 | `onFrame` 的 `delta`（仅当 AI 自动迁移/确定性流程在跑时）＋ `fillToolResult(isError)` ＋ `turn_done`；**与右栏同一条流**，不新增轮询、不重复解析 |
+| 删掉的 | 0.39.50 的 `noteMigrateProgress`（步骤状态时间线）与它的 `MIG_LOG` 状态——与进度条重复 |
+| 断言 | `ui_report.migLogLines/migLogLast` → **`migAiLines/migAiLast`**；探针 `LINGQU_UI_PROBE=miglog` 改为喂三帧 delta + 一条工具失败 |
+
+### 顺带：把「页面静默失效」变成门禁能抓的错
+
+改 `index.html` 时用行范围替换，**多留了一个 `}`** → 页面整块 JS 不执行：窗口照起、界面全空、
+连 `ui-report.log` 都不生成（又是一个"点了没反应"）。`cjpm build` 与 `cj-tauri check` **都看不见**这种错。
+现在门禁新增 **`[3b/5] 页面脚本语法`**：用 `node --check` 抽取 `index.html` 里的 `<script>` 块逐个检查
+（没有 node 就跳过并说明，不阻塞其它闸）；判据进 `RESULTS`（`js-syntax:PASS/FAIL`）。
+
+### 证据
+
+```
+LINGQU_UI_PROBE=miglog（夹具：两帧 delta + 一条工具失败）
+  migAiLines = 2
+  migAiLast  = err 工具 bash 失败：exit code: 1 执行 t2h:hap 失败：IllegalArgumentException: Invalid utf8 byte sequence
+  errorCount = 0
+五道闸全绿：build-biz:PASS test:PASS check:PASS js-syntax:PASS build-app:PASS build-cli:PASS
+```
+
+### 未验证
+
+- **真实迁移回合下的观感没跑**（夹具只验证了"能显示、按段落合并、失败会单独一行"）；
+  AI 叙述很长时在 260px 高的卡片里的阅读体验要你实际跑一次才知道。
+- 确定性流程（`t2h:migrate`，不经过 AI）时这块保持空态，只有工具失败行——这是设计，不是缺数据。
+## [0.39.51] - 2026-11-02
+
+**主题**：一次失败的迁移被查清——三个原因，修掉两个半，并把"为什么停"从此说清楚。
+
+### 现象（用户实测）
+
+> 回合结束 · 轮次 41 · 工具 54 · 157.5s，移植中途失败了，ai 也不反馈个信息提示吗？就这么停在这了，
+> 检查下日志分析下原因吧
+
+### 排查（只看证据：`.lingqu/agent/trace.jsonl` 253 行 + 落档 + cjh 设置）
+
+1. **agent 最后做了什么**（trace 末段）：装 ohpm 依赖时 `cmd //c ohpm.bat` 撞上
+   `BATCH RECURSION exceeds STACK limits`，它自己改用 `node pm-cli.js install --all` 成功 →
+   然后跑 `lingqu-cli hap --path .` → **`exit=1`：执行 t2h:hap 失败：IllegalArgumentException: Invalid utf8 byte sequence** →
+   紧接着 `turn_done {"rounds":41,"tools":54,"duration_ms":157463}`。
+2. **为什么"回合结束"**：`~/.cjh/settings.json` 的 `max_iterations: 40` ⇒ 41 轮正好撞上限，回合被截断。
+3. **落档现状**（`juCang/.lingqu/tasks.json`）：scan / deps / port / build **done**，
+   **hap failed**（`HAP 0 字节 / arm64 条目 0`），sign / deploy / verify **pending**。
+
+### 根因三条
+
+| # | 根因 | 归属 |
+|---|---|---|
+| A | `stripAnsi` 里 `out += String.fromUtf8([bytes[i]])` —— **逐字节转 UTF-8 是炸弹**：中文/GBK 的一个字节本身不是合法 UTF-8，hvigor/ohpm/cmd 的输出里两样都有 ⇒ `t2h:hap` 秒抛异常、落档写成「HAP 0 字节」（§4-41/§4-62 同族） | **我们的 bug** |
+| B | 轮次预算用完（cjh `max_iterations: 40`），而界面 `turn_done` 只写一句"回合结束"，**不解释为什么停、也不贴最后一条工具报错** | 我们的界面 |
+| C | 修掉 A 之后暴露的真因：hvigor 报 `00308018`，真 trace 是 `cargo tauri ohos dev-eco-studio-script` → `failed to read missing addr file %TEMP%\com.dicing.jucang-server-addr` → **tauri-cli 自己 panic**（那条钩子只对 `tauri ohos dev` 有效） | 样本工程 + 缺规则 |
+
+### 处置
+
+- **`lenientUtf8`（`compiler/hap.cj`）**：逐字节宽容解码，非法字节换 `?`、**永不抛**；`stripAnsi` 改成
+  攒 `ArrayList<Byte>` 再整体解；`main.cj` / `sign_tool.cj` / `sign_login.cj` 里 **22 处**命令行输出解码统一走它
+  （hvigor / ohpm / cmd 的输出会带 GBK）。
+- **界面说清"为什么停"**：`turn_done` 时判定原因（轮次预算用完 / 上下文长度上限 / 回合异常 / 模型自己结束），
+  并**贴出最后一条工具报错**（`CJ.lastToolErr`，新回合开始时清零；`CJ.maxIterations` 取自设置）：
+  `为什么停：轮次预算用完（41/40，cjh 的 max_iterations）……最后一条工具报错（bash）：执行 t2h:hap 失败：…`
+  `ui_report` 增 `turnEndReason / lastToolErr / lastToolErrName`。
+- **新指纹 FP-020 + `hapSignHint`**：`00308018` / `dev-eco-studio-script` / `server-addr` 三种痕迹都翻成
+  「现象 → 根因 → 修法」，agent 不必再反复试签名、重装依赖（省轮次，D-015）。
+
+### 证据
+
+```
+修前（trace 20:42:57）：lingqu-cli hap --path …\juCang
+  → exit=1 执行 t2h:hap 失败：IllegalArgumentException: Invalid utf8 byte sequence
+修后（同一命令、同一工程）：
+  → 能跑完 hvigor，报真实错误 00308018；.lingqu/hap/juCang.log 里的 trace 是
+    `cargo tauri ohos dev-eco-studio-script` + `failed to read missing addr file …-server-addr`
+  → HAP 闸失败行现在带人话：「hvigor 的 tauri 钩子失败（00308018）……让 hvigorfile 不跑这个钩子」
+单测：lenientUtf8 三例（ASCII/中文/GBK/截断/破坏序列）+ stripAnsi 保中文 + FP-020 命中；
+      cjpm test TOTAL=364 FAILED=0，五道闸全绿。
+```
+
+### 未验证 / 下一步
+
+- **没端到端跑通 juCang 的 HAP 装配**：真因 C 需要「让 `gen/ohos/entry/hvigorfile.ts` 不再跑那个钩子」。
+  这该是**迁移规则**（`t2h:port` 加一条 R2-PORT-015，带备份可回滚），本轮只做了"报清楚"，没做"自动修"。
+- cjh 的 `max_iterations` 是否该为 autoport 调大，未实测；本轮只做到"解释 + 让你点继续"。
+## [0.39.50] - 2026-11-02
+
+**主题**：一键迁移屏加「迁移过程日志」——过程不再只能去右栏看 bash。
+
+### 现象（用户实测）
+
+> 能否在一键迁移那个页面的进度下面区域，展示下日志窗口啊？当前仅能在右侧的窗口里看到 bash，
+> 其他的都看不到过程了
+
+### 现状与根因
+
+① 屏当时只有三样东西：进度条、每步的 `待跑 / 进行中 / 通过 / 未过 / 跳过`、结果卡。
+**过程**（某步什么时候开始、落档摘要是什么、为什么跳过、引擎此刻在做什么）在页面上没有出口，
+只能从右栏 AI 的工具调用里"旁证"——而 AI 只是其中一条路径：**确定性流程连 AI 都不经过**，于是完全看不见。
+
+### 处置
+
+- ① 屏进度卡**下面**新增「迁移过程日志」卡（`#migrateLog`，260px 可滚，空态写"还没有开始"）。
+- 数据源是**同一份轮询状态**：`t2h:migrate_status` 与 `t2h:autoport_status` 都经 `renderMigrate`，
+  这里把它翻译成时间线：
+  `开始一键迁移：<工程>（设备文案）` → `▷ 开始「<步>」（第 i/8 步）` → `✔ 通过 / ✘ 未过 / ↷ 跳过「<步>」：<落档摘要>`
+  （带该步 `at` 时间）→ 引擎当前动作 `message`（值变了才记）→ `结束：<verdict>　报告：<路径>`。
+- **幂等**：每步按判定签名（`ran|ok|skipped`）去重，同一状态不重复刷；**新一轮开始时清空**
+  （日志只属于本次运行，不跨轮混看）；上限 300 行，自动滚到底。
+- 可断言：`ui_report` 增 `migLogLines` / `migLogLast`；探针 `LINGQU_UI_PROBE=miglog`（固定夹具喂三轮状态）。
+
+### 证据
+
+```
+LINGQU_UI_PROBE=miglog（夹具，不跑真迁移、不改工程）
+  migLogLines = 11
+  migLogLast  = ok 结束：迁移完成：8 步 8/8，可用率 100%
+  errorCount  = 0
+```
+
+- 五道闸全绿：`cjpm build` 0 warning ／ `cjpm test`（TOTAL=360，FAILED=0）／ `cj-tauri check` ／
+  `targets/desktop` 0 warning ／ `cli` 0 warning。
+
+### 未验证
+
+- **没在本轮真跑一次一键迁移**（分钟级且会改样本工程）：日志行是按同一份状态形状渲染的，
+  但"真实 8 步跑完的日志观感"要你点一次才算验过。
+- AI 自动迁移（`autoport_status`）只共享 `rows` / `verdict`，没有 `message` / `current` 字段，
+  所以 `▷ 开始某步` 与"引擎当前动作"这两类行只有确定性流程会出现；AI 路径看到的是
+  `✔/✘/↷` 的步骤变化与结束句。要把这两类也补齐，得给 `autoport_status` 加字段（下一轮可做）。
+
+## [0.39.49] - 2026-11-02
+
+**主题**：把界面上剩下的假数据**全清掉**，一个不留；并加一道"假数据回归闸"。
+
+### 现象（用户实测，先是一处，后来是全仓排查）
+
+> 实时日志占位示意 · P5 接真数据　占位示意，这个是假的展示？没有数据吗还是没有做啊？
+>
+> 排查下还有哪些假数据，都得处理掉啊，数据从真实的来。
+
+### 排查结果：一共 7 处，分布 3 个屏 + 1 个面板
+
+| # | 位置 | 假的是什么 |
+|---|---|---|
+| 1 | ④ 屏「实时日志」 | **写死 14 行示例**（`15:42:01 [R1-002] 生成 rust-toolchain.toml…`）+ 徽标「占位示意 · P5 接真数据」（P5 早就做完了，这句也过期） |
+| 2 | ⑤ 屏「流水线」 | 5 格写死 `3m12s / 匹配 ✔ / 1m05s / debug`（编造的耗时） |
+| 3 | ⑤ 屏「产物 · .so」 | 写死 `libgrove_lib.so 4.71 MB` |
+| 4 | ⑤ 屏「产物 · HAP」 | 写死 `12.4 MB · v1.2.0` |
+| 5 | ⑤ 屏「真机」 | 写死 `2in1 · HarmonyOS 5.0.0(12) / hdc 已连接` |
+| 6 | ⑤ 屏「构建输出」 | 写死 7 行示例编译日志 |
+| 7 | ① 屏「最近项目」 | **写死 5 行工程表**（`habit-tree 86 / cc-switch 72 / …`），旁边注着「示意数据。扫描器接入后就是真实数据」——扫描器早就在用了，这句注释本身就是谎 |
+| 8 | 右栏 AI 面板 | 写死**三段示例对话**（一句「先看一眼环境体检的结果」+ 一张假工具卡「8 项体检 → 就绪 7 / 缺失 1 ✘ llvm-mingw…」），看着跟真会话一模一样 |
+
+2–6 与 7、8 都**没有任何标注**，长得跟真数据一样（AGENTS §4-94 那一课，`mockLeft` 这条断言从 0.39.49 起守着）。
+
+### 处置
+
+| 面 | 改成 |
+|---|---|
+| ④ 屏「实时日志」→ **「执行日志」** | 只记真发生过的事（命令 / 结果 / 关键数字 / 指纹命中 / 产物路径）；环形缓冲 200 行 +「清空」；没跑过就明说「还没有执行任何步骤」。④ 屏改造按**逐条规则**记（id / 已改·需人工·跳过） |
+| ⑤ 屏「流水线」 | 5 格真实状态（交叉编译 / 前端指纹 / HAP 装配 / 签名 / 安装），从本次运行结果推；没跑过就是「—」，**不编时长** |
+| ⑤ 屏产物三卡 | `.so` 真实路径 + exit/err/warn + 指纹一致数；HAP 真实路径 + 大小 + 是否签名 + rawfile 数；真机真实 serial + 安装/启动结果 + 签名态 |
+| ⑤ 屏「构建输出」 | 本次真实 stderr 尾部（≤24 行）；没跑过就明说「还没跑交叉编译」 |
+| ① 屏「最近项目」 | 改成**按落档发现**：复用 `t2h:batch` 的发现结果（`sampleSource=workspace/remembered/…`），只有真有 `.lingqu` 的工程才出现；一行都没有时写「还没有迁移过的工程」——**空着比编五行假数据诚实** |
+| 右栏 AI 面板 | 三段假对话 → 一张「对话还没开始」的空状态说明卡（有真消息/真历史就撤掉，`renderHistory` 空历史时再放回） |
+| 重复刷日志 | 切屏会把 `renderPort` 重绘一遍 → 之前会把 30 条规则重复写进日志。`LOG_ONCE`：只有命令跑完那一次才记 |
+| **假数据回归闸** | `ui_report` 增 `fakeLeft`：把「绝不可能出现在真实界面里」的示例串（`libgrove` / `ui-9f3a` / `ColorPicker.vue` / `com.grove.habittrees` / `tauri/examples` / `3m12s` / `1m05s` / `2in1 · HarmonyOS` / `就绪 7 / 缺失 1`）扫整页文本，**必须 0**；另有 `mockLeft`（还剩几块「占位示意」块，必须 0）、`projRows`/`projListSrc`（最近项目是真发现出来的） |
+
+### 证据
+
+```
+冷启动（LINGQU_SCAN_PATH=…\juCang，清空 ui-report.log）
+mockLeft=0   fakeLeft=0      ← 页面上既没有「占位示意」块，也没有任何示例串
+projRows=1   projListSrc=workspace   ← 最近项目按落档发现（发现 1 个真有 .lingqu 的工程）
+execLogLines=1   errorCount=0
+```
+
+- 五道闸全绿：`cjpm build` 0 warning ／ `cjpm test`（**TOTAL=360，FAILED=0**）／ `cj-tauri check`
+  （`sync desktop` + `sync ohos` 后）／ `targets/desktop` 0 warning ／ `cli` 0 warning。
+
+### 未验证
+
+- ⑤ 屏「真数据」本轮只在 **idle 分支**验过（没跑分钟级 `cargo build`）；跑一次真实编译后
+  阶段条应从 `idle` 转 `ok`，属正常路径但没在本轮重跑取证。
+- ① 屏「最近项目」只验了 `workspace` 来源（发现 1 个工程）；`remembered` / `explicit` 两条来源
+  没在同一轮里逐个复跑。
+- 执行日志只存内存（关窗即清），没有落盘——要不要落 `.lingqu/ui-log.txt` 另议。
+
+## [0.39.48] - 2026-11-02
+
+**主题**：点「克隆」什么都不发生——真因是**顶层作用域调内层函数**（AGENTS §4-107 同一课），
+外加「把 Git 地址填进工程路径」这件事界面上零指引。
+
+### 现象（用户实测两条）
+
+> 我测了下点克隆，输入项目地址：https://gitcode.com/qq8864/juCang，没有反应，也不知道发生了什么，
+> clone 的项目在哪里，有没有成功。然后我点迁移画像，提示扫描失败：路径不存在：https://gitcode.com/qq8864/juCang
+
+### 根因（先取证，不猜）
+
+1. **后端本来就是好的**：`lingqu-cli git_clone --url https://gitcode.com/qq8864/juCang`
+   → `ok=true`、落到 `C:\Users\yang\lingqu-workspaces\juCang`、`hint=像一个 Tauri 工程（有 src-tauri/）`。
+2. 现场 `ui-report` 两条硬证据：`currentProject=https://gitcode.com/qq8864/juCang`（**地址被当成了工程**）、
+   **`uiErr=3`**（界面有三个异常）。
+3. 先给 `ui_report` 补 `uiErrText`（以前只报条数 = 知道出事但不知道什么事），重跑一次就抓到原文：
+   ```
+   Uncaught ReferenceError: reportUi is not defined @about:blank:7577
+   ```
+   —— 克隆按钮处理器里 `reportUi('clone-start')` 抛异常，**它后面那行 `invoke('t2h:git_clone')` 从未执行**。
+   所以"没有反应"是字面意义的：`invoke` 根本没被调用，git 一次都没跑。
+4. 作用域实况：`reportUi`(L6212) / `invoke`(L2588) 缩进 2（内层作用域），而 `setCurrentProject` /
+   `cloneNote` / `openClonePanel` / `initProjectBar` 全在顶层 —— 外层引用内层符号，异常只落
+   `window.onerror`，调用方与 promise 都看不见（§4-107 已经踩过一次，这次是第二个受害者）。
+
+### 处置
+
+| 面 | 改了什么 |
+|---|---|
+| 作用域（真因） | 内层把能力挂出去：`window.__reportUi` / `window.__invoke`；顶层加**同名薄包装**转交（内层未就绪时 `reportUi` 静默跳过、`invoke` 返回 rejected promise，不崩）。克隆那组处理器一行没改就复活了 |
+| 地址 ≠ 路径 | 新增纯函数 `looksLikeGitUrl`（后端 `src/git_clone.cj` + 前端同口径）：前端 `setCurrentProject` 见到地址**不设工程**，直接打开克隆面板、填好地址、明说「这是 Git 地址，先克隆」；`rememberProject` 也不再记地址（否则下次启动又把地址当工程带回来） |
+| 命令文案 | `projectPathRejectReason`（scan / port / deps 共用，把三处重复判断收成一处）：地址 → 「这是 Git 地址，不是本地工程目录…先点「克隆…」」；真不存在才说「路径不存在」 |
+| 克隆要看得见 | 每秒刷一次「正在克隆… Ns（depth、目标目录）」（git 的输出要等结束才回，没心跳就像卡死）；成功后一句话说清**克隆到哪 / 像不像 Tauri 工程 / 下一步点哪**；**回车 = 开始克隆** |
+| 可观测性 | `ui_report` 增 `uiErrText`（异常原文，最多 3 条）、`cloneNote`、`cloneBusy`、`cloneTarget`、`gitUrlGuard`、`projRestoreSkipped` |
+| 带回来先判存在 | `shouldRestoreLastProject(last, existsOnDisk)`（纯函数，带单测）：上次工程已被删/移走时**不带回来**（0.39.44 文档里如实记过这个缺口；这次实测撞上——上次指向 `juCang-2`，目录已删，顶层仍显示它，点 ② 只会得到「路径不存在」）。存在性由后端 `exists()` 判（页面没有 FS 能力） |
+| 探针 | 新增 `LINGQU_UI_PROBE=clone`：先把地址填进工程路径（应被拦）→ 再走真实克隆 → 逐步回投；`LINGQU_CLONE_URL` / `LINGQU_CLONE_DIR` 可指定，默认克隆到仓内 `.lingqu/clone-probe`（**探针不往用户工作区堆副本**） |
+
+### 证据
+
+```
+LINGQU_UI_PROBE=clone（LINGQU_CLONE_URL=https://gitcode.com/qq8864/juCang）
+  clone-panel        proj=（空）        open=True  guard=1
+  project-url-guard  proj=（空）        note=这是 Git 地址，不是本地工程目录——点「开始克隆」（或按回车）…
+  clone-start        busy=True          note=正在克隆… 0s（depth=1）
+  clone-running      busy=True          note=正在克隆… 1s（depth=1，克隆到 工作区根；网络慢时可能要几十秒）
+  clone-ok           busy=False         target=C:\Users\yang\lingqu-workspaces\juCang
+                     note=已克隆到 …（像一个 Tauri 工程（有 src-tauri/））——已设为当前工程，现在可以去 ② 迁移画像点「重新扫描」
+  全程 errorCount=0；修前同一序列是 uiErr=3 + `ReferenceError: reportUi is not defined`
+```
+
+- 纯函数单测：`looksLikeGitUrl`（https/http/ssh/git/file/scp 六种形态 + 本地路径与 `C:\` 反例）、
+  `projectPathRejectReason`（空 / 地址 / 不存在 / 存在四档）、`shouldRestoreLastProject`（存在/不存在/空三档）。
+- **五道闸全绿**：`cjpm build` 0 warning ／ `cjpm test`（**TOTAL=360，FAILED=0，ERROR=0**）／
+  `cj-tauri check`（版本号变动后按 §4-11 跑了 `sync desktop` + `sync ohos`）／
+  `targets/desktop cjpm build` 0 warning ／ `cli cjpm build` 0 warning。
+
+- 「上次工程已被删」这条也做了端到端取证（把 `juCang-2` 删掉后重启）：
+
+  ```
+  projRestored=backend-missing
+  projRestoreSkipped=C:\Users\yang\lingqu-workspaces\juCang-2   ← 不再带回来
+  currentProject=C:\Users\yang\lingqu-workspaces\juCang
+  scanErr=（空） scanR=31 scanC1=100 scanTotal=82 errorCount=0
+  ```
+
+### 未验证
+
+- 鸿蒙 ArkWeb 侧未跑同一序列；克隆依赖本机 `git`（`LINGQU_GIT` 或 PATH），
+  **代理 / 网络受限环境未实测**（本次走的是公网直连，gitcode 有一次 redirect 警告）。
+- 顶栏「打开工程」用的 `pickDirectory` 本来就只依赖 `window.__CJ_TAURI__`（不碰内层符号），未受影响，但也没重测。
+
+## [0.39.47] - 2026-11-02
+
+**主题**：迁移报告补上**风险分级**——需求原文硬要求的一项此前整块缺失；顺带把「5 样本矩阵」改名归位。
+
+### 现象（用户对照原型图发现）
+
+> 对了下原型图，发现迁移报告里，漏了风险等级这一项，补上吧。这很重要，可以让用户知道当前虽然移植成功了，
+> 但还有哪些可能的潜在问题。
+
+### 根因
+
+`docs/需求.md` 原文写的是"输出结构化迁移报告，**支持风险分级**与断点续迁"，`docs/需求追踪.md` 的 C5
+也把"风险分级"列进去了，但代码里只有三段式（做了什么 / 没做什么 / 需要你做什么）——
+**`grep 风险 src/` 里没有任何实现**。三段式回答不了用户最关心的那句："既然成功了，还剩哪些坑？"
+
+### 处置
+
+| 面 | 改了什么 |
+|---|---|
+| 纯函数层（新） | `src/report/report.cj`：`RiskItem`（项/级别/影响面/处置）、`ReportRisk`（明细 + 各级计数 + `overallLevel()`）、`riskLevelLabel`、`riskSummaryLine`、`assessRisks(facts)` |
+| 判定口径 | 只用落档事实推级别：编译/装配/部署判定、清单三类（失败/未验证/平台限制）、签名两态、前端指纹、人工介入、依赖不可用、没跑的步骤；**没有落档的步骤只写"无法评估"，不当成"没问题"** |
+| 收数 | `src/report_feed.cj`：新增 build / hap / deploy / deps 四份落档的判定字段（`*Ran` 标记"跑过没有"，与"跑过没过"分开） |
+| 命令 | `t2h:report` 回投 `riskLevel / riskLabel / riskSummary / riskHigh / riskMid / riskLow / riskItems[]`；JSON 落档 `lingqu/report/v1` 增 `risk` 段（**新增字段**，不改 schema 名） |
+| 导出 | Markdown 与 HTML 都在**结论之后、三段之前**插入风险表（总体一句 + 四列表格 + 口径说明）；HTML 用 `lv-high/mid/low` 胶囊染色 |
+| 界面 | ⑦ 屏新增「风险分级」卡片（总体胶囊 + 四列表格），排在**三段式下面**；`ui_report` 增 `reportRisk / reportRiskLabel / reportRiskRows / reportRiskHi / reportRiskSum`（白名单两处一起加，§4-60） |
+| 探针 | 新增 `LINGQU_UI_PROBE=risk`：切 ⑦ → 真出一次报告 → 回投上面五个字段 |
+| 矩阵归位 | 用户指出"5 样本是验收要求，不是界面要求"：卡片从「5 样本迁移矩阵（T7-3）」**改名为「迁移矩阵」**，挪到**风险分级下面**；`t2h:batch` 与落档格式不变 |
+
+### 证据
+
+- **五道闸全绿**：`cjpm build`（0 warning）／`cjpm test`（**TOTAL=357，FAILED=0，ERROR=0**，新增 9 例）／
+  `cj-tauri check`（先按 §4-11 显式跑了 `sync desktop` + `sync ohos` 消掉骨架漂移）／
+  `targets/desktop cjpm build`（0 warning）／`cli cjpm build`（0 warning）。
+- **CLI 实跑**（`lingqu-cli report --path E:\test\rust\habit-tree`，真机验证过、可用率 100% 的样本）：
+
+  ```
+  riskLevel   = mid        riskLabel = 中
+  riskSummary = 总体：中（高 0 / 中 2 / 低 1，共 3 条）
+  conclusion  = habit-tree：8 步完成 8/8（100%），核心功能可用率 100%，0 处人工介入
+    [中] 1 项功能受平台限制（平台相关 API（5 处）按平台限制登记）
+    [中] 签名是 debug 态            → 「不能上架」（AGC 不接受 debug 证书）
+    [低] 10 个 crate 在 OHOS 不可用（共 453 个依赖）
+  ```
+
+  这就是本轮要的效果：**移植成功（100%）≠ 没有风险**——报告现在会把"还剩哪些坑"摊开，
+  而且每条都能追到一份落档（sign / verify / deps）。
+- **三份导出都带表**：`.lingqu/report/habit-tree.md`（`## 风险分级` + 四列 Markdown 表）、
+  `.html`（`<h2>风险分级</h2>` + `lv-mid / lv-low` 胶囊）、`.json` 的 `risk` 段
+  （`level=mid label=中 high=0 mid=2 low=1 items=3`）。
+- **界面探针**（`LINGQU_UI_PROBE=risk`，`LINGQU_REPORT_PATH=E:\test\rust\habit-tree`）：
+  `reportRisk=mid／reportRiskLabel=中／reportRiskRows=3／reportRiskHi=0／
+  reportOrder=risk<matrix／reportMatrixTitle=迁移矩阵／errorCount=0`——最后两条正是"矩阵在风险等级下面"
+  与"标题就叫迁移矩阵"的自动化断言（否则下次谁挪上去、改回旧名，没人发现）。
+
+### 未验证
+
+- 鸿蒙 ArkWeb 侧未跑同一序列（同以往各轮的边界）；真机 `ui_report` 只在 WebView2 侧采到。
+- release 签名态下风险表是否如预期只剩"平台限制/依赖"两类项，本机没有 release 材料，未实测。
+
+### 同批：文档口径对齐（无代码变更）
+
+- **进度口径对齐到 0.39.46**（`docs/进度记录.md` / `docs/需求追踪.md` / `docs/实施路线图.md`）：
+  - `进度记录.md` 的「一、现在到哪了」原停在 **0.29.0 / 183 例单测 / 四道闸 / 24 个命令**，与现状差约 10 个版本；
+    现改为 0.39.46 / **348 例单测（42 个 `*_test.cj`）** / **五道闸** / **36 个 `t2h:*`**，并把 P4–P8 状态、
+    A1 战果（2/5 样本真机可用率 100%）与当前瓶颈写进表和正文。
+  - `需求追踪.md`：A1 `未开始` → `进行中（2/5）`；M4 / M5 / M6 / M7 分别补齐为
+    「已实现已验证（release 态未验）/ 已实现已验证 / 进行中 / 进行中」；G8 单测数 114 → **348**；
+    C1 的 `R=20（fe4/api4）`更正为 `R=24（fe7/api5）`（`ui_report.scanKindRows` 实测）；
+    M3 的「出口判据 1 待 P5」更正为已由 0.14.0 取证，**只剩「规则命中率 ≥60%」没有统计口径**。
+  - `实施路线图.md`：抬头「当前进度（0.21.0）」→ **0.39.46**；总览表 P5/P6/P7/P8 状态与
+    T5-4/T5-6/T5-7 落地情况补齐；P5/P6/P7 三节各加「取证情况」；末节从「P5 的具体起手」
+    换成「P7 收尾与 P8 起手」；横切事项的门禁由四道闸改为五道闸。
+  - `会话交接.md`：按 `需求追踪.md` §五第 3 条（验收项变化须同步交接文档）加了「增量（0.39.12→0.39.46）」块，
+    并把「未完成」与「下一步（P5）」两节的过期抬头标明为历史记录（AGC 自动签名已结清原「下一步 1」）。
+
 ## [0.39.46] - 2026-11-02
 
 **主题**：AI 设置页的模型一项显示不对——**模型的显示名从来没渲染过**，「当前」也跟着含混。

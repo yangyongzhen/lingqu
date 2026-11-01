@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.46**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.55**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -259,6 +259,14 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 110 | 每次开窗都要重新选工程（左栏六项全「未开始」） | **"存下来的工程"必须真的用上，而且"存哪儿"要有证据**：`localStorage` 在本应用被拒（§4-107）⇒ 改读落档——`t2h:env.lastProject` 来自上一次 `t2h:ui_report` 的 `currentProject`，页面据此 `setCurrentProject` 并立刻刷徽标；`pickRestoreProject` 只兜底。断言 `projRestored=backend` + 探针 `restore`/`store`（0.39.44） |
 | 111 | 界面**一直显示旧状态**（页脚"已连接"、设置页"引擎缺失"），报告里 `cjhState=missing` 但引擎明明在跑 | **渲染函数的 DOM 依赖被别人清掉了**：历史回放 `chatBox().innerHTML=''` 把常驻的 `#aiHint` 一起冲掉，`renderStatus()` 每 5 秒写 `$('aiHint').style.display` 就抛 `Cannot read properties of null (reading 'style')`，整段状态渲染中断，异常又被 `.catch` 吞成 `missing`。判据：`cjhPollFail>0` / `cjhDiag` 里出现 TypeError / `aiHintOk≠1`。处置：清屏保住常驻节点 + `ensureAiHint()` 缺了就重建 + **查询失败报 `unknown` 不报 `missing`**（0.39.45） |
 | 112 | AI 设置页「模型」只显示 id、看不到模型名，「当前」还紧贴在 id 后面 | **字段渲染漏了 `name`，判据也取错来源**：`/api/models` 返回 `{id,name,baseUrl}`，界面只拼 `m.id` ⇒ 模型名从来没显示、「当前」在 DOM 里成了 `id当前`；而「当前」取 `/api/models.current`，真正决定行为的却是 `settings.model`。处置：`name` 主标签 + `id` 副标签（对齐 cjh UI 的 `m.name \|\| m.id`）；「当前」以配置为准；配置/列表/本会话（`switch_model` 的 `ack.model`）不一致要亮提示；保存后补发 `switch_model` 才对本回合生效。**通用**：别人返回的字段先**对着 schema 列全**再决定渲染哪几个；"当前"必须写清是哪个来源的当前。断言 `ui_report.settingsDump`（0.39.46） |
+| 113 | 一键迁移跑到一半**静默停住**：界面只有「回合结束 · 轮次 41 · 工具 54 · 157.5s」，不说为什么停，也不说哪条命令挂了 | 两件事叠在一起：① **逐字节 `String.fromUtf8([bytes[i]])` 是炸弹**——`stripAnsi` 剥 ANSI 时这么写，而中文/GBK 的一个字节本身不是合法 UTF-8，于是 `t2h:hap` 立刻抛 `IllegalArgumentException: Invalid utf8 byte sequence`、落档写成「HAP 0 字节」；② 那一轮 cjh 的 `max_iterations: 40` 刚好用完（`turn_done` 报 rounds=41），界面又只写"回合结束"。处置：命令行输出转文本**一律走 `lenientUtf8`**（非法字节换 `?`，永不抛；`compiler/hap.cj`），`stripAnsi` 改成攒 bytes 再整体解；界面在 `turn_done` 时**必须解释为什么停**（轮次预算 / 长度上限 / 回合异常 / 模型自己停了）并**贴出最后一条工具报错**（`CJ.lastToolErr`，回合开始清零），`ui_report` 增 `turnEndReason / lastToolErr / lastToolErrName`（0.39.51） |
+| 114 | hvigor 报 `00308018 Unknown Error`，看着像签名或代码问题，agent 会反复试签名、重装依赖 | 日志里真正的 trace 是 `cargo tauri ohos dev-eco-studio-script` → `thread 'main' panicked: failed to read missing addr file %TEMP%\<包名>-server-addr` → **tauri-cli 自己 panic**。那条钩子（`gen/ohos/entry/hvigorfile.ts` 的 `tauriPlugin`）是给 `tauri ohos dev`（有 dev server）准备的，**非 dev 场景必然失败**，与签名/源码无关。处置：让 hvigorfile 不跑该钩子（本工具 `t2h:hap` 自己把 `lib<模块>.so` 装配进 `libs/arm64-v8a`，不需要它编 Rust），或先 `cargo tauri ohos dev` 起 dev server。已加指纹 **FP-020** + `hapSignHint`；**0.39.53 起由规则 R2-PORT-015 自动注掉那一行**（带 `hvigorfile.ts.bak` 备份、进 `revertPairs()` 可回滚）。实测 juCang：`t2h:hap` 从 `built=false / 0 字节 / 00308018` 变成 **`built=true / 15,338,218 字节`** |
+| 115 | 想用 `POST /api/settings` 把 cjh 的轮次预算抬高（`max_iterations`），写完一查**没变**，只能回落成"改配置文件 + 提示需重启引擎" | **同一个设置有两种拼写**：`~/.cjh/settings.json` 里是 `max_iterations`（snake），而 `GET /api/settings` 回的是 `maxIterations`（camel）。只认一种 ⇒ live 路径读到 `-1`、误判"读不到"、白白回落。处置：`maxIterKeyOf()` 两种都认（`ensureMaxIterations` 插入新键时仍写 snake，与文件 schema 一致），单测钉住两种写法；**判据：凡"读别人 JSON 的某个字段"，先把 API 与文件两种形态都摸一遍**（§4-57 是同族：字段名/形态先对账再取值）（0.39.53） |
+| 116 | 想给"经验去重键"做小写归一，写成逐字节 `String.fromUtf8([b])` 再拼字符串 → 中文标题**必抛** `IllegalArgumentException: Invalid utf8 byte sequence` | **一个字节单独拎出来常常不是合法 UTF-8**（中文占 3 字节）。凡"逐字节变换后再拼回字符串"，都要**先攒 `ArrayList<Byte>`、最后 `String.fromUtf8(bytes.toArray())` 解一次**——与 §4-113（`stripAnsi`）、§4-62（Byte 插值）同族；遇到"处理中文文本崩"先想这条（0.39.55） |
+| 117 | 用 `JsonObject.toJsonString()` 写 JSONL 台账，写完**自己都读不回来**（同签名累计次数永远 1） | `stdx.encoding.json` 的 `toJsonString()` 是**美化输出**（一条记录摊成 4 行、冒号后带空格 `"sig": "x"`）⇒「一条一行 + 按行计数」的前提直接不成立。JSONL 要**手拼紧凑行**（值仍用 `JsonString(x).toJsonString()` 保证转义），读侧对两种形态都容错；**判据：凡"要按行解析 JSON 文件"，先看一眼盘上那行到底长什么样**（0.39.55） |
+| 118 | 一行里塞多个字段（`- 次数：2　工程：p　时间：t`），取值取到**整行剩余部分** → `project` 变成 `juCang　时间：2026-11-02 …` | 多字段行的分隔符是**全角空格 `　`**（中文排版习惯）：`indexOf(键)` 之后必须再按 `　` 截断，不能"取到行尾"。写这种"人可读 + 机器可解"的落档格式，字段间只用一个分隔符，并在解析器里把它显式写出来（0.39.55） |
+| 119 | **仓颉程序在 Windows 上接不了非 ASCII 的 argv**：`main.exe --help 中文` 直接抛 `IllegalArgumentException: Invalid unicode scalar value`（Git-Bash 传参时是 `Invalid utf8 byte sequence`），cmd / PowerShell / bash 三种调用方一样，`chcp 65001` 也没用 | 异常在 `main(args: Array<String>)` **之前**就抛 ⇒ 不是业务代码，是运行时解 argv 的口径问题。**判据：凡是"要传给 lingqu-cli 的内容可能是中文"（经验正文 / 中文标题 / 中文工程路径），一律走文件，不走参数**——内容写 UTF-8 JSON/文本文件，命令收 `--body <文件>`（本项目 `t2h:notes` 即如此，`parseLessonBody` 宽容解析）。给 agent 的任务书里**必须写清这条**，否则它会把中文塞进参数、撞一个看不懂的异常后反复重试烧轮次。Linux 未验（那边 argv 是字节流，大概率没这问题）（0.39.55） |
+
 ---
 
 ## 5. 文档与提交
@@ -270,6 +278,9 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 3. `docs/需求追踪.md` —— 涉及验收项时更新状态
 4. `docs/会话交接.md` —— 会话结束/换机器时更新（元信息、未完成、怎么接）
 5. 踩了新坑 → 同时进 §4 与 `docs/开发环境.md`
+6. **对外门面**（`README.md` / `CONTRIBUTING.md` / `SECURITY.md`）——**能力、命令数、单测数、门禁数、验证样本数一变就要改**；
+   README 里的数字不许留旧版（界面与 README 都不许出现"看起来像数据的假值"，同 §4-94 的口径）
+7. **经验/指纹/技能这条链路的改动** → 同步 `docs/AI自进化飞轮.md`（结构、候选门槛、闸门位置一旦变就要写清）
 
 **提交信息**：`<type>(<scope>): <一句话>`，正文写「现象 → 根因 → 处置」，行为变更附证据。
 type 用 `feat` / `fix` / `docs` / `refactor` / `test` / `chore`。
