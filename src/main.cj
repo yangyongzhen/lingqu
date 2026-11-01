@@ -1412,6 +1412,8 @@ public class UiReportCommand <: CommandHandler {
         o.put("cjhPollLast", JsonString(argStr(args, "cjhPollLast", "")))
         // 提示卡节点是否还在（0.39.45）：被清屏冲掉会让状态渲染整段抛异常
         o.put("aiHintOk", JsonInt(argInt(args, "aiHintOk", 0)))
+        // 设置面板回读值（0.39.46）："界面上到底显示了什么"，与 cjh /api/settings 的真值对账
+        o.put("settingsDump", JsonString(argStr(args, "settingsDump", "")))
         o.put("frames", JsonInt(argInt(args, "frames", 0)))
         o.put("toolCards", JsonInt(argInt(args, "toolCards", 0)))
         // 工具卡片折叠证据（0.39.37）：open=当前展开几张（成功调用应 0，失败自动展开），

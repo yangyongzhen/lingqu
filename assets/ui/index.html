@@ -496,10 +496,13 @@ input.setinput:focus,select.setinput:focus{outline:none;border-color:var(--acc)}
   background:var(--panel2);cursor:pointer;font-size:12px}
 .modelitem:hover{border-color:var(--acc)}
 .modelitem.on{border-color:var(--acc);background:var(--accsoft)}
-.modelitem .id{font-family:var(--mono);font-size:11.5px}
-.modelitem .nm{color:var(--dim);font-size:11px;margin-left:auto}
+.modelitem .id{font-family:var(--mono);font-size:10.5px;color:var(--dim2);margin-left:auto}
+.modelitem .nm{font-size:12px;color:var(--fg)}
 .setactions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
 .sethint{font-size:11px;color:var(--dim2);line-height:1.6;margin-top:2px}
+/* 设置面板里的"说清楚"提示行（0.39.46）：模型/配置不一致时不能静默 */
+.sethint.warnbox{color:var(--warn);border:1px solid rgba(255,184,107,.35);background:var(--warnsoft);
+  border-radius:8px;padding:6px 9px;margin:2px 0 6px}
 
 /* ============ 当前工程条（0.39.25） ============
    手敲路径**保留**（老习惯不能断），另外补两条更省事的路：
@@ -2852,7 +2855,24 @@ withBridge(function(tauri){
   }
   $('setDeploy').onclick = deploy;
 
-  /* ===== 模型列表 ===== */
+  /* ===== 模型列表 =====
+   * 0.39.46 修：以前只渲染 `m.id`，**模型的显示名（name）从来没显示**——
+   * cjh `/api/models` 返回的是 `{id:"gpt-4o-mini", name:"GPT-4o mini", baseUrl:"..."}`，
+   * 界面上却只有 id，而且「当前」胶囊直接跟在 id 后面（DOM 里是 `gpt-4o-mini当前`），
+   * 看着就像"模型名是 gpt-4o-mini当前"。现在：id（等宽）+ name（淡色右对齐）+ 当前胶囊。
+   * 「当前」的判据也改成**以配置为准**：`/api/settings.model` 优先、`/api/models.current` 兜底，
+   * 两者不一致时明说（用户看到的"当前"必须与真正在用的模型对得上）。
+   */
+  var SETTINGS_CACHE = null;
+
+  function modelTitle(m){
+    var bits = [];
+    if (m.name) { bits.push(String(m.name)); }
+    if (m.baseUrl) { bits.push('baseUrl: ' + String(m.baseUrl)); }
+    if (typeof m.temperature === 'number') { bits.push('temperature: ' + m.temperature); }
+    return bits.join('\n');
+  }
+
   function loadModels(){
     var box = $('modelList');
     box.innerHTML = '<span class="muted">加载中…</span>';
@@ -2862,19 +2882,41 @@ withBridge(function(tauri){
         box.innerHTML = '<span class="muted">' + esc(window.__modelErr) + '</span>'; return;
       }
       var d = r.data || {};
-      var cur = d.current || '';
+      var apiCur = String(d.current || '');
+      var cfgCur = (SETTINGS_CACHE && SETTINGS_CACHE.model) ? String(SETTINGS_CACHE.model) : '';
+      var cur = cfgCur || apiCur;                 // 配置优先：真正在用的是 settings.model
       var ms = d.models || [];
       window.__modelErr = ms.length ? '' : ('empty-list current=' + cur);
       if (!ms.length) { box.innerHTML = '<span class="muted">cjh 没返回模型列表</span>'; return; }
-      box.innerHTML = '';
+      var html = '';
+      if (apiCur && cfgCur && apiCur !== cfgCur) {
+        html += '<div class="sethint warnbox">列表里的「当前」是 cjh 报的 ' + esc(apiCur)
+          + '，但配置里写的是 ' + esc(cfgCur) + '；界面上按配置标记。</div>';
+      }
+      if (cur && !ms.some(function(m){ return String(m.id) === cur; })) {
+        html += '<div class="sethint warnbox">配置里的模型 ' + esc(cur) + ' 不在下面的列表里。</div>';
+      }
+      var sm = (typeof CJ !== 'undefined' && CJ.sessionModel) ? String(CJ.sessionModel) : '';
+      if (sm && sm !== cur) {
+        html += '<div class="sethint warnbox">本会话已切到 ' + esc(sm) + '（会话级覆盖，不改配置）；'
+          + '配置里写的仍是 ' + esc(cur || '（空）') + '。</div>';
+      }
+      box.innerHTML = html;
       ms.forEach(function(m){
+        var isCur = (String(m.id) === cur);
+        var isSess = (!!sm && String(m.id) === sm);
         var el = document.createElement('div');
-        el.className = 'modelitem' + (m.id === cur ? ' on' : '');
-        el.innerHTML = '<span class="id">' + esc(m.id) + '</span>' + (m.id === cur ? '<span class="pill ok" style="margin-left:auto">当前</span>' : '');
+        el.className = 'modelitem' + (isCur ? ' on' : '');
+        el.innerHTML = '<span class="nm">' + esc(m.name || m.id) + '</span>'
+          + (m.name ? ('<span class="id">' + esc(m.id) + '</span>') : '')
+          + (isSess ? '<span class="pill info">本会话</span>' : '')
+          + (isCur ? '<span class="pill ok">当前</span>' : '');
+        var ti = modelTitle(m);
+        if (ti) { el.title = ti; }
         el.onclick = function(){
           // 点一下就切：等价于把模型名填进表单再保存（cjh 侧同一条 PATCH 语义）
           $('setModel').value = m.id;
-          saveSettings([m.id === cur ? '（未变化）' : '切换模型']);
+          saveSettings([isCur ? '（未变化）' : '切换模型']);
         };
         box.appendChild(el);
       });
@@ -2889,13 +2931,16 @@ withBridge(function(tauri){
     invoke('t2h:cjh_settings').then(function(r){
       if (!r || !r.ok) { $('setKeyHint').textContent = '读取配置失败：' + ((r && r.error) || ''); return; }
       var c = r.data || {};
+      SETTINGS_CACHE = c;                        // 「当前模型」以这份配置为准（0.39.46）
       $('setBase').value = c.baseUrl || '';
       $('setModel').value = c.model || '';
-      $('setTemp').value = (typeof c.temperature === 'number' && c.temperature > 0) ? c.temperature : '';
+      // 温度 0 也是合法值（贪心采样），以前 `> 0` 会把它显示成空
+      $('setTemp').value = (typeof c.temperature === 'number') ? c.temperature : '';
       $('setMaxTok').value = c.maxTokens || '';
       $('setMaxIter').value = c.maxIterations || '';
       $('setKey').value = '';   // 密钥永不回填
       $('setKeyHint').textContent = c.apiKey ? ('当前已保存：' + c.apiKey + '（留空则不修改）') : '当前：未设置';
+      loadModels();              // 配置到手后重画模型列表：让「当前」与配置一致
     }).catch(function(e){ $('setKeyHint').textContent = '读取配置失败：' + esc(e.message); });
   }
   $('setRefresh').onclick = function(){ loadSettings(); loadModels(); loadStatus(); };
@@ -2922,6 +2967,13 @@ withBridge(function(tauri){
       $('setNote').textContent = '已保存 ' + (r.savedFields || 0) + ' 个字段并即时生效（留空的字段没动）。' +
         (reason ? '（' + reason.join('、') + '）' : '');
       $('setKey').value = '';
+      // 配置写的是"以后都用这个模型"；**正在跑的会话**要另发一条 switch_model 才会立刻换
+      // （cjh：帧字段 > 会话级覆盖 > 配置）。以前只写配置，界面说"已生效"而本轮仍跑旧模型（0.39.46）
+      var wantModel = String($('setModel').value || '').trim();
+      if (wantModel && (typeof CJ !== 'undefined') && CJ.up && wantModel !== String(CJ.sessionModel || '')) {
+        wsSend({ type: 'switch_model', model: wantModel });
+        $('setNote').textContent += '　已向本会话下发 switch_model（' + wantModel + '）。';
+      }
       loadSettings(); loadModels();
     }).catch(function(e){
       btn.disabled = false; btn.textContent = '保存并生效';
@@ -2950,7 +3002,9 @@ withBridge(function(tauri){
     acc: '', curBubble: null, flushTimer: null, curApproval: null,
     // 中止来源留痕（0.39.8）：0.39.7 端到端跑出现「agent 被 interrupt 但不知谁按的」，
     // 现在每处 abort 都标来源，随 ui_report 回投，别再靠猜（是哪个入口按的）
-    abortSource: '', abortAt: 0
+    abortSource: '', abortAt: 0,
+    // 本会话实际在用的模型（来自 switch_model 的 ack 回执）；与配置里的 model 是两回事（0.39.46）
+    sessionModel: ''
   };
 
   function wsUrl() { return 'ws://127.0.0.1:' + (CJ.port || 8765) + '/ws'; }
@@ -4221,6 +4275,12 @@ withBridge(function(tauri){
       finishTurn('已取消（was_running=' + (m.was_running ? 'true' : 'false') + '）');
     } else if (t === 'ack') {
       var foot = $('txtFoot'); if (foot) { foot.textContent = 'ack: ' + (m.action || ''); }
+      // 会话级切模型的回执带 model / base_url（cjh src/web/protocol.cj）：
+      // 记下来，"本会话在用的模型"与"配置里写的模型"才分得清（0.39.46）
+      if (String(m.action || '') === 'switch_model' && m.model) {
+        CJ.sessionModel = String(m.model);
+        loadModels();
+      }
     } else if (t === 'history_messages') {
       // 断线重连后 cjh 会把**整个会话历史**推回来（0.39.33）。
       // 以前这里只插一句"已恢复历史会话（N 条）"——用户看到的是半截回复 + 一句提示，
@@ -6469,6 +6529,38 @@ withBridge(function(tauri){
       cjhPollLast: (typeof CJ_POLL !== 'undefined') ? String(CJ_POLL.last || '') : '',
       // 提示卡节点是否还在（0.39.45）：历史回放清屏曾把它冲掉，导致状态渲染整段抛异常
       aiHintOk: (document.getElementById('aiHint') && document.getElementById('aiHintBody')) ? 1 : 0,
+      // 设置面板回读值（0.39.46）：把「界面上到底显示了什么」原样回投，与 cjh /api/settings 的真值对账——
+      // 只看 `modelItems` 那种计数发现不了"字段挂错了""掩码显示成别的东西"这类问题。
+      settingsDump: (function(){
+        if (!document.getElementById('aiSettings')) { return ''; }
+        function v(id){ var el = document.getElementById(id); return el ? String(el.value === undefined ? '' : el.value) : '<missing>'; }
+        function t(id){ var el = document.getElementById(id); return el ? String(el.textContent || '').trim() : '<missing>'; }
+        var ids = [];
+        var box = document.getElementById('modelList');
+        var curMarked = '';
+        if (box) {
+          var items = box.querySelectorAll('.modelitem');
+          for (var i = 0; i < items.length; i++) {
+            var idEl = items[i].querySelector('.id');
+            var nmEl = items[i].querySelector('.nm');
+            var isCur = items[i].classList.contains('on');
+            if (isCur && idEl) { curMarked = String(idEl.textContent || ''); }
+            ids.push({
+              id: idEl ? String(idEl.textContent || '') : '',
+              name: nmEl ? String(nmEl.textContent || '') : '',
+              cur: isCur
+            });
+          }
+        }
+        return JSON.stringify({
+          base: v('setBase'), key: v('setKey'), keyHint: t('setKeyHint'),
+          model: v('setModel'), temp: v('setTemp'), maxTok: v('setMaxTok'), maxIter: v('setMaxIter'),
+          state: t('setState'), endpoint: t('setEndpoint'),
+          models: ids, curMarked: curMarked, sessionModel: (typeof CJ !== 'undefined') ? String(CJ.sessionModel || '') : '',
+          warn: box ? String(box.textContent || '').indexOf('不在') >= 0 : false,
+          note: t('setNote').slice(0, 90)
+        });
+      })(),
       // P6 验证与报告（⑥ 屏真数据）
       verifyOk: VERIFY.ok === true,
       verifyRate: (typeof VERIFY.rate === "number") ? VERIFY.rate : -1,

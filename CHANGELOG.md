@@ -5,6 +5,61 @@
 
 ---
 
+## [0.39.46] - 2026-11-02
+
+**主题**：AI 设置页的模型一项显示不对——**模型的显示名从来没渲染过**，「当前」也跟着含混。
+
+### 现象（用户）
+
+> 在 AI 助手的设置页面，发现读回来的信息展示不正确……展示的模型和模型名是错误的，当前
+
+### 根因（先对账，再改）
+
+先用新加的 `ui_report.settingsDump` 把「界面上到底显示了什么」原样回投，与 cjh 真值逐项对账：
+
+| 项 | cjh `/api/settings` / `settings.json` | 面板显示 |
+|---|---|---|
+| baseUrl | `https://api.deepseek.com` | 一致 |
+| model | `gpt-4o-mini` | 一致 |
+| temperature / maxTokens / maxIterations | 0.7 / 16384 / 40 | 一致 |
+| apiKey | `sk-3****8ae4`（cjh 掩码） | 一致 |
+| 模型列表 | `[{id:"gpt-4o-mini", name:"GPT-4o mini"}, {id:"deepseek-chat", name:"DeepSeek V3"}]` | **只有 id，`name` 根本没渲染**，且「当前」胶囊在 DOM 里紧跟 id（`gpt-4o-mini当前`） |
+
+两处缺陷：① `loadModels()` 只输出 `m.id`，`.modelitem .nm` 的样式写了却从没用过——**模型名从来没显示**；
+② 「当前」取的是 `/api/models.current`，而真正决定行为的是 `settings.model`（两者不同时界面会撒谎）。
+
+### 处置
+
+- **列表项改成 `name` 主标签 + `id` 副标签**（对齐 cjh 自带 UI 的 `m.name || m.id`），「当前」胶囊独立成块不再粘在 id 上；
+- **「当前」以配置为准**：`settings.model` 优先、`/api/models.current` 兜底；两者不一致、或配置里的模型不在列表里，
+  都在列表上方亮一条 `warnbox` 说清，不静默；
+- **区分「配置」与「本会话」**：会话级 `switch_model` 的 `ack` 回执带 `model`，现在记进 `CJ.sessionModel`，
+  本会话切过就单独标「本会话」并提示"会话级覆盖、不改配置"；
+- **「保存并生效」真的生效到本会话**：写完配置后，若本会话模型与配置不同且通道在线，补发一条
+  `switch_model`（cjh 的优先级是「帧字段 > 会话级覆盖 > 配置」，只写配置对正在跑的回合不起作用）；
+- 温度 `0` 不再显示成空（0 是合法值：贪心采样）；
+- 新增 `ui_report.settingsDump`（字段值 + 模型列表的 id/name/是否当前 + 是否有提示行），
+  白名单两处一起加（§4-60）。
+
+### 证据
+
+```
+settingsDump = {
+  "base":"https://api.deepseek.com","model":"gpt-4o-mini","temp":"0.7",
+  "maxTok":"16384","maxIter":"40","state":"已连接",
+  "endpoint":"http://127.0.0.1:8765 ws://127.0.0.1:8765/ws",
+  "models":[{"id":"gpt-4o-mini","name":"GPT-4o mini","cur":true},
+            {"id":"deepseek-chat","name":"DeepSeek V3","cur":false}],
+  "curMarked":"gpt-4o-mini","sessionModel":"","warn":false
+}
+```
+`LINGQU_UI_PROBE=1`（打开设置并读 /api/models）→ `errorCount=0`；`cjpm test` TOTAL=348 FAILED:0。
+
+### 未验证
+
+- 「本会话」徽标与 `switch_model` 补发只在通道在线时走通逻辑，**没有进行真实的模型切换实测**
+  （会消耗用户的 API 额度并改变其运行中的模型）；鸿蒙 ArkWeb 侧未跑同一序列。
+
 ## [0.39.45] - 2026-11-02
 
 **主题**：查清「页脚已连接、设置页却说引擎缺失」——不是引擎没了，是**状态渲染被一个 null 打断了**。
