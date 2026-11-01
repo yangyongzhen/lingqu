@@ -196,15 +196,22 @@ public func randomHex32(): String {
     return toHexLower(randomBytes(16))
 }
 
-/** 打开浏览器（Windows 用 `cmd /c start`，其它平台 xdg-open / open）；失败不致命，调用方已打印 URL */
+/**
+ * 打开浏览器。
+ *
+ * **别用 `cmd /c start "" <url>`**：登录 URL 里带 `&`（`port=…&appid=1009&code=…`），
+ * cmd 会把 `&` 当命令分隔符 → 浏览器只拿到 `…?port=21570`，后面几段被当成命令执行
+ * （实测报 `'appid' is not recognized …`，用户在网页上看到的就是个残缺链接的失败页）。
+ *
+ * 改用 `rundll32 url.dll,FileProtocolHandler`：它不经过 cmd 的命令解析，URL 原样交给系统。
+ * 其它平台仍用 `xdg-open` / `open`（这两个本身按 argv 收参，没有 shell 解析问题）。
+ */
 public func openUrlInBrowser(url: String): String {
     var cmd = ""
     var args = ArrayList<String>()
     if (cfgOsName() == "windows") {
-        cmd = "cmd"
-        args.add("/c")
-        args.add("start")
-        args.add("")
+        cmd = "rundll32"
+        args.add("url.dll,FileProtocolHandler")
         args.add(url)
     } else {
         cmd = "xdg-open"

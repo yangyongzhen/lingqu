@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.16**（2026-11-02），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.17**（2026-11-02），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -230,7 +230,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 77 | 明明能秒级判定的事，却让子进程跑完分钟级才报错（`t2h:hap` 白等 hvigor 三分钟只为拿一句 `00303074`） | **能前置的判定就前置**：`hvigor assembleHap` 之前先做签名预检（`judgeSignPreflight`：包名不一致 → 拦；材料缺文件 → 只提示；没配签名 → 不拦），把"必然失败"在 1 秒内说清并落进闸门。agent 的轮次预算稀缺（ADR D-015），工具的价值不只是"正确"，还有"少烧时间" |
 | 78 | 以为仓颉能直接做 AES-GCM（写口令密文、与 hvigor 互操作时）→ 编译期 `undeclared identifier 'AES'`，或退而用 `SM4(OperationMode.GCM, …)` 运行期抛 `CryptoException: Encrypt failed due to create tag error` | **仓颉 std / stdx 1.0.5.1 没有 AES**：`stdx.crypto.crypto` 只有 `SM4`/`SecureRandom`/`OperationMode`/`PaddingMode`，标准库 `std.crypto.cipher` 只有 `BlockCipher` **接口**；SM4 的 GCM 在本机不可用（CBC/ECB/CTR 可用）。需要 AES 就自己实现（本项目 `src/compiler/aes_gcm.cj`，用 NIST SP 800-38D 向量 + 本机 Node/OpenSSL 互证），或改用不需要 AES 的方案。别指望 KB 里的写法一定存在——**KB 给形状，编译给真相** |
 | 79 | 照知识库写 `SecureRandom().nextBytes(n)` 想拿到 n 字节随机数 → `mismatched types: expected 'Array<UInt8>', found 'Int64'` | `nextBytes` 是**填缓冲区**：先 `let buf = Array<Byte>(n, repeat: 0)`，再 `SecureRandom().nextBytes(buf)`，随后用 `buf`。VB 里同类"给长度返回数组"的语义在这里不成立 |
-
+| 80 | 用 `cmd /c start "" <url>` 打开浏览器，用户却在网页侧登录失败 | **URL 里的 `&` 被 cmd 当命令分隔符**：`…apply?port=21570&appid=1009&code=…` 只会打开 `…?port=21570`，其余几段被当命令执行（日志里是 `'appid' is not recognized …`）。Windows 上打开 URL 用 **`rundll32 url.dll,FileProtocolHandler <url>`**（不经 shell 解析）；`xdg-open`/`open` 按 argv 收参没这问题。同理：任何**带 `&`/`%`/`^` 的参数**都别交给 `cmd /c`——要么绕开 shell，要么自己加引号并验证 |
 ---
 
 ## 5. 文档与提交

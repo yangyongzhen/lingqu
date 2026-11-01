@@ -142,3 +142,16 @@ public func testLoginPurePartsFromModule(): Unit {
     @Assert(line.contains("我的团队"), true)
     @Assert(line.contains("token"), false)             // 摘要里绝不能出现 token 字样
 }
+
+// 0.39.17：登录 URL 含 `&`，打开浏览器时**不能经过 shell 解析**
+// （实测踩到：`cmd /c start "" <url>` 把 `&appid=...` 当命令执行，浏览器只拿到截断地址）
+@Test
+public func testLoginUrlCarriesAmpersands(): Unit {
+    let u = oauthLoginUrl(21570, "e02979284c2f35434ea60f19eabd8bc5")
+    // 三个参数必须都在（少一个就不是能用的登录链接）
+    @Assert(u.contains("?port=21570&"), true)
+    @Assert(u.contains("&appid=1009&"), true)
+    @Assert(u.contains("&code=e02979284c2f35434ea60f19eabd8bc5"), true)
+    // 提醒未来改这段代码的人：url 里带 & 就绝不能交给 shell 解析
+    @Assert(u.split("&", -1).size >= 3, true)
+}

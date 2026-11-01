@@ -5,6 +5,32 @@
 
 ---
 
+## [0.39.17] - 2026-11-02
+
+**主题**：修掉「登录链接被 shell 拆开」这个真 bug——它就是用户"网页登录失败"的直接原因。
+
+### 现象与根因
+
+用户点登录链接后网页侧失败。查日志发现浏览器**只拿到了截断的地址**：
+
+    openUrlInBrowser → `cmd /c start "" <url>`
+    'appid' is not recognized as an internal or external command,
+    'code' is not recognized as an internal or external command,
+
+登录 URL 是 `…/apply?port=21570&appid=1009&code=<32位hex>`——`cmd` 把 **`&` 当命令分隔符**，
+于是 `start` 只打开 `…?port=21570`，后面几段被当作命令执行。用户看到的是一个残缺链接的失败页。
+
+### Fixed
+
+- `openUrlInBrowser` 在 Windows 上改用 **`rundll32 url.dll,FileProtocolHandler <url>`**：
+  不经过 cmd 的命令解析，URL 原样交给系统；其它平台仍用 `xdg-open` / `open`（按 argv 收参，无此问题）。
+- 新增断言把这件事钉住（`testLoginUrlCarriesAmpersands`）：登录 URL 必须同时含
+  `?port=<n>&`、`&appid=1009&`、`&code=<hex>` 三段——将来谁改拼装逻辑，少一段就红。
+
+### 说明（仍未验证）
+
+真实账号授权仍未完成（本轮结束时重新起了一次登录，链接已给用户）。
+`m3u8dl-tauri` 的 `signed=true` 尚未发生。
 ## [0.39.16] - 2026-11-02
 
 **主题**：**证明我们的 AesGcmKit 口令密文 hvigor 真能解开**——这是"全新生成签名材料"路上最后一个
