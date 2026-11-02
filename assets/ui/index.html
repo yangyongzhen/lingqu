@@ -4661,10 +4661,14 @@ withBridge(function(tauri){
       } else if (CJ.connecting) {
         foot.textContent = '连接中…（第 ' + (((CJ.reconnects || 0) + 1)) + ' 次）';
       } else if (CJ.retry) {
-        foot.textContent = '未连接 · 准备第 ' + (((CJ.reconnects || 0) + 1)) + ' 次重连';
+        foot.textContent = '未连接 · 准备第 ' + (((CJ.reconnects || 0) + 1)) + ' 次重连'
+          + (CJ.wsErr ? ('（上次：' + CJ.wsErr.slice(0, 60) + '）') : '');
       } else {
         foot.textContent = '未连接（等引擎就绪自动连）';
       }
+      // 悬停能看到插件原话——"连不上"三个字没法排查（cjnote 同款教训）
+      if (CJ.wsErr) { foot.title = '上次连接失败：' + CJ.wsErr + '\n引擎健康检查：' + (CJ_STATUS && CJ_STATUS.state || '?'); }
+      else { foot.title = '对话通道：' + wsUrl() + '\n引擎健康检查：' + (CJ_STATUS && CJ_STATUS.state || '?'); }
     }
   }
 
@@ -4684,10 +4688,33 @@ withBridge(function(tauri){
   function wsConnect() {
     if (CJ.up || CJ.connecting || !CJ.port) return;
     CJ.connecting = true;
+    CJ.connectAt = Date.now();
+    CJ.connectTries = (CJ.connectTries || 0) + 1;
     renderWsState();
-    invoke('ws:connect', { url: wsUrl() }).catch(function(e){
+    // ⚠ 0.39.65（用户实测："网页能打开 8765，软件却说未连接"；"这块处理没有 cjnote 稳"）：
+    //   旧实现只等 `ws:state` 事件来置 `CJ.up`，**invoke 成功不代表事件会到**——
+    //   这条链上一个事件都没来（ui_report: wsEventText 空、frames 0），于是：
+    //   invoke 已 resolve → 没人改状态 → `CJ.connecting` 永远是 true → 之后每次 renderStatus
+    //   调 wsConnect 都被 `CJ.connecting` 挡回去 ⇒ **永久"未连接"，且再也不重试**。
+    //   cjnote 的做法是：**`invoke('ws:connect')` resolve 就当连上**（事件只用来发现断线）。
+    //   这里照它改：以 invoke 的成败为准，事件继续作为"掉线"的证据。
+    invoke('ws:connect', { url: wsUrl() }).then(function(){
+      CJ.up = true;
       CJ.connecting = false;
-      CJ.lastError = 'ws connect: ' + (e && e.message ? e.message : e);
+      CJ.retry = 0;
+      CJ.wsErr = '';
+      CJ.connectMs = Date.now() - (CJ.connectAt || Date.now());
+      noteWsEvent('conn', '#' + (CJ.reconnects || 0) + ' ' + CJ.connectMs + 'ms');
+      renderWsState();
+      // 连上后接回原会话（避免每次断线都另起一个）
+      if (CJ.session) { wsSend({ type: 'resume_session', session_id: CJ.session }); }
+    }).catch(function(e){
+      CJ.connecting = false;
+      // 真实原因必须留下来（cjnote 同样把插件原话存下来）：
+      // `ws: url must start with ws://" / "host is outside the authorized scope" / "connect failed: …"
+      CJ.wsErr = String(e && e.message ? e.message : e);
+      CJ.lastError = 'ws connect: ' + CJ.wsErr;
+      noteWsEvent('fail', CJ.wsErr.slice(0, 60));
       renderWsState();
       scheduleReconnect();
     });
@@ -6957,6 +6984,11 @@ withBridge(function(tauri){
       modelItems: 0,
       modelError: window.__modelErr || '',
       wsState: CJ.up ? 'connected' : (CJ.connecting ? 'connecting' : 'closed'),
+      // 连接失败的原话（0.39.65）：以前只有 connected/closed 两态，连不上时界面与报告都拿不到原因，
+      // 只能看着"未连接"干瞪眼（用户实测：网页能开 8765、软件说未连接）
+      wsErr: String(CJ.wsErr || ''),
+      wsConnectTries: CJ.connectTries || 0,
+      wsConnectMs: (typeof CJ.connectMs === 'number') ? CJ.connectMs : -1,
       frames: CJ.frames,
       toolCards: CJ.toolCards,
       // 工具卡片折叠（0.39.37）：成功的工具调用不该占版面，但输出不能丢
@@ -7112,8 +7144,7 @@ withBridge(function(tauri){
       // 行为轨迹行数（0.39.0：AI 对工程做了什么，落 <工程>/.lingqu/agent/trace.jsonl）
       agentTraceLines: (typeof AIP.traceLines === 'number') ? AIP.traceLines : 0,
       // WS 发送可观测（0.37.0 的教训：发送失败以前是静默的，会把"没发出去"误判成"cjh 没回"）
-      wsSendFail: (typeof CJ.sendFail === 'number') ? CJ.sendFail : 0,
-      wsLastSendErr: CJ.lastSendErr || '',
+      wsSendFail: (typeof CJ.sendFail === 'number') ? CJ.sendFail : 0,      wsLastSendErr: CJ.lastSendErr || '',
       // 出站帧体检（0.39.35）：字节数 / 类型 / 洗掉过多少次孤立代理项（非法 UTF-8 的来源）
       wsSendCount: (typeof CJ.sendCount === 'number') ? CJ.sendCount : 0,
       wsLastSendBytes: (typeof CJ.lastSendBytes === 'number') ? CJ.lastSendBytes : 0,
@@ -7975,24 +8006,39 @@ withBridge(function(tauri){
       return;
     }
     setTimeout(function(){ openSettings(); }, 1200);
-    // WS 通道自检：连上就发一条真实提问，靠 frames/delta/replyPreview 断言"通道真的通了"
-    setTimeout(function(){
-      if (!CJ.up) return;
-      if (mode === 'auto' || mode === 'ai') { return; }   // 这两个模式自己安排提问时机
-      if (mode === 'approval') {
-        // 触发 cjh 的危险操作审批（approval_request → 卡片 → 我们不作答，等它超时按拒绝收场）
-        $('aiInput').value = '请用 bash 工具执行这条命令：rm -rf /tmp/lingqu-probe-approval';
-      } else if (mode === 'md') {
-        // Markdown 渲染自检：要求模型用 markdown 回一段（标题 + 列表 + 表格 + 代码块），
-        // 这样 ui_report 的 mdBlocks/mdCodeCopy 才有真实版面证据（不是"看起来像渲染了"）
-        $('aiInput').value = '请只用 markdown 回复，不要额外解释：给一个二级标题「构建步骤」、'
-          + '一个三项的有序列表、一个两列两行的表格（命令/作用），'
-          + '最后给一个 javascript 代码块（里面有 var 声明、一个字符串、一个数字）。';
-      } else {
-        $('aiInput').value = '只回复两个字：收到';
-      }
-      sendChat();
-    }, 2000);
+    // WS 通道自检：连上就发一条真实提问，靠 frames/delta/replyPreview 断言"通道真的通了"。
+    // 0.39.65：**不能只等 2 秒**——cjh 冷启动 + 首次健康检查经常要 10~20 秒（实测），
+    // 固定 2 秒就发，等于在"还没连上"的时候发，探针永远拿不到 frames（把真问题掩盖成假失败）。
+    // 改成：等 `CJ.up` 真连上再发，最多等 40 秒；连不上就回投 ws-fail（带插件原话）。
+    (function waitWsThenSend(){
+      var waited = 0;
+      var iv = setInterval(function(){
+        waited += 500;
+        if (CJ.up) {
+          clearInterval(iv);
+          if (mode === 'auto' || mode === 'ai') { return; }   // 这两个模式自己安排提问时机
+          if (mode === 'approval') {
+            // 触发 cjh 的危险操作审批（approval_request → 卡片 → 我们不作答，等它超时按拒绝收场）
+            $('aiInput').value = '请用 bash 工具执行这条命令：rm -rf /tmp/lingqu-probe-approval';
+          } else if (mode === 'md') {
+            // Markdown 渲染自检：要求模型用 markdown 回一段（标题 + 列表 + 表格 + 代码块）
+            $('aiInput').value = '请只用 markdown 回复，不要额外解释：给一个二级标题「构建步骤」、'
+              + '一个三项的有序列表、一个两列两行的表格（命令/作用），'
+              + '最后给一个 javascript 代码块（里面有 var 声明、一个字符串、一个数字）。';
+          } else {
+            $('aiInput').value = '只回复两个字：收到';
+          }
+          window.__wsReadyMs = waited;
+          sendChat();
+          return;
+        }
+        if (waited >= 40000) {
+          clearInterval(iv);
+          window.__wsReadyMs = -1;
+          reportUi('probe-ws-fail');
+        }
+      }, 500);
+    })();
     setTimeout(function(){ showSettings(false); applyAiHidden(true); }, 3200);
     setTimeout(function(){ applyAiHidden(false); }, 4200);
     // ④ 一键执行自检（不依赖模型输出，确定性地造一条带建议的回复再点它）：

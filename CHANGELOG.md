@@ -5,6 +5,50 @@
 
 ---
 
+## [0.39.65] - 2026-11-02
+
+**主题**：**「浏览器能打开 8765、应用却说未连接」——真凶是 OpenSSL 裸名加载失败（`RAND_bytes`）**
+（用户实测：*网页测试 127.0.0.1:8765 是通的，为何软件启动后还提示未连接* / *这块处理还没有 cjnote 稳*）。
+
+### Fixed
+
+- **WS 握手失败的真因**：仓颉运行时的 TLS 加载器**按裸名**找 `libcrypto-3-x64.dll` / `libssl-3-x64.dll`，
+  而 SDK 与 stdx **都不带**这两个 DLL —— 开发机上恰好命中 PATH 里别人带的那份，于是"本机全通、换个启动方式就挂"。
+  症状极具误导性：`http://127.0.0.1:8765` 与 `/api/health` 全正常（cjh 自己带着这两个 DLL），
+  **只有 ws 握手失败**（RFC6455 升级要算 `Sec-WebSocket-Key` 的随机 nonce，明文 `ws://` 也逃不掉）。
+  处置照框架 `cj-tauri/src/embedded_assets.cj`：进程启动早期用 `preloadEmbeddedLibrary()` 按**绝对路径**
+  预加载一次（`preloadOpensslLibs()`，候选目录 = 单文件释放的安装目录 → 仓内 `vendor/cjh/win-x64`），
+  之后同类裸名加载命中已加载模块 —— 不必改 PATH，也不必把 DLL 摆到 exe 旁边（单文件承诺不破）。
+  同时 `scripts/collect-runtime-dlls.sh` 也把这两件收进产物目录（双保险）。
+- **连接失败不再"静默失败"**：`wsConnect()` 以前只等 `ws:state` 事件置 `CJ.up`，而**invoke 成功不等于事件会到**；
+  事件没来时 `CJ.connecting` 永远为 true ⇒ 之后每次状态轮询都被挡回去 ⇒ **永久"未连接"且再也不重试**，
+  界面上一个字的原因都没有。现在照 cjnote 的语义改：**`invoke('ws:connect')` resolve 就当连上**，
+  事件只用来发现掉线；失败把插件原话存进 `CJ.wsErr`（`ws: url must start with ws://` / `host is outside
+  the authorized scope` / `connect failed: …` 这类能定位的话），页脚悬停可见，并回投
+  `ui_report.wsErr / wsConnectTries / wsConnectMs`。
+
+### Changed
+
+- 页内自检（`LINGQU_UI_PROBE=1`）不再"固定 2 秒就发提问"：cjh 冷启动 + 首次健康检查实测要 10~20 秒，
+  固定 2 秒发等于在没连上时发，探针永远拿不到 `frames`——**把真问题掩盖成假失败**。
+  改成等 `CJ.up` 真连上再发（最多 40 秒），连不上则回投 `probe-ws-fail`。
+
+### 验证到什么程度
+
+- `cjpm build` 0 warning；`cjpm test` **413 / FAILED 0**；`scripts/test.sh` 六项全绿；版本三处一致 0.39.65；
+- **裸 PATH 启动（模拟双击）实测**：`wsState=connected`、`frames=2`、`replyPreview="收到"`
+  （设置页「测试连通」那条链同理）、`wsConnectTries=1`、`wsErr` 为空、`errorCount=0`。
+  同一台机器上把 `libcrypto-3-x64.dll` 拿掉时能稳定复现
+  `ws: connect failed: Can not load openssl library or function RAND_bytes.`
+
+### 未验证（如实）
+
+- 只在本机（Git Bash 带着 OpenSSL 在 PATH 里）与"裸 PATH"两种环境验过；**没有在干净的新机器上验**；
+- 单文件包里的 OpenSSL 走的是"随包释放到 `%LOCALAPPDATA%\lingqu\cjh` + 预加载"，与目录版同一套代码，
+  但**单文件包本身没有再跑一遍 WS 端到端**（只验过它的窗口/引擎/报告）。
+
+---
+
 ## [0.39.64] - 2026-11-02
 
 **主题**：**「从头重跑」+ 两处"看着像 bug 的观测口径"** + **打包链修到能出新版单文件 exe**

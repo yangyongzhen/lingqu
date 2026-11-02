@@ -1520,6 +1520,11 @@ public class UiReportCommand <: CommandHandler {
         o.put("modelItems", JsonInt(argInt(args, "modelItems", 0)))
         o.put("modelError", JsonString(argStr(args, "modelError", "")))
         o.put("wsState", JsonString(argStr(args, "wsState", "unknown")))
+        // 对话通道连不上的原话（0.39.65）：用户实测"网页能打开 8765，软件却说未连接"，
+        // 而报告里只有 connected/closed 两态、拿不到原因 —— 加这三项才排得动。
+        o.put("wsErr", JsonString(argStr(args, "wsErr", "")))
+        o.put("wsConnectTries", JsonInt(argInt(args, "wsConnectTries", 0)))
+        o.put("wsConnectMs", JsonInt(argInt(args, "wsConnectMs", -1)))
         // 引擎发现证据：state（running/ready/missing）+ 实际用的二进制 + 查过的 vendor 目录
         o.put("cjhState", JsonString(argStr(args, "cjhState", "")))
         o.put("cjhBin", JsonString(argStr(args, "cjhBin", "")))
@@ -5747,6 +5752,11 @@ public func build(): AppSpec {
             // 子进程新配一个黑窗口（hdc / cargo / hvigor / git / java / curl 各闪一下），
             // cjh 里再拉 bash/find 也各自闪。先给本进程分一个**看不见**的 console，子进程继承它即可。
             gConsoleHidden = ensureHiddenConsole()
+            // OpenSSL 预加载（0.39.65）：WS 握手要 RAND_bytes，而 libcrypto-3-x64.dll /
+            // libssl-3-x64.dll 是"按裸名加载"、SDK 与 stdx 都不带 —— 不预加载就表现为
+            // 「浏览器能开 8765，应用却永远未连接」。必须早于任何 ws:connect。
+            let sslNote = preloadOpensslLibs()
+            eprintln("[lingqu] openssl: ${sslNote}")
             // 日志落盘：GUI 产物双击没控制台，报障时一个文件看全（C 桥 + 仓颉 + 页面 log:write）
             let _ = app.setLogToDefaultFile("lingqu")
 

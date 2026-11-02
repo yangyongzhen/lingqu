@@ -1508,3 +1508,46 @@ public func extractEmbeddedCjh(): Int64 {
 public func shouldUseExtracted(extracted: Int64, verified: Bool): Bool {
     return extracted > 0 && verified
 }
+
+// ============================================================
+// 预加载 OpenSSL（0.39.65）：WS 握手要 RAND_bytes，SDK 与 stdx 都不带这两个 DLL
+// ============================================================
+//
+// 现场（用户实测）：浏览器打开 `http://127.0.0.1:8765` 一切正常、`/api/health` 也 200，
+// 而应用页脚一直「未连接」。把插件原话打出来才看见真凶：
+//   `ws: connect failed: Can not load openssl library or function RAND_bytes.`
+// 原因：仓颉运行时的 TLS 加载器按**裸名**找 `libcrypto-3-x64.dll` / `libssl-3-x64.dll`，
+// 而这两个 SDK 与 stdx 都不带 —— 开发机上它恰好命中 PATH 里别人带的那份，于是"本机全通、
+// 换个启动方式就挂"。RFC6455 升级要算 `Sec-WebSocket-Key` 的随机 nonce，**明文 ws 也逃不掉**。
+//
+// 处置（照框架 `cj-tauri/src/embedded_assets.cj` 的 `preloadEmbeddedLibrary`）：
+// 进程内早期按**绝对路径**先 LoadLibrary 一次，之后同类裸名加载就命中已加载模块 ——
+// 既不用改系统 PATH，也不用把 DLL 摆到 exe 旁边（单文件承诺不破）。
+// 候选目录：单文件释放出来的安装目录 → 仓内 vendor（开发/便携包）→ `LINGQU_CJH` 所在目录。
+
+/** 预加载结果：`preloaded:<目录>` / `no-openssl`（两个候选目录里都没有这两个 DLL） */
+public func preloadOpensslLibs(): String {
+    let cands = ArrayList<String>()
+    let inst = cjhInstallDir()
+    if (inst.size > 0) {
+        cands.add(inst)
+    }
+    let vend = cjhVendorDir()
+    if (vend.size > 0) {
+        cands.add(vend)
+    }
+    for (d in cands) {
+        let sep = cjhPathSep()
+        let crypto = d + sep + "libcrypto-3-x64.dll"
+        let ssl = d + sep + "libssl-3-x64.dll"
+        if (fileReadable(crypto) && fileReadable(ssl)) {
+            // libssl 依赖 libcrypto，先 crypto 后 ssl（顺序反了在部分 OpenSSL 发行版上会失败）
+            let okC = preloadEmbeddedLibrary(crypto)
+            let okS = preloadEmbeddedLibrary(ssl)
+            eprintln("[lingqu] OpenSSL 预加载：${d}（crypto=${okC} ssl=${okS}）")
+            return "preloaded:${d}"
+        }
+    }
+    eprintln("[lingqu] 找不到 libcrypto-3-x64.dll / libssl-3-x64.dll —— ws 握手会失败（RAND_bytes）")
+    return "no-openssl"
+}

@@ -83,6 +83,19 @@ SEARCH=(
 [ -f "$CJ_TAURI_ROOT/native/webview2/WebView2Loader.dll" ] && cp -f "$CJ_TAURI_ROOT/native/webview2/WebView2Loader.dll" "$BIN_DIR/" 2>/dev/null
 [ -f "$CJ_TAURI_ROOT/native/sqlite3.dll" ] && cp -f "$CJ_TAURI_ROOT/native/sqlite3.dll" "$BIN_DIR/" 2>/dev/null
 
+# OpenSSL 两件（0.39.65，用户实测"浏览器能开 8765、应用却说未连接"）：
+# 仓颉运行时的 TLS 加载器**按裸名**找 `libcrypto-3-x64.dll` / `libssl-3-x64.dll`，
+# 而 SDK 与 stdx 都不带它们 —— 开发机上恰好命中 PATH 里别人带的那份，换个启动方式就挂，
+# 症状是 http 照常 200、**只有 ws 握手失败**（`Can not load openssl library or function RAND_bytes`）。
+# 我们随包的 cjh（vendor/cjh/win-x64）里正好带着同版本 OpenSSL 3，直接收过来即可。
+for pair in "libcrypto-3-x64.dll" "libssl-3-x64.dll"; do
+    [ -f "$BIN_DIR/$pair" ] && continue
+    for d in "$CJ_TAURI_ROOT/native" "$CJ_TAURI_ROOT/native/webview2" "$ROOT/vendor/cjh/win-x64" \
+             "$CANGJIE_STDX" "$CANGJIE_HOME/runtime/lib/windows_x86_64_cjnative"; do
+        if [ -f "$d/$pair" ]; then cp -f "$d/$pair" "$BIN_DIR/"; break; fi
+    done
+done
+
 pending=("$EXE")
 declare -A seen=()
 round=0
