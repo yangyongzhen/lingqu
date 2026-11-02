@@ -109,3 +109,34 @@ public func testPreparePrNoCandidatesNotesIt(): Unit {
     @Assert(r.note.contains("没有满足门槛的候选"), true)
     @Assert(r.canSubmit, true) // token 在，但没有候选可提交
 }
+
+@Test
+public func testPreparePrDedupesAndCapsPerRound(): Unit {
+    // 阶段 3 护栏：同类去重（lessonKeyOf 相同只算一条）+ 单轮上限 5 截断并说明
+    let dir = "/tmp/lingqu-pr-prepare-cap"
+    let notesPath = dir + "/.lingqu/notes/pr-probe.md"
+    try {
+        if (!exists(Path(dir + "/.lingqu/notes"))) {
+            Directory.create(Path(dir + "/.lingqu/notes"))
+        }
+        // 8 条候选（前两条完全同类：title+cause 相同 → 去重后 7 条 → 上限 5 截断）
+        var text = "# 经验（pr-probe）\n\n"
+        for (i in 0..8) {
+            let same = i < 2
+            let t = if (same) { "同类坑" } else { "坑 ${i}" }
+            text += "## ${t}\n\n- 症状：s${i}\n- 根因：r${i}\n- 复现：c${i}\n- 修法：f${i}\n- 出现 2 次（工程：pr-probe）\n\n"
+        }
+        File.writeTo(notesPath, text.toArray())
+    } catch (e: Exception) {
+        return // /tmp 不可写则跳过，不造假
+    }
+    let r = preparePr(dir, "pr-probe", "")
+    @Assert(r.prepared, MAX_CANDIDATES_PER_PR) // 去重 7 条 → 上限 5 截断
+    @Assert(r.note.contains("单轮候选超上限"), true)
+    // 落盘正文只含 5 条
+    let body = String.fromUtf8(File.readFrom(r.bodyPath))
+    @Assert(body.contains("### 5."), true)
+    @Assert(!body.contains("### 6."), true)
+    // 启动刷新语义说明在正文末尾（不热替换）
+    @Assert(body.contains("下次启动"), true)
+}

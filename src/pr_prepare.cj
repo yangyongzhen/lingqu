@@ -80,6 +80,7 @@ public func renderPrBody(projName: String, candidates: ArrayList<LessonNote>): S
     s += "1. 修法是**实际生效**的那个吗（不是「理论上应该行」）？\n"
     s += "2. 换个工程还成立吗（只有本工程特有的坑不该进通用库）？\n"
     s += "3. 落点选对了吗（指纹 / 规则 / 技能 / §4 坑清单——见经验入库规则的选型判据）？\n"
+    s += "\n> 合并后**下次启动**才刷新本地技能（不热替换——prompt 漂移会让行为变了却没人知道为什么）。\n"
     return s
 }
 
@@ -127,13 +128,42 @@ public class PrPrepareResult {
 }
 
 /**
+ * 阶段 3 护栏（飞轮 §8）：单轮 PR 最多带 N 条候选——一次 PR 改太多条，
+ * 评审就变成"信任 AI"而不是"逐条复核"。超出部分截断进 note，下轮再提。
+ */
+public let MAX_CANDIDATES_PER_PR: Int64 = 5
+
+/**
  * 阶段 2 编排：筛候选 → 产三份文件 → 按 token 状态标记 canSubmit/degraded。
  * 只写 `.lingqu/pr/`，不碰 skills/（合并是人/CI 的事，永远不做自动合并）。
+ * 阶段 3 护栏：同类去重（lessonKeyOf）+ 单轮候选上限（MAX_CANDIDATES_PER_PR）。
  */
 public func preparePr(projDir: String, projName: String, tokenEnv: String): PrPrepareResult {
     let res = PrPrepareResult()
-    let candidates = candidateLessons(loadLessons(projDir, projName))
-    res.prepared = candidates.size
+    // 同类去重：lessonKeyOf（title+cause）相同视为同一条——loader 已去重，这里防御一次
+    var all = candidateLessons(loadLessons(projDir, projName))
+    let seen = HashSet<String>()
+    var deduped = ArrayList<LessonNote>()
+    for (n in all) {
+        let key = lessonKeyOf(n)
+        if (seen.contains(key)) {
+            continue
+        }
+        seen.add(key)
+        deduped.add(n)
+    }
+    all = deduped
+    // 护栏：单轮上限——超出截断（不是丢弃：候选池还在 notes.md，下轮再提）
+    var truncated = false
+    if (all.size > MAX_CANDIDATES_PER_PR) {
+        var capped = ArrayList<LessonNote>()
+        for (i in 0..MAX_CANDIDATES_PER_PR) {
+            capped.add(all[i])
+        }
+        all = capped
+        truncated = true
+    }
+    res.prepared = all.size
 
     // token 只走环境变量：有则 canSubmit（可直接走 gitcode CLI 提交），无则退化本地产物
     if (tokenEnv != "") {
@@ -143,8 +173,11 @@ public func preparePr(projDir: String, projName: String, tokenEnv: String): PrPr
         res.degraded = true
         res.note = "未设 LINGQU_GITCODE_TOKEN：退化为本地产物——人复核后自行提交"
     }
+    if (truncated) {
+        res.note = "单轮候选超上限 ${MAX_CANDIDATES_PER_PR}，本轮只带前 ${MAX_CANDIDATES_PER_PR} 条（其余留在候选池）——" + res.note
+    }
 
-    if (candidates.size == 0) {
+    if (all.size == 0) {
         res.note = "没有满足门槛的候选经验（次数 ≥2 + 四段齐全 + 未入库）——" + res.note
         return res
     }
@@ -153,14 +186,14 @@ public func preparePr(projDir: String, projName: String, tokenEnv: String): PrPr
     let bodyPath = "${dir}/pr-body.md"
     let sugPath = "${dir}/pitfalls-suggestion.md"
     let branchPath = "${dir}/branch.txt"
-    res.branch = prBranchName(projName, candidates.size)
+    res.branch = prBranchName(projName, all.size)
     try {
         if (!exists(Path(dir))) {
             Directory.create(Path(dir))
         }
-        let body = renderPrBody(projName, candidates)
+        let body = renderPrBody(projName, all)
         File.writeTo(bodyPath, body.toArray())
-        File.writeTo(sugPath, renderPitfallsSuggestion(projName, candidates).toArray())
+        File.writeTo(sugPath, renderPitfallsSuggestion(projName, all).toArray())
         File.writeTo(branchPath, (res.branch + "\n").toArray())
         res.bodyPath = bodyPath
         res.suggestionPath = sugPath
