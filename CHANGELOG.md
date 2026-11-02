@@ -5,6 +5,39 @@
 
 ---
 
+## [0.39.61] - 2026-11-02
+
+**主题**：**win-x64 随包引擎同步 cjh 1.6.5**（selfcontained 五件套整套替换，0.39.60 的未验项之一清账）。
+
+### Changed
+
+- **vendor/cjh/win-x64** 整套替换为 cjh v1.6.5 selfcontained 产物（`dist/cjh-v1.6.5-windows-x64-selfcontained.zip`）：
+  - `cjh.exe` 换新（SHA256 `07f5427a…012b`）；
+  - **`libboundscheck.dll` 新增随行件**（SHA256 `07b33dd3…6c78`，1.6.5 起自带）；
+  - `libcangjie-runtime.dll` / `libcrypto-3-x64.dll` / `libssl-3-x64.dll` **哈希与旧版完全一致**（运行时 DLL 未变）——组合风险极低：同一发版产物内的组合，且三个 DLL 与上一版逐字节相同；
+- **校验链两处同步**：`vendor/cjh/SHA256SUMS`（cjh.exe 行更新 + libboundscheck.dll 新增行，6 条全量）；
+  `src/cjh_host.cj` 的 `CJH_VENDOR_FILES` **4 项 → 5 项**（新增 libboundscheck.dll 条目）；
+- 版本号三处一致 0.39.61。
+
+### 验证
+
+```
+sha256sum -c vendor/cjh/SHA256SUMS → 六文件全量 OK（exit=0，含 linux-x64 与 win-x64）
+cjpm build               → 0 warning
+scripts/test.sh          → 六项全绿（build-biz / test 403 / check / js-syntax / build-app / build-cli）
+```
+
+### 未验证（如实标注）
+
+- **Windows 实机运行未验**（本机 Linux 无法运行 exe）——但组合完整性有双重保障：
+  ① 五件套来自同一发版 zip；② 三个运行时 DLL 与已验证的旧版逐字节相同，唯一新二进制
+  是 exe 本身与新随行 libboundscheck.dll。待 Windows 侧启动一次 cjh（`cjh --version`
+  → `cjh v1.6.5`）即可清账；
+- 校验链的 Windows 分支（`CJH_VENDOR_FILES` 五项比对）在 Linux 构建不编译（`@When` 门禁），
+  其正确性以 SHA256SUMS 全量比对为准——常量与 SUMS 同源，人工已核。
+
+---
+
 ## [0.39.60] - 2026-11-02
 
 **主题**：**随包引擎升级 cjh 1.5.3 → 1.6.5**（vendor/cjh/linux-x64 替换 + SHA256 校验链同步）。

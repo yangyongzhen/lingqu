@@ -560,8 +560,10 @@ func cjhBinName(): String {
  */
 @When[os == "Windows"]
 let CJH_VENDOR_FILES: Array<(String, String)> = [
-    ("cjh.exe", "3dc9db6f270ed93eae98a9eb930ffad495c09ab8c87292f9937d913e65b23f1d"),
+    // cjh v1.6.5（selfcontained 五件套：exe + 4 DLL；libboundscheck.dll 是本版新增随行件）
+    ("cjh.exe", "07f5427a64874d0efcf26463d142d1bbe31c7b34fd50e8a289987de16bf5012b"),
     ("libcangjie-runtime.dll", "03f4d59a13c7fc1d71523bdd42a05587657105aff14c8288adfdd8fbe5bea089"),
+    ("libboundscheck.dll", "07b33dd3de22489b442cc32f0fe8ddfc80b753443b17fb2053133b2e7ffb6c78"),
     ("libssl-3-x64.dll", "bbaf8a8c37b4cfdd7fe5feee9ff1d0072078f430bb5ef2b3da38a600f4039b03"),
     ("libcrypto-3-x64.dll", "a997e132b8c548212d4c292bb3f61bcdee88cf726b89c60f32969ad6cbaa9698")
 ]
