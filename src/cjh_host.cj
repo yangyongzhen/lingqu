@@ -606,7 +606,7 @@ public func cjhVendorVerified(dir: String): Bool {
 
 /** Linux 版随包二进制的 SHA256：单文件、静态链接，没有随行 DLL（与 Windows 形态不同） */
 @When[os != "Windows"]
-let CJH_LINUX_SHA: String = "f1ae8d65035da5fe6ca71be195e3e5020b0f07af9ede8c431f9f1549107a6309"
+let CJH_LINUX_SHA: String = "2821d90f0285c77aeab51234f23c1539af18479410d302f05e3d5af7e9a7ab31"
 
 @When[os != "Windows"]
 public func cjhVendorVerified(dir: String): Bool {

@@ -5,6 +5,38 @@
 
 ---
 
+## [0.39.60] - 2026-11-02
+
+**主题**：**随包引擎升级 cjh 1.5.3 → 1.6.5**（vendor/cjh/linux-x64 替换 + SHA256 校验链同步）。
+
+### Changed
+
+- **vendor/cjh/linux-x64/cjh** 替换为 cjh v1.6.5 官方产物（来自 cjh 仓发版提交 `7966f44` 的
+  `dist/cjh-linux-x64`，18,120,496 bytes）；实测 `--version` 回 `cjh v1.6.5`
+- **校验链两处同步**（SHA256 不过就拒绝执行，漏一处 = 启动即拒）：
+  ① `vendor/cjh/SHA256SUMS` 的 `linux-x64/cjh` 行 → `2821d90f…7ab31`；
+  ② `src/cjh_host.cj` 的 `CJH_LINUX_SHA` 常量同步更新
+- 版本号三处一致 0.39.60
+
+### 验证
+
+```
+cjh --version            → cjh v1.6.5
+cjh web --bind 127.0.0.1 → GET /api/health 200，version="1.6.5"
+cjpm build               → 0 warning
+scripts/test.sh          → 六项全绿（build-biz / test 403 / check / js-syntax / build-app / build-cli）
+```
+
+### 未验证（如实标注）
+
+- **win-x64 未同步**：cjh 1.6.5 发版只含 exe（无随行 DLL 更新），Windows 侧替换后无法在本机
+  验证运行（dll/exe 组合完整性测不了）——待 Windows 侧验证后单独更新，SHA256SUMS 的
+  win-x64 三 DLL 行保持 1.5.3 期哈希不变；
+- 新引擎与既有 WS 协议/审批流/`t2h:*` 的**实机对话回归**未跑（本机 Linux 起工作台即可做，
+  属 Linux GUI 收尾项）。
+
+---
+
 ## [0.39.59] - 2026-11-02
 
 **主题**：**飞轮阶段 3 护栏**——`t2h:pr_prepare` 加上防失控的三道栏杆（单轮上限 / 同类去重 / 启动刷新语义）。至此飞轮 §8 的阶段 1–3 全部落地（自动提交真发 PR 仍除外，见未验证）。
