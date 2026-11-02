@@ -40,6 +40,7 @@
     "t2h:cjh_models",
     "t2h:cjh_settings",
     "t2h:cjh_settings_save",
+    "t2h:cjh_restart",
     "ws:connect",
     "ws:send",
     "ws:close",

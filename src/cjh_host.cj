@@ -1251,6 +1251,9 @@ func boolOrFalse(v: JsonValue): Bool {
 func cjhSaveSettings(args: JsonObject): JsonValue {
     var payload = JsonObject()
     var n: Int64 = 0
+    // 接入协议（0.39.62）：cjh 的 `POST /api/settings` 白名单里**没有** provider_protocol，
+    // 它只认配置文件 → 单独走「定点修补 settings.json + 先备份」，并如实回投"需重启 cjh 生效"。
+    var protocolArg = ""
     match (args.get("data")) {
         case Some(v) =>
             match (v.kind()) {
@@ -1263,6 +1266,11 @@ func cjhSaveSettings(args: JsonObject): JsonValue {
                             case "temperature" => n += putIfNumber(payload, "temperature", val)
                             case "maxTokens" => n += putIfNumber(payload, "maxTokens", val)
                             case "maxIterations" => n += putIfNumber(payload, "maxIterations", val)
+                            case "protocol" =>
+                                match (val.kind()) {
+                                    case JsonKind.JsString => protocolArg = val.asString().getValue()
+                                    case _ => ()
+                                }
                             case _ => ()
                         }
                     }
@@ -1271,7 +1279,7 @@ func cjhSaveSettings(args: JsonObject): JsonValue {
         case None => ()
     }
     var res = JsonObject()
-    if (n == 0) {
+    if (n == 0 && protocolArg.trimAscii().size == 0) {
         res.put("ok", JsonBool(false))
         res.put("error", JsonString("没有要保存的字段（留空的字段会跳过，不会覆盖 cjh 现有配置）"))
         return res
@@ -1286,7 +1294,127 @@ func cjhSaveSettings(args: JsonObject): JsonValue {
     if (okFlag) {
         wrapped.asObject().put("savedFields", JsonInt(n))
     }
+    // 协议单独落文件（走得通就回投结果；没传就不动）
+    if (protocolArg.trimAscii().size > 0) {
+        let note = ensureCjhProviderProtocol(userHomeDir(), protocolArg)
+        let obj = wrapped.asObject()
+        obj.put("protocolNote", JsonString(note))
+        // 「需重启才生效」这句话必须能被界面读到，不能只留在 note 文本里
+        obj.put("protocolChanged", JsonBool(note.startsWith("file:")))
+        obj.put("protocol", JsonString(providerProtocolOf(
+            readFileOrEmpty(cjhSettingsPathOf(userHomeDir())))))
+    }
     return wrapped
+}
+
+/** 读文件内容，读不到给空串（回投字段时用，不让"读不到"变成异常） */
+func readFileOrEmpty(p: String): String {
+    if (p.size == 0 || !exists(Path(p))) {
+        return ""
+    }
+    try {
+        return String.fromUtf8(File.readFrom(p))
+    } catch (e: Exception) {
+        let _ = e
+        return ""
+    }
+}
+
+/**
+ * `t2h:cjh_settings` 的正文：cjh 的 `GET /api/settings` **不返回接入协议**
+ * （`handleGetSettings` 只吐 baseUrl/model/温度/tokens/轮次…），而协议是界面上要能选的一项，
+ * 且它只存在于 `~/.cjh/settings.json`。所以这里把 REST 结果包一层，补上 `protocol`
+ * （空串 = 文件里没写，按 cjh 默认 openai 理解）与 `protocolFile`（指给用户看的文件路径）。
+ */
+func cjhSettingsWithProtocol(): JsonValue {
+    let wrapped = wrapJsonPayload(cjhApiCall("GET", "/api/settings", ""), "读取配置")
+    let obj = wrapped.asObject()
+    let home = userHomeDir()
+    let p = cjhSettingsPathOf(home)
+    let json = readFileOrEmpty(p)
+    let proto = providerProtocolOf(json)
+    // 有 data（REST 通了）就塞进 data，让页面只用认一个位置；REST 不通时放顶层当诊断信息
+    var target = obj
+    var injected = false
+    match (obj.get("data")) {
+        case Some(d) =>
+            match (d.kind()) {
+                case JsonKind.JsObject =>
+                    d.asObject().put("protocol", JsonString(proto))
+                    d.asObject().put("protocolFile", JsonString(p))
+                    injected = true
+                case _ => ()
+            }
+        case None => ()
+    }
+    if (!injected) {
+        target.put("protocol", JsonString(proto))
+        target.put("protocolFile", JsonString(p))
+    }
+    return wrapped
+}
+
+/**
+ * 重启引擎（0.39.62）：改「接入协议」这类**只认配置文件**的字段之后，必须重启 cjh 才生效。
+ *
+ * 纪律（与 D-003 一致）：
+ *   ① **只重启自己拉起的**（`gCjhOwned`）——8765 上是用户自己的实例就如实拒绝，不抢不杀；
+ *   ② 重启前后都要有证据：回投 `restarted` 与端点，失败给具体原因（不是"失败了"三个字）；
+ *   ③ 等端口真正空出来再拉新的，否则新实例绑定失败会变成"重启后引擎缺失"。
+ */
+public func cjhRestartOwned(): JsonObject {
+    let obj = JsonObject()
+    let port = cjhPort()
+    if (!gCjhOwned) {
+        if (cjhHealthyWithRetry(port, 2)) {
+            obj.put("ok", JsonBool(false))
+            obj.put("external", JsonBool(true))
+            obj.put("error", JsonString("端口 ${port} 上的 cjh 不是本应用拉起的（复用的外部实例）——" +
+                "按 D-003 不抢不杀，请手动重启它；或先关掉它再点「重启引擎」"))
+            return obj
+        }
+        // 没在跑 = 直接拉起（等价于"重启"的起点）
+        let bin0 = cjhBinPath()
+        if (bin0.size == 0) {
+            obj.put("ok", JsonBool(false))
+            obj.put("error", JsonString("找不到可用的 cjh 二进制（vendor 校验不过且没有部署副本）"))
+            return obj
+        }
+        if (!spawnCjhWeb(bin0)) {
+            obj.put("ok", JsonBool(false))
+            obj.put("error", JsonString("拉起 cjh 失败（10 秒内 /api/health 未通）"))
+            return obj
+        }
+        obj.put("ok", JsonBool(true))
+        obj.put("started", JsonBool(true))
+        putEndpoints(obj, port)
+        return obj
+    }
+    shutdownCjh()
+    gCjhProc = None
+    gCjhOwned = false
+    // 等旧实例真的退出（最多 5 秒）：端口没释放就拉新的，绑定必失败
+    var waited: Int64 = 0
+    while (waited < 5000 && cjhHealthy(port)) {
+        sleep(Duration.millisecond * 100)
+        waited += 100
+    }
+    let bin = cjhBinPath()
+    if (bin.size == 0) {
+        obj.put("ok", JsonBool(false))
+        obj.put("error", JsonString("旧实例已停，但找不到可用的 cjh 二进制——点「重启引擎」重试，或检查 vendor"))
+        return obj
+    }
+    if (!spawnCjhWeb(bin)) {
+        obj.put("ok", JsonBool(false))
+        obj.put("error", JsonString("旧实例已停，新实例 10 秒内没就绪（${bin}）"))
+        return obj
+    }
+    obj.put("ok", JsonBool(true))
+    obj.put("restarted", JsonBool(true))
+    obj.put("bin", JsonString(bin))
+    putEndpoints(obj, port)
+    return obj
 }
 
 /**
@@ -1298,8 +1426,9 @@ func cjhSaveSettings(args: JsonObject): JsonValue {
  *   t2h:cjh_deploy         校验/部署/拉起/健康检查
  *   t2h:cjh_start          按指定路径拉起（部署不可用时的兜底，UI 默认不给入口）
  *   t2h:cjh_models         GET  /api/models   → {ok, data:{current, models:[...]}}
- *   t2h:cjh_settings       GET  /api/settings → {ok, data:{...}}（密钥是掩码）
- *   t2h:cjh_settings_save  POST /api/settings ← 只提交给到的字段
+ *   t2h:cjh_settings       GET  /api/settings → {ok, data:{...}}（密钥是掩码；**另补 protocol**）
+ *   t2h:cjh_settings_save  POST /api/settings ← 只提交给到的字段（protocol 走配置文件）
+ *   t2h:cjh_restart        重启**本应用拉起的**引擎（改协议后必需；外部实例拒绝重启）
  */
 public class CjhCommands <: CommandHandler {
     public init() {}
@@ -1311,8 +1440,9 @@ public class CjhCommands <: CommandHandler {
             case "t2h:cjh_start" => cjhStartByPath(stringArgOr(args, "path", ""))
             case "t2h:cjh_deploy" => cjhDeployAndStart()
             case "t2h:cjh_models" => wrapJsonPayload(cjhApiCall("GET", "/api/models", ""), "读取模型列表")
-            case "t2h:cjh_settings" => wrapJsonPayload(cjhApiCall("GET", "/api/settings", ""), "读取配置")
+            case "t2h:cjh_settings" => cjhSettingsWithProtocol()
             case "t2h:cjh_settings_save" => cjhSaveSettings(args)
+            case "t2h:cjh_restart" => cjhRestartOwned()
             case _ => throw CommandException("unknown cjh command: ${cmd}")
         }
     }

@@ -275,3 +275,179 @@ public func ensureCjhIterationBudget(home: String, target: Int64): String {
         return "error:" + e.toString()
     }
 }
+
+// ============================================================
+// 接入协议（0.39.62）：openai 兼容 / anthropic
+// ============================================================
+//
+// 为什么必须落文件而不能走 `POST /api/settings`：cjh 的 `applySettingsUpdate` 白名单里
+// **没有** provider_protocol（它只认 baseUrl/model/apiKey/温度/tokens/轮次…），协议是
+// "启动时读一次配置文件"的字段。所以这里与轮次预算同款做法：**定点文本修补 + 先备份**，
+// 不重排 JSON（重排会丢掉用户手写的注释键、把格式全冲掉），并如实回投"需重启 cjh 生效"。
+
+/** 协议取值：只认这两个（其它一律按"保持不变"处理，绝不猜） */
+public let CJH_PROTOCOLS: Array<String> = ["openai", "anthropic"]
+
+/** 纯函数：规范化协议值（大小写不敏感；不认识给 ""） */
+public func normalizeProtocol(v: String): String {
+    let s = v.trimAscii().toAsciiLower()
+    for (p in CJH_PROTOCOLS) {
+        if (s == p) {
+            return p
+        }
+    }
+    return ""
+}
+
+/** 纯函数：settings.json 里协议字段的键字面量（文件是 snake；camel 也认）；没有给 "" */
+func protocolKeyOf(json: String): String {
+    let k1 = "\"provider_protocol\""
+    let k2 = "\"providerProtocol\""
+    match (json.indexOf(k1)) {
+        case Some(_) => return k1
+        case None => ()
+    }
+    match (json.indexOf(k2)) {
+        case Some(_) => return k2
+        case None => ()
+    }
+    return ""
+}
+
+/** 纯函数：从 settings JSON 里取协议（缺失/类型不对给 ""——调用方按 cjh 默认 openai 理解） */
+public func providerProtocolOf(json: String): String {
+    let key = protocolKeyOf(json)
+    if (key == "") {
+        return ""
+    }
+    let ki = match (json.indexOf(key)) {
+        case Some(v) => v
+        case None => return ""
+    }
+    let after = json[(ki + key.size)..]
+    let ci = match (after.indexOf(":")) {
+        case Some(v) => v
+        case None => return ""
+    }
+    let bytes = after.toArray()
+    var i = ci + 1
+    while (i < Int64(bytes.size) && (bytes[i] == 32 || bytes[i] == 9 || bytes[i] == 10 || bytes[i] == 13)) {
+        i += 1
+    }
+    if (i >= Int64(bytes.size) || bytes[i] != 34) {
+        return ""     // 值不是字符串 → 不认（不把 null/数字硬解释成协议名）
+    }
+    let start = i + 1
+    var j = start
+    while (j < Int64(bytes.size) && bytes[j] != 34) {
+        if (bytes[j] == 92) {
+            j += 2     // 跳过转义（`\"` 之类）
+            continue
+        }
+        j += 1
+    }
+    if (j >= Int64(bytes.size)) {
+        return ""
+    }
+    return after[start..j].trimAscii()
+}
+
+/**
+ * 纯函数：把 `provider_protocol` 设成 `proto`（幂等、定点修补、不重排 JSON）。
+ *
+ * - `proto` 不认识 / JSON 空 → 原样返回
+ * - 已有该键且值相同 → 原样返回
+ * - 已有该键且值不同 → 就地替换那个字符串字面量
+ * - 没有该键 → 插到最外层 `{` 之后（跟着一行 `"provider_protocol": "x",`）
+ */
+public func setProviderProtocol(json: String, proto: String): String {
+    let want = normalizeProtocol(proto)
+    if (want == "" || json.trimAscii().size == 0) {
+        return json
+    }
+    let key = if (protocolKeyOf(json) != "") { protocolKeyOf(json) } else { "\"provider_protocol\"" }
+    let cur = providerProtocolOf(json)
+    if (cur == want) {
+        return json
+    }
+    if (cur != "") {
+        // 就地替换：定位 key → 冒号 → 第一个字符串字面量的开引号
+        let ki = match (json.indexOf(key)) {
+            case Some(v) => v
+            case None => return json
+        }
+        let bytes = json.toArray()
+        var i = ki + key.size
+        // 冒号
+        while (i < Int64(bytes.size) && bytes[i] != 58) { i += 1 }
+        if (i >= Int64(bytes.size)) {
+            return json
+        }
+        i += 1
+        while (i < Int64(bytes.size) && (bytes[i] == 32 || bytes[i] == 9 || bytes[i] == 10 || bytes[i] == 13)) { i += 1 }
+        if (i >= Int64(bytes.size) || bytes[i] != 34) {
+            return json
+        }
+        let open = i
+        var j = open + 1
+        while (j < Int64(bytes.size) && bytes[j] != 34) {
+            if (bytes[j] == 92) {
+                j += 2        // 跳过转义（`\"` 之类）
+                continue
+            }
+            j += 1
+        }
+        if (j >= Int64(bytes.size)) {
+            return json
+        }
+        return json[0..(open + 1)] + want + json[j..]
+    }
+    // 没有该键：插到第一个 '{' 之后
+    let brace = match (json.indexOf("{")) {
+        case Some(v) => v
+        case None => return json
+    }
+    let at = brace + 1
+    return json[0..at] + "\n  ${key}: \"${want}\"," + json[at..]
+}
+
+/**
+ * 动作层：把接入协议写进 `~/.cjh/settings.json`（先备份；写失败如实回投）。
+ *
+ * @return `already:openai` / `file:openai->anthropic（需重启 cjh 生效）` /
+ *         `no-settings` / `no-home` / `bad-protocol:<原值>` / `error:…`
+ */
+public func ensureCjhProviderProtocol(home: String, proto: String): String {
+    let want = normalizeProtocol(proto)
+    if (want == "") {
+        return "bad-protocol:" + proto
+    }
+    let p = cjhSettingsPathOf(home)
+    if (p.size == 0) {
+        return "no-home"
+    }
+    if (!exists(Path(p))) {
+        return "no-settings"
+    }
+    try {
+        let before = String.fromUtf8(File.readFrom(p))
+        let cur = providerProtocolOf(before)
+        let after = setProviderProtocol(before, want)
+        if (after == before) {
+            return "already:" + (if (cur == "") { "（未设置，按 cjh 默认 openai）" } else { cur })
+        }
+        // 备份：settings.json.bak.protocol（覆盖写；内容就是"改之前"）
+        let bak = p + ".bak.protocol"
+        try {
+            File.writeTo(bak, before.toArray())
+        } catch (e: Exception) {
+            let _ = e
+        }
+        File.writeTo(p, after.toArray())
+        let shown = if (cur == "") { "（未设置）" } else { cur }
+        return "file:${shown}->${want}（需重启 cjh 生效）"
+    } catch (e: Exception) {
+        return "error:" + e.toString()
+    }
+}
+

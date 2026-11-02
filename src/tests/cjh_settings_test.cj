@@ -127,3 +127,71 @@ public func testIterationsAwareOfBothKeySpellings(): Unit {
     @Assert(maxIterationsOf(raised), 120)
     @Assert(raised.contains("\"model\":\"gpt-4o-mini\""), true)
 }
+
+/* ============================================================
+ * 接入协议（0.39.62）：openai 兼容 / anthropic
+ *
+ * 为什么要有这一组：cjh 的 `POST /api/settings` 白名单里**没有** provider_protocol，
+ * 只能定点修补 `~/.cjh/settings.json`。修补写坏了 = 用户下次起引擎直接起不来，
+ * 所以取值/写入/幂等都按纯函数钉死。
+ * ============================================================ */
+
+@Test
+public func testNormalizeProtocol(): Unit {
+    @Assert(normalizeProtocol("openai"), "openai")
+    @Assert(normalizeProtocol("anthropic"), "anthropic")
+    @Assert(normalizeProtocol("  Anthropic "), "anthropic")   // 大小写与空白都归一
+    @Assert(normalizeProtocol("gemini"), "")                  // 不认识 → 空（绝不猜）
+    @Assert(normalizeProtocol(""), "")
+}
+
+@Test
+public func testProviderProtocolOf(): Unit {
+    // 文件形态（snake，带缩进）
+    @Assert(providerProtocolOf("{\n  \"provider_protocol\": \"anthropic\",\n  \"model\": \"x\"\n}"), "anthropic")
+    // camel 也认（API/手写都可能出现）
+    @Assert(providerProtocolOf("{\"providerProtocol\":\"openai\"}"), "openai")
+    // 没有该键 / 不是字符串 / 空文本 → 空串（调用方按 cjh 默认 openai 理解）
+    @Assert(providerProtocolOf("{\"model\":\"x\"}"), "")
+    @Assert(providerProtocolOf("{\"provider_protocol\": null}"), "")
+    @Assert(providerProtocolOf("{\"provider_protocol\": 1}"), "")
+    @Assert(providerProtocolOf(""), "")
+}
+
+@Test
+public func testSetProviderProtocolReplacesInPlace(): Unit {
+    // 主路径：已有键、值不同 → 就地替换，其它字段一个不动
+    let src = "{\n  \"provider_protocol\": \"openai\",\n  \"model\": \"gpt-4o-mini\"\n}"
+    let out = setProviderProtocol(src, "anthropic")
+    @Assert(providerProtocolOf(out), "anthropic")
+    @Assert(out.contains("\"provider_protocol\": \"anthropic\""), true)
+    @Assert(out.contains("\"model\": \"gpt-4o-mini\""), true)
+    // 幂等：同值原样返回（不产生 diff，就不会白白覆盖用户文件）
+    @Assert(setProviderProtocol(out, "anthropic"), out)
+}
+
+@Test
+public func testSetProviderProtocolInsertsWhenMissing(): Unit {
+    // 没有该键 → 插到最外层 `{` 之后，原有字段保留
+    let out = setProviderProtocol("{\n  \"model\": \"x\"\n}", "anthropic")
+    @Assert(providerProtocolOf(out), "anthropic")
+    @Assert(out.contains("\"model\": \"x\""), true)
+    // 边界：不认识的值 / 空 JSON / 没有 `{` 都不许动
+    @Assert(setProviderProtocol("{\"provider_protocol\": \"openai\"}", "gemini"),
+        "{\"provider_protocol\": \"openai\"}")
+    @Assert(setProviderProtocol("", "openai"), "")
+    @Assert(setProviderProtocol("not json", "openai"), "not json")
+}
+
+@Test
+public func testSetProviderProtocolHandlesEscapesAndCamel(): Unit {
+    // 值里带转义的引号：不能让扫描器把 `\"` 当成结束引号（否则会把文件截断）
+    let src = "{\"provider_protocol\": \"a\\\"b\", \"model\": \"x\"}"
+    let out = setProviderProtocol(src, "openai")
+    @Assert(providerProtocolOf(out), "openai")
+    @Assert(out.contains("\"model\": \"x\""), true)
+    // camel 形态就地替换时也用回 camel 键（不新增一个 snake 键，避免同一文件两套写法）
+    let camel = setProviderProtocol("{\"providerProtocol\": \"openai\"}", "anthropic")
+    @Assert(camel.contains("\"providerProtocol\": \"anthropic\""), true)
+    @Assert(camel.contains("provider_protocol"), false)
+}

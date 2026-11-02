@@ -1534,6 +1534,19 @@ public class UiReportCommand <: CommandHandler {
         o.put("aiHintOk", JsonInt(argInt(args, "aiHintOk", 0)))
         // 设置面板回读值（0.39.46）："界面上到底显示了什么"，与 cjh /api/settings 的真值对账
         o.put("settingsDump", JsonString(argStr(args, "settingsDump", "")))
+        // 测试连通（0.39.62）：页面用表单值真发一条最小对话来验"模型名/地址/密钥"通不通，
+        // 结果必须能被自动断言——否则等于给用户一个"点了不知道成没成"的按钮（§1-6 界面可断言）。
+        o.put("settingsProbe", JsonString(argStr(args, "settingsProbe", "")))
+        o.put("settingsProbeMs", JsonInt(argInt(args, "settingsProbeMs", -1)))
+        o.put("settingsProbeNote", JsonString(argStr(args, "settingsProbeNote", "")))
+        o.put("settingsProbeFrames", JsonInt(argInt(args, "settingsProbeFrames", 0)))
+        // 候选模型清单已删（0.39.62）：空清单不是错误，也不再拿清单当校验
+        o.put("settingsModelEmpty", JsonInt(argInt(args, "settingsModelEmpty", 0)))
+        // 接入协议（0.39.62）：表单里选中的值 vs 配置文件里读回的值——两者不一致就是"改了还没重启"
+        o.put("settingsProto", JsonString(argStr(args, "settingsProto", "")))
+        o.put("settingsProtoSaved", JsonString(argStr(args, "settingsProtoSaved", "")))
+        // ⚙ 按钮走的那条作用域桥是否就绪（0.39.62：外层作用域直接调内层函数会静默抛错）
+        o.put("settingsOpenBridge", JsonInt(argInt(args, "settingsOpenBridge", 0)))
         o.put("frames", JsonInt(argInt(args, "frames", 0)))
         o.put("toolCards", JsonInt(argInt(args, "toolCards", 0)))
         // 工具卡片折叠证据（0.39.37）：open=当前展开几张（成功调用应 0，失败自动展开），
@@ -1857,6 +1870,9 @@ public class UiReportCommand <: CommandHandler {
         o.put("turnEndReason", JsonString(argStr(args, "turnEndReason", "")))
         o.put("lastToolErr", JsonString(argStr(args, "lastToolErr", "")))
         o.put("lastToolErrName", JsonString(argStr(args, "lastToolErrName", "")))
+        // 错误卡计数（0.39.63）：用户实测"发 hello 收到正常回复后，屏幕上多出一张红卡说迁移还没完成"。
+        // 这类"多了个红块"的问题必须能数字断言——聊天正常收尾时它必须是 0。
+        o.put("errorCards", JsonInt(argInt(args, "errorCards", 0)))
         // AI 跑完自动出报告（0.39.54）：done=真出了；path=md 落档；risk=风险总体；err=失败原因
         o.put("autoReportDone", JsonBool(argBool(args, "autoReportDone", false)))
         o.put("autoReportPath", JsonString(argStr(args, "autoReportPath", "")))
@@ -5721,6 +5737,8 @@ public func build(): AppSpec {
             app.register("t2h:cjh_models", cjhCmds)
             app.register("t2h:cjh_settings", cjhCmds)
             app.register("t2h:cjh_settings_save", cjhCmds)
+            // 重启引擎（0.39.62）：接入协议只认配置文件，改完必须重启才生效
+            app.register("t2h:cjh_restart", cjhCmds)
 
             // 退出收尾（窗口关掉也生效）
             startLifecycleWaiter(app)

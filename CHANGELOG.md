@@ -5,6 +5,80 @@
 
 ---
 
+## [0.39.63] - 2026-11-02
+
+**主题**：**聊完一句「hello」不许再弹"迁移还没完成"的红卡**（用户实测，发 hello 后的截图原话：
+*「为什么停：模型自己结束了这一轮（它认为无法再推进）。迁移还没完成…」*）。
+
+### Fixed
+
+- `noteTurnEnded()` 的判据只看了 `AIP.finished`：普通问答时 `finished=false`、`active=false`，
+  于是"还没迁完"这个结论被无条件套到**每一次**回合收尾上 ⇒ 正常聊完一句话，屏幕上多出一张红卡。
+  现在改成：**只有 AI 自动迁移监管态在跑（`AIP.active === true`）时**才谈"迁移还没完成"；
+  普通问答里有真原因（轮次预算 / 长度上限 / 回合异常）才解释一句，且**一个字都不提迁移**；
+  正常 `stop` 收尾什么都不多说。
+- `newAssistantTurn()` 现在清空 `window.__turnEnd`（上一回合的 reason 会串到下一轮，§4-105 同族：
+  一次性快照不许当"现在"用）；顺带清 `CJ.lastToolErrName`。
+- 错误卡加上稳定类名 `.errmsg`（`addError`），`ui_report` 新增 **`errorCards`**（聊天区红卡计数）
+  ——"屏幕上多了个红块"这类问题要能数字断言，不能靠人眼。
+
+### Added
+
+- 页内自检 **`LINGQU_UI_PROBE=turnend`**：同一条 `done` 帧喂两次——① `AIP.active=false`（普通问答，
+  必须 `errorCards=0`、`turnEndReason=""`）；② `AIP.active=true`（迁移监管态，必须 `errorCards=1`
+  且 `turnEndReason` 非空）。实机实测：`turnend-plain → errorCards=0 / turnEndReason=""`、
+  `turnend-migration → errorCards=1 / turnEndReason="模型自己结束了这一轮（它认为无法再推进）"`。
+
+---
+
+## [0.39.62] - 2026-11-02
+
+**主题**：**模型设置页按 cjnote 收敛**——删掉"模型清单"这套校验、补上「测试连通」与**接入协议**选择，
+顺带修掉 ⚙ 按钮那个静默抛错的作用域缺陷（用户实测反馈）。
+
+### Added
+
+- **接入协议选择**（`openai` 兼容 / `anthropic`）：设置页 `<select id="setProto">`，
+  写进 `~/.cjh/settings.json` 的 `provider_protocol`。
+  为什么不能走 REST：cjh 的 `applySettingsUpdate` 白名单里**没有** provider_protocol
+  （只认 baseUrl/model/apiKey/温度/tokens/轮次），协议是"启动时读一次配置文件"的字段 ⇒ 与轮次预算同款做法：
+  **定点文本修补 + 先备份**（`<settings>.bak.protocol`），不重排 JSON；写完如实回投
+  `protocolChanged=true` 与「需重启 cjh 生效」。纯函数 `normalizeProtocol` / `providerProtocolOf` /
+  `setProviderProtocol` + 动作层 `ensureCjhProviderProtocol`，5 例新单测（含转义、camel/snake 两种键、
+  不认识的值不动、无 `{` 不动）。
+- **`t2h:cjh_restart`**（命令数 37 → 38）：只重启**本应用拉起的**引擎（D-003 不抢不杀），
+  外部实例回 `external=true` 并如实拒绝；等旧实例真退出（最多 5s）再拉新的，避免端口占用导致
+  "重启后引擎缺失"。设置页「重启引擎」现在**真重启**（旧实现只调 `deploy`，见到活实例就复用 ⇒ 等于没点）。
+- **设置页「测试连通」按钮**（做法照 `cj-tauri/examples/cjnote`）：用**表单里这组值**（Base URL / 模型名 /
+  API Key）真发一条最小对话（`连通测试：请只回复一个词 ok`），改配置一字不动、不落会话。
+  原理是 cjh `chat` 帧自带**单次模型覆盖**（`src/web/protocol.cj` 的 `ChatRequest`：
+  `model` / `baseUrl`(`base_url`) / `apiKey`(`api_key`)，优先级 帧字段 > 会话级 `switch_model` > 当前配置，
+  明确「本次 run 局部生效、不落盘不粘连」）；探针帧在 `onFrame` 里被拦截，不进聊天面板、不接会话 id、
+  不触发 `finishTurn`。四种收尾文案分得很清：**连通 / 通了但没吐字（多半模型名不对）/ 超时 / 报错**。
+- `ui_report` 新增 `settingsProbe` / `settingsProbeMs` / `settingsProbeNote` / `settingsProbeFrames` /
+  `settingsProto` / `settingsProtoSaved` / `settingsOpenBridge` 七项（`main.cj` 白名单同批放行）。
+- 页内自检 `LINGQU_UI_PROBE=probe`：自动打开设置页 → 点「测试连通」→ 回投结果，
+  让"按钮真的干了事"可被自动断言（不需要人眼）。
+
+### Changed
+
+- **设置页形态收敛到 cjnote 那种**：`节点状态 → 服务商（地址 / Key / 模型名 / 接入协议）→ 生成参数
+  → 保存并生效 · 测试连通 · 重启引擎`。**整块「候选模型」清单删掉**（含 `loadModels` 与 `.modelitem` 样式）：
+  cjh 的 `/api/models` 只是把 `settings.json` 里手写的 `models` 数组原样返回
+  （`handleListModels` 不查服务商真实目录），拿它当校验等于用一份手写列表去否定用户输入。
+- **删掉「配置里的模型 X 不在下面的列表里」这条告警**（用户判定：*模型名填啥就是啥，不应该显示是不是在什么清单里*）。
+  模型名以「模型名」输入框 / `settings.json.model` 为准；这组值通不通由「测试连通」回答。
+- 「本会话已切到 X / 配置里写的仍是 Y」这条保留：那是**会话级覆盖 ≠ 配置**的真实差异，不是清单校验。
+
+### Fixed
+
+- **点右栏 ⚙「模型与服务商设置」抛 `ReferenceError: loadSettings is not defined`**（`about:blank:2557`）：
+  那段 handler 在**外层作用域**，而 `loadSettings` / `loadModels` 定义在内层
+  `withBridge(function(tauri){…})` 里 —— 设置页能打开但字段永远不填充，界面上就是"点了没反应"
+  （与 AGENTS §4-107 左栏徽标同族）。处置：内层注册 `window.__aiSettingsOpen`，外层只切版面 + 走桥。
+
+---
+
 ## [0.39.61] - 2026-11-02
 
 **主题**：**win-x64 随包引擎同步 cjh 1.6.5**（selfcontained 五件套整套替换，0.39.60 的未验项之一清账）。

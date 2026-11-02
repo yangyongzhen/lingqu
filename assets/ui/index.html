@@ -504,12 +504,8 @@ label.setlabel{font-size:11.5px;color:var(--dim);margin-top:4px}
 input.setinput,select.setinput{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--fg);
   border-radius:8px;padding:7px 9px;font:inherit;font-size:12px}
 input.setinput:focus,select.setinput:focus{outline:none;border-color:var(--acc)}
-.modelitem{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;
-  background:var(--panel2);cursor:pointer;font-size:12px}
-.modelitem:hover{border-color:var(--acc)}
-.modelitem.on{border-color:var(--acc);background:var(--accsoft)}
-.modelitem .id{font-family:var(--mono);font-size:10.5px;color:var(--dim2);margin-left:auto}
-.modelitem .nm{font-size:12px;color:var(--fg)}
+/* 候选模型清单的样式随清单一起删掉（0.39.62）：模型名以「模型名」输入框为准，
+   清单只是手写候选，不该出现在设置页里。 */
 .setactions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
 .sethint{font-size:11px;color:var(--dim2);line-height:1.6;margin-top:2px}
 /* 设置面板里的"说清楚"提示行（0.39.46）：模型/配置不一致时不能静默 */
@@ -1128,7 +1124,8 @@ body.ai-hidden .ai-show{display:block}
         <div id="aiHint" style="display:none"><div class="hintcard" id="aiHintBody"></div></div>
       </div>
 
-      <!-- 设置视图（模型配置） -->
+      <!-- 设置视图（模型配置）：按 cjnote 的形态收敛——一个服务商表单 + 生成参数 + 三个按钮，
+           不再把"候选模型清单"摆在上面占位（模型名本来就填啥就是啥）。 -->
       <div class="settings" id="aiSettings">
         <div class="sethead"><button class="iconbtn" id="aiSetBack" title="返回对话">←</button><span>模型与服务商</span>
           <span style="margin-left:auto"><button class="btn sm ghost" id="setRefresh">重新读取</button></span></div>
@@ -1137,17 +1134,20 @@ body.ai-hidden .ai-show{display:block}
         <div class="setrow"><span class="bk">状态</span><span class="bv" id="setState">查询中…</span></div>
         <div class="setrow"><span class="bk">端点</span><span class="bv" id="setEndpoint">-</span></div>
 
-        <div class="setgroup">模型</div>
-        <div id="modelList" class="small muted">引擎就绪后自动加载</div>
-
         <div class="setgroup">服务商</div>
         <label class="setlabel" for="setBase">接入地址 Base URL</label>
-        <input class="setinput" id="setBase" placeholder="留空＝不修改（cjh 内置默认）">
+        <input class="setinput" id="setBase" placeholder="https://api.deepseek.com">
         <label class="setlabel" for="setKey">API Key</label>
         <input class="setinput" id="setKey" type="password" placeholder="留空＝不修改">
         <div class="sethint" id="setKeyHint">当前：未设置</div>
         <label class="setlabel" for="setModel">模型名</label>
-        <input class="setinput" id="setModel" placeholder="例如 deepseek-v4-flash">
+        <input class="setinput" id="setModel" placeholder="填什么就是什么（例如 deepseek-chat）">
+        <!-- 接入协议（0.39.62）：cjh 只认配置文件里的 provider_protocol，改完要重启引擎才生效 -->
+        <label class="setlabel" for="setProto">接入协议</label>
+        <select class="setinput" id="setProto">
+          <option value="openai">OpenAI 兼容（chat/completions）</option>
+          <option value="anthropic">Anthropic（messages）</option>
+        </select>
 
         <div class="setgroup">生成参数</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
@@ -1159,10 +1159,14 @@ body.ai-hidden .ai-show{display:block}
 
         <div class="setactions">
           <button class="btn primary sm" id="setSave">保存并生效</button>
+          <!-- 测试连通（0.39.62，照 cj-tauri/examples/cjnote）：用**表单里这组值**真发一条最小对话，
+               不改配置、不动会话。没有它，"模型名 / 地址 / 密钥到底通不通"只能靠发一句真问题去猜。 -->
+          <button class="btn sm" id="setTest" title="用上面这组值真发一条最小对话（不改配置、不落会话）">测试连通</button>
           <button class="btn sm" id="setDeploy">重启引擎</button>
         </div>
-        <div class="sethint" id="setNote">配置直接写进 <b>cjh 自己的</b> settings.json（本应用不另存密钥）。
-          保存后立即推给正在运行的 cjh，外部实例也生效、不必重启。</div>
+        <div class="sethint" id="setNote">配置写进 <b>cjh 自己的</b> settings.json（本应用不另存密钥）：
+          地址 / 模型 / 密钥 / 生成参数保存后即时推给运行中的 cjh；<b>接入协议只认配置文件</b>，
+          改完要「重启引擎」才生效。「测试连通」用表单里这组值发一条最小对话，只验连通、不改配置。</div>
       </div>
 
       <div class="composer" id="aiComposer">
@@ -2554,7 +2558,15 @@ document.addEventListener('keydown', function(e){
 
 /* ---------- 设置视图切换 ---------- */
 function showSettings(on){ document.body.classList.toggle('ai-settings', on); }
-document.getElementById('aiCfgBtn').onclick = function(){ showSettings(true); loadSettings(); loadModels(); };
+/* ⚠ 作用域坑（0.39.62 修）：这里在**外层作用域**，而 `loadSettings` / `loadModels` 定义在
+ * 下面的 `withBridge(function(tauri){ … })` 里（内层）。原写法直接调用 → 点 ⚙ 抛
+ * `ReferenceError: loadSettings is not defined`，只落 window.onerror：设置页能打开但字段永远不填充，
+ * 界面上看起来就是"点了没反应"（与 AGENTS §4-107 同族）。
+ * 处置与左栏徽标一致：外层只切版面，取数据走内层注册的桥 `window.__aiSettingsOpen`。 */
+document.getElementById('aiCfgBtn').onclick = function(){
+  if (window.__aiSettingsOpen) { window.__aiSettingsOpen(); }
+  else { showSettings(true); }   // 桥还没注册（引擎脚本没跑完）时至少把版面切过去，不抛异常
+};
 document.getElementById('aiSetBack').onclick = function(){ showSettings(false); };
 
 /* ---------- 主题 ---------- */
@@ -2965,7 +2977,13 @@ withBridge(function(tauri){
       }
     }).catch(function(e){ if (note) note.textContent = '拉起失败：' + esc(e.message); });
   }
-  $('setDeploy').onclick = deploy;
+  // 「重启引擎」（0.39.62）：在跑就**真重启**（旧代码只调 deploy，而 deploy 见到活实例就复用，
+  // 于是改完接入协议点它等于没点——协议是启动时读一次的字段）。没在跑才走部署路径。
+  $('setDeploy').onclick = function(){
+    var st = (typeof CJ_STATUS !== 'undefined' && CJ_STATUS) ? String(CJ_STATUS.state || '') : '';
+    if (st === 'running' || CJ.up) { restartEngine(''); return; }
+    deploy();
+  };
 
   /* ===== 模型列表 =====
    * 0.39.46 修：以前只渲染 `m.id`，**模型的显示名（name）从来没显示**——
@@ -2977,68 +2995,14 @@ withBridge(function(tauri){
    */
   var SETTINGS_CACHE = null;
 
-  function modelTitle(m){
-    var bits = [];
-    if (m.name) { bits.push(String(m.name)); }
-    if (m.baseUrl) { bits.push('baseUrl: ' + String(m.baseUrl)); }
-    if (typeof m.temperature === 'number') { bits.push('temperature: ' + m.temperature); }
-    return bits.join('\n');
-  }
-
-  function loadModels(){
-    var box = $('modelList');
-    box.innerHTML = '<span class="muted">加载中…</span>';
-    invoke('t2h:cjh_models').then(function(r){
-      if (!r || !r.ok) {
-        window.__modelErr = (r && r.error) ? r.error : 'no-response';
-        box.innerHTML = '<span class="muted">' + esc(window.__modelErr) + '</span>'; return;
-      }
-      var d = r.data || {};
-      var apiCur = String(d.current || '');
-      var cfgCur = (SETTINGS_CACHE && SETTINGS_CACHE.model) ? String(SETTINGS_CACHE.model) : '';
-      var cur = cfgCur || apiCur;                 // 配置优先：真正在用的是 settings.model
-      var ms = d.models || [];
-      window.__modelErr = ms.length ? '' : ('empty-list current=' + cur);
-      if (!ms.length) { box.innerHTML = '<span class="muted">cjh 没返回模型列表</span>'; return; }
-      var html = '';
-      if (apiCur && cfgCur && apiCur !== cfgCur) {
-        html += '<div class="sethint warnbox">列表里的「当前」是 cjh 报的 ' + esc(apiCur)
-          + '，但配置里写的是 ' + esc(cfgCur) + '；界面上按配置标记。</div>';
-      }
-      if (cur && !ms.some(function(m){ return String(m.id) === cur; })) {
-        html += '<div class="sethint warnbox">配置里的模型 ' + esc(cur) + ' 不在下面的列表里。</div>';
-      }
-      var sm = (typeof CJ !== 'undefined' && CJ.sessionModel) ? String(CJ.sessionModel) : '';
-      if (sm && sm !== cur) {
-        html += '<div class="sethint warnbox">本会话已切到 ' + esc(sm) + '（会话级覆盖，不改配置）；'
-          + '配置里写的仍是 ' + esc(cur || '（空）') + '。</div>';
-      }
-      box.innerHTML = html;
-      ms.forEach(function(m){
-        var isCur = (String(m.id) === cur);
-        var isSess = (!!sm && String(m.id) === sm);
-        var el = document.createElement('div');
-        el.className = 'modelitem' + (isCur ? ' on' : '');
-        el.innerHTML = '<span class="nm">' + esc(m.name || m.id) + '</span>'
-          + (m.name ? ('<span class="id">' + esc(m.id) + '</span>') : '')
-          + (isSess ? '<span class="pill info">本会话</span>' : '')
-          + (isCur ? '<span class="pill ok">当前</span>' : '');
-        var ti = modelTitle(m);
-        if (ti) { el.title = ti; }
-        el.onclick = function(){
-          // 点一下就切：等价于把模型名填进表单再保存（cjh 侧同一条 PATCH 语义）
-          $('setModel').value = m.id;
-          saveSettings([isCur ? '（未变化）' : '切换模型']);
-        };
-        box.appendChild(el);
-      });
-    }).catch(function(e){
-      window.__modelErr = 'invoke-error: ' + e.message;
-      box.innerHTML = '<span class="muted">' + esc(e.message) + '</span>';
-    });
-  }
-
-  /* ===== 设置读写 ===== */
+  /* ===== 设置读写 =====
+   * 0.39.62（用户判定："模型名填啥就是啥，不应该显示是不是在什么清单里"）：
+   * **整块候选模型清单删掉**——cjh 的 `/api/models` 只是把 settings.json 里手写的
+   * `models` 数组原样返回（`handleListModels` 不查服务商真实目录），拿它当校验等于
+   * 用一份手写列表去否定用户输入。模型名以「模型名」输入框 / `settings.json.model` 为准，
+   * 想知道这组值到底通不通，用「测试连通」真发一条最小对话。
+   * 设置页形态也就此收敛到 cjnote 那种：服务商表单 + 生成参数 + 三个按钮。
+   */
   function loadSettings(){
     invoke('t2h:cjh_settings').then(function(r){
       if (!r || !r.ok) { $('setKeyHint').textContent = '读取配置失败：' + ((r && r.error) || ''); return; }
@@ -3054,10 +3018,15 @@ withBridge(function(tauri){
     if (typeof c.maxIterations === 'number' && c.maxIterations > 0) { CJ.maxIterations = c.maxIterations; }
       $('setKey').value = '';   // 密钥永不回填
       $('setKeyHint').textContent = c.apiKey ? ('当前已保存：' + c.apiKey + '（留空则不修改）') : '当前：未设置';
-      loadModels();              // 配置到手后重画模型列表：让「当前」与配置一致
+      // 接入协议（0.39.62）：cjh 的 /api/settings 不返回它，是仓颉侧从 settings.json 补进 data 的。
+      // 空串 = 文件里没写该项，按 cjh 默认 openai 显示（并不假装"已保存"）。
+      if ($('setProto')) {
+        var proto = String(c.protocol || '') || 'openai';
+        $('setProto').value = (proto === 'anthropic') ? 'anthropic' : 'openai';
+      }
     }).catch(function(e){ $('setKeyHint').textContent = '读取配置失败：' + esc(e.message); });
   }
-  $('setRefresh').onclick = function(){ loadSettings(); loadModels(); loadStatus(); };
+  $('setRefresh').onclick = function(){ loadSettings(); loadStatus(); };
 
   function saveSettings(reason){
     var payload = {
@@ -3065,6 +3034,14 @@ withBridge(function(tauri){
       model: $('setModel').value.trim(),
       apiKey: $('setKey').value.trim()
     };
+    // 接入协议：**只在真的改了**才带上（cjh 侧走"写配置文件 + 需重启"）。
+    // 不带也能救回一个坑：文件里本来没有 provider_protocol 时（cjh 默认 openai），
+    // 每次点保存都带一份会让文件平白多出一个键 + 一份 .bak.protocol（用户没改任何东西却多出改动）。
+    if ($('setProto')) {
+      var wantProto = String($('setProto').value || 'openai');
+      var curProto = (SETTINGS_CACHE && SETTINGS_CACHE.protocol) ? String(SETTINGS_CACHE.protocol) : 'openai';
+      if (wantProto !== curProto) { payload.protocol = wantProto; }
+    }
     var temp = parseFloat($('setTemp').value);
     if (!isNaN(temp)) payload.temperature = temp;
     var mt = parseInt($('setMaxTok').value, 10);
@@ -3077,7 +3054,13 @@ withBridge(function(tauri){
     invoke('t2h:cjh_settings_save', { data: payload }).then(function(r){
       btn.disabled = false; btn.textContent = '保存并生效';
       r = r || {};
-      if (!r.ok) { $('setNote').textContent = '保存失败：' + (r.error || '未知原因'); return; }
+      if (!r.ok) {
+        // 引擎那边没通（cjh 没响应）也不许瞒掉"协议已经写进文件"这件事——
+        // 两条路径是分开的：协议走配置文件，其余字段走 REST（AGENTS §4-117 同纪律：写了一半要说清）
+        var tail0 = (r.protocolNote ? '　接入协议：' + r.protocolNote : '');
+        $('setNote').textContent = '保存失败：' + (r.error || '未知原因') + tail0;
+        return;
+      }
       $('setNote').textContent = '已保存 ' + (r.savedFields || 0) + ' 个字段并即时生效（留空的字段没动）。' +
         (reason ? '（' + reason.join('、') + '）' : '');
       $('setKey').value = '';
@@ -3088,13 +3071,48 @@ withBridge(function(tauri){
         wsSend({ type: 'switch_model', model: wantModel });
         $('setNote').textContent += '　已向本会话下发 switch_model（' + wantModel + '）。';
       }
-      loadSettings(); loadModels();
+      // 协议改过了：只认配置文件 ⇒ 必须重启引擎才生效（如实说，并给一键重启；外部实例会拒绝）
+      if (r.protocolChanged) {
+        $('setNote').textContent += '　接入协议已写入配置文件（' + (r.protocolNote || '') + '）';
+        restartEngineReason('接入协议改动需要重启引擎才生效');
+      } else if (r.protocolNote) {
+        $('setNote').textContent += '　接入协议：' + r.protocolNote;
+      }
+      loadSettings();
     }).catch(function(e){
       btn.disabled = false; btn.textContent = '保存并生效';
       $('setNote').textContent = '保存失败：' + esc(e.message);
     });
   }
   $('setSave').onclick = function(){ saveSettings(null); };
+
+  /* 重启引擎（0.39.62）：`t2h:cjh_restart` 只重启**本应用拉起的**那只（D-003 不抢不杀）。
+     外部实例会回 ok=false + external=true，界面如实转述，不假装重启成功。 */
+  function restartEngine(why){
+    var note = $('setNote');
+    var btn = $('setDeploy');
+    if (note) { note.textContent = (why ? why + '——' : '') + '正在重启引擎…'; }
+    if (btn) { btn.disabled = true; btn.textContent = '重启中…'; }
+    invoke('t2h:cjh_restart').then(function(r){
+      r = r || {};
+      if (btn) { btn.disabled = false; btn.textContent = '重启引擎'; }
+      if (!r.ok) {
+        if (note) { note.textContent = '重启失败：' + (r.error || '未知原因'); }
+        return;
+      }
+      if (note) {
+        note.textContent = (why ? why + '——' : '') + '已重启引擎（' + (r.apiUrl || '') + '）'
+          + (r.bin ? '，用的是 ' + r.bin : '') + '。接入协议等配置已生效。';
+      }
+      // 旧连接随旧进程一起断了：重置连接标记再连一次，状态胶囊与设置页都跟着刷新
+      if (typeof CJ !== 'undefined') { CJ.up = false; }
+      setTimeout(function(){ try { wsConnect(); } catch (e) {} loadStatus(); }, 600);
+    }).catch(function(e){
+      if (btn) { btn.disabled = false; btn.textContent = '重启引擎'; }
+      if (note) { note.textContent = '重启失败：' + esc(e.message); }
+    });
+  }
+  function restartEngineReason(why){ restartEngine(why); }
 
   /* ============================================================
    * 对话通道：ws://127.0.0.1:<port>/ws
@@ -3118,8 +3136,144 @@ withBridge(function(tauri){
     // 现在每处 abort 都标来源，随 ui_report 回投，别再靠猜（是哪个入口按的）
     abortSource: '', abortAt: 0,
     // 本会话实际在用的模型（来自 switch_model 的 ack 回执）；与配置里的 model 是两回事（0.39.46）
-    sessionModel: ''
+    sessionModel: '',
+    // 测试连通探针的运行时状态（0.39.62）：on=正在测；acc=累计回复；t0=起始时刻；timer=超时句柄
+    probe: null
   };
+
+  /* ============================================================
+   * 测试连通（0.39.62，照 cj-tauri/examples/cjnote 的实现）
+   *
+   * 为什么能"不改配置就测这组值"：cjh 的 `chat` 帧自带 **单次模型覆盖**
+   * （`src/web/protocol.cj` 的 ChatRequest：`model` / `baseUrl`（亦接受 `base_url`）/
+   * `apiKey`（亦接受 `api_key`），优先级 帧字段 > 会话级 switch_model > 当前配置，
+   * 明确「本次 run 局部生效，不落盘、不粘连」）。所以探针不 POST、不写文件：
+   * 把表单里的值随帧带过去，测完配置一字未动。
+   *
+   * 为什么不带 session_id：让 cjh 为这一轮另开会话，既不污染用户当前对话，也不顶掉会话 id。
+   * 为什么必须拦住探针期的帧：delta/done 若进聊天面板，会把用户的对话画乱；
+   * 且 `done` 会走 finishTurn 把当前回合收口（探针不是用户的回合）。
+   * ============================================================ */
+  var PROBE_PROMPT = '连通测试：请只回复一个词 ok';
+  var PROBE_TIMEOUT_MS = 45000;
+
+  function probeState(){
+    if (!CJ.probe) {
+      CJ.probe = { on: false, t0: 0, acc: '', timer: null, frames: 0,
+                   state: '', note: '', ms: -1, model: '', base: '', keyUsed: false, src: '' };
+    }
+    return CJ.probe;
+  }
+  function probeNote(text){
+    var note = $('setNote');
+    if (note) { note.textContent = text; }
+    probeState().note = String(text || '');
+  }
+  function probeBusy(on){
+    var btn = $('setTest');
+    if (!btn) { return; }
+    btn.disabled = !!on;
+    btn.textContent = on ? '测试中…' : '测试连通';
+  }
+  /** 收尾：state ∈ ok / empty / fail / timeout / cancelled（空=还没测过） */
+  function probeFinish(state, detail, ms){
+    var p = probeState();
+    if (p.timer) { clearTimeout(p.timer); }
+    p.on = false;
+    p.timer = null;
+    probeBusy(false);
+    var cost = (typeof ms === 'number' && ms >= 0) ? ms : (Date.now() - (p.t0 || Date.now()));
+    p.ms = cost;
+    p.state = String(state || '');
+    var got = String(p.acc || '').replace(/[\r\n]+/g, ' ').trim();
+    if (state === 'ok') {
+      probeNote('✅ 连通：模型回了「' + got.slice(0, 40) + '」，用时 ' + cost + ' ms。'
+        + '本次只做一次单轮覆盖，未改动配置、未动会话。');
+    } else if (state === 'empty') {
+      probeNote('⚠ 接口通了、模型没吐字（用时 ' + cost + ' ms）：多半是**模型名在该服务商上不可用**'
+        + '（DeepSeek 官方是 deepseek-chat / deepseek-reasoner）。' + (detail ? '明细：' + detail : ''));
+    } else if (state === 'timeout') {
+      probeNote('⌛ 超时（' + Math.round(PROBE_TIMEOUT_MS / 1000) + ' 秒内没有收尾帧）：'
+        + '地址不通 / 密钥无效 / 服务商在排队，都长这样。');
+    } else if (state === 'cancelled') {
+      probeNote('已取消：' + (detail || ''));
+    } else {
+      probeNote('❌ 不通：' + (detail || '未知原因') + '（用时 ' + cost + ' ms）');
+    }
+    reportUi('settings-probe');
+  }
+  /** 探针期的帧：只归拢到设置页，不进聊天面板、不接会话 id（返回 true = 这帧归探针了） */
+  function handleProbeFrame(m){
+    var p = probeState();
+    if (!p.on) { return false; }
+    p.frames += 1;
+    var type = m.type || '';
+    if (type === 'delta') { p.acc += (m.text || ''); return true; }
+    if (type === 'tool_start' || type === 'tool_result' || type === 'tasks' ||
+        type === 'history_messages' || type === 'ack') { return true; }
+    if (type === 'error') { probeFinish('fail', cjhErrText(m)); return true; }
+    if (type === 'cancelled') { probeFinish('cancelled', 'cjh 报 was_running=' + (m.was_running ? 'true' : 'false')); return true; }
+    if (type === 'done') {
+      if (m.finish_reason === 'error') { probeFinish('fail', 'cjh 以异常收尾（细节见 cjh 日志）'); }
+      else if (String(probeState().acc || '').trim().length === 0) { probeFinish('empty', m.finish_reason || ''); }
+      else { probeFinish('ok'); }
+      return true;
+    }
+    if (type === 'approval_request') {
+      // 探针只发一句话、不调工具；真收到审批说明 cjh 侧状态不对（比如上一轮没跑完）
+      probeFinish('fail', '这一轮还要审批（探针不调工具，说明 cjh 侧还有未收尾的回合）');
+      return true;
+    }
+    return false;
+  }
+  function testCjhConnectivity(src){
+    var p = probeState();
+    if (p.on) { return; }
+    // 谁发起的（0.39.62）：排障时"没人点它却花了模型调用"要能一眼看出来源
+    //   button=用户点了按钮 / probe-mode=页内自检 / unknown=别的路径
+    var from = String(src || 'button');
+    // 有回合正在流式回复时不许插队：探针会往同一个 cjh 会话里塞一条 chat 帧，
+    // 两条回合的 delta 会混在同一个气泡里（finishTurn 收尾时 curBubble 会置空，用它判"在流式"）
+    if (CJ.curBubble || (typeof AIP !== 'undefined' && AIP && AIP.active)) {
+      probeNote('正在回复 / 迁移中，等这一轮跑完再测。');
+      return;
+    }
+    var frame = { type: 'chat', message: PROBE_PROMPT };
+    var used = [];
+    var base = String($('setBase').value || '').trim();
+    if (base) { frame.baseUrl = base; used.push('地址'); }
+    var model = String($('setModel').value || '').trim();
+    if (model) { frame.model = model; used.push('模型'); }
+    var key = String($('setKey').value || '').trim();
+    // 掩码值（含 ****）不能当真值回传：那是 cjh 脱敏后的展示，传回去会被当成新密钥
+    if (key && key.indexOf('****') < 0) { frame.apiKey = key; used.push('密钥'); }
+    probeBusy(true);
+    var run = function(){
+      if (!CJ.up) {
+        probeBusy(false);
+        probeFinish('fail', 'cjh 未连接（' + (CJ_STATUS && CJ_STATUS.state || '未知') + '），先点一下「重启引擎」或看聊天页状态');
+        return;
+      }
+      p.on = true; p.t0 = Date.now(); p.acc = ''; p.frames = 0;
+      p.state = ''; p.ms = -1; p.src = from;
+      p.model = model; p.base = base; p.keyUsed = used.indexOf('密钥') >= 0;
+      probeNote('测试中…（' + (used.length > 0 ? '覆盖表单里的 ' + used.join('、') : '表单没填，用 cjh 已保存的配置')
+        + '；最多等 ' + Math.round(PROBE_TIMEOUT_MS / 1000) + ' 秒）');
+      p.timer = setTimeout(function(){
+        if (probeState().on) {
+          // 超时也要收尾：否则探针标记永远挂着，后续帧全被它吞掉
+          probeFinish('timeout', '');
+        }
+      }, PROBE_TIMEOUT_MS);
+      try { wsSend(frame); }
+      catch (e) { probeFinish('fail', '发送失败：' + ((e && e.message) ? e.message : e), 0); }
+    };
+    if (CJ.up) { run(); return; }
+    // 未连接：先连一次再来（与聊天发送同一策略，不给用户"先自己连一下"的负担）
+    try { wsConnect(); } catch (e) { /* 连不上时 run() 会如实报 */ }
+    setTimeout(run, 1500);
+  }
+  $('setTest').onclick = function(){ testCjhConnectivity('button'); };
 
   function wsUrl() { return 'ws://127.0.0.1:' + (CJ.port || 8765) + '/ws'; }
   function chatBox() { return $('aiChat'); }
@@ -3161,6 +3315,10 @@ withBridge(function(tauri){
     CJ.curBubble = bubble;
     CJ.acc = '';
     CJ.lastToolErr = '';   // 新回合开始：清掉上一回合的工具错误（0.39.51）
+    CJ.lastToolErrName = '';
+    // 新回合开始就把「上一回合为什么停」清掉（0.39.63）：否则一条旧的 reason 会串到下一轮，
+    // 让普通问答也被当成"迁移停了"（§4-105 同族：一次性快照不许当"现在"用）
+    window.__turnEnd = null;
     return bubble;
   }
 
@@ -3193,15 +3351,32 @@ withBridge(function(tauri){
     if (finishReason === 'length') { reasons.push('上下文/长度上限'); }
     if (finishReason === 'error') { reasons.push('回合异常'); }
     var lastErr = String(CJ.lastToolErr || '');
-    var done = (typeof AIP !== 'undefined' && AIP && (AIP.finished === true));
-    var active = (typeof AIP !== 'undefined' && AIP && AIP.active === true);
+    var errName = String(CJ.lastToolErrName || '');
+    var tail = (lastErr ? ('\n最后一条工具报错' + (errName ? ('（' + errName + '）') : '') + '：' + lastErr.slice(0, 200)) : '');
+    // ⚠ 0.39.63（用户实测，发 "hello"）：这一轮**根本不是迁移**，屏幕上却出现一张红卡
+    //   「为什么停：模型自己结束了这一轮…迁移还没完成」。根因是判据只看了 `AIP.finished`：
+    //   普通问答时 finished=false、active=false，于是"还没迁完"这个结论被无条件套了上去。
+    //   正确判据：**只有 AI 自动迁移监管态在跑（AIP.active）时，才存在"迁移还没完成"这回事**。
+    var aip = (typeof AIP !== 'undefined') ? AIP : null;
+    var migrationTurn = !!(aip && aip.active === true);
+    if (!migrationTurn) {
+      // 普通问答：有真原因（预算/长度/异常）才解释一句，且**一个字都不提迁移**；
+      // 正常结束（stop）就什么都不多说——聊天结束不该背红卡。
+      window.__turnEnd = (reasons.length > 0)
+        ? { reason: reasons.join('；'), lastErr: lastErr.slice(0, 200), tool: errName }
+        : null;
+      if (reasons.length > 0) {
+        addError('回合结束的原因：' + reasons.join('；') + '。' + tail, 'turn_stop');
+      }
+      return;
+    }
+    var done = (aip && (aip.finished === true));
     // 只有"确实还没迁完"才提醒（已全部有结论就别再喊，§4-41 那课的同类）
     if (!done) {
       if (reasons.length === 0) { reasons.push('模型自己结束了这一轮（它认为无法再推进）'); }
-      var errName = String(CJ.lastToolErrName || '');
       var msg = '为什么停：' + reasons.join('；') + '。迁移还没完成'
-        + (active ? '（监管态仍在跑，可点「停止」收尾）' : '——可以点 ① 屏的「继续」让它接着干')
-        + (lastErr ? ('\n最后一条工具报错' + (errName ? ('（' + errName + '）') : '') + '：' + lastErr.slice(0, 200)) : '')
+        + '（监管态仍在跑，可点「停止」收尾）'
+        + tail
         + (lastErr ? '' : '（没有工具报错——那就是轮次/模型侧的原因，不是命令失败）');
       window.__turnEnd = { reason: reasons.join('；'), lastErr: lastErr.slice(0, 200), tool: errName };
       addError(msg, 'turn_budget');
@@ -4341,7 +4516,9 @@ withBridge(function(tauri){
   }
 
   function addError(html, code) {
-    insertNode(mkEl('<div class="msg"><div class="av ai">AI</div><div class="b">' +
+    // 0.39.63：给错误卡一个稳定的类名，界面自检才能**数得清**「屏幕上多了几张红卡」。
+    // 用户实测（发 "hello"）：正常回复之后多出一张红卡说"迁移还没完成"——那张卡就是这里画出来的。
+    insertNode(mkEl('<div class="msg errmsg"><div class="av ai">AI</div><div class="b">' +
       '<div class="who">错误 · ' + now() + '</div>' +
       '<div class="bubble" style="border-color:rgba(255,123,114,.4);background:var(--errsoft)">' +
       html + '</div></div></div>'));
@@ -4501,6 +4678,12 @@ withBridge(function(tauri){
 
   function onFrame(m) {
     var t = m.type || '';
+    // 测试连通探针（0.39.62）：探针期的帧只归拢给设置页——不进聊天面板、不接会话 id、
+    // 不进回合收口（`done` 若照常走 finishTurn，用户的当前回合会被探针顶掉）。
+    if (CJ.probe && CJ.probe.on && handleProbeFrame(m)) {
+      CJ.lastType = t;
+      return;
+    }
     bump('frames');
     CJ.lastType = t;
     // 帧类型计数：排障时"cjh 到底回了什么"只认这个（别靠猜）
@@ -4589,7 +4772,7 @@ withBridge(function(tauri){
       // 记下来，"本会话在用的模型"与"配置里写的模型"才分得清（0.39.46）
       if (String(m.action || '') === 'switch_model' && m.model) {
         CJ.sessionModel = String(m.model);
-        loadModels();
+        loadSettings();   // 候选清单已删（0.39.62）：只需把表单与「本会话」状态对齐
       }
     } else if (t === 'history_messages') {
       // 断线重连后 cjh 会把**整个会话历史**推回来（0.39.33）。
@@ -6720,7 +6903,9 @@ withBridge(function(tauri){
       aiHidden: document.body.classList.contains('ai-hidden'),
       idCount: document.querySelectorAll('[id]').length,
       settingsOpen: document.body.classList.contains('ai-settings'),
-      modelItems: document.querySelectorAll('.modelitem').length,
+      // 候选模型清单已删（0.39.62，用户判定"模型名填啥就是啥"）：这两项保留只为兼容旧报告，
+      // 恒为 0 / 空串。想知道"这组值通不通"请看 settingsProbe（测试连通的结果）。
+      modelItems: 0,
       modelError: window.__modelErr || '',
       wsState: CJ.up ? 'connected' : (CJ.connecting ? 'connecting' : 'closed'),
       frames: CJ.frames,
@@ -7087,37 +7272,60 @@ withBridge(function(tauri){
       // 提示卡节点是否还在（0.39.45）：历史回放清屏曾把它冲掉，导致状态渲染整段抛异常
       aiHintOk: (document.getElementById('aiHint') && document.getElementById('aiHintBody')) ? 1 : 0,
       // 设置面板回读值（0.39.46）：把「界面上到底显示了什么」原样回投，与 cjh /api/settings 的真值对账——
-      // 只看 `modelItems` 那种计数发现不了"字段挂错了""掩码显示成别的东西"这类问题。
+      // 只看计数发现不了"字段挂错了""掩码显示成别的东西"这类问题。
       settingsDump: (function(){
         if (!document.getElementById('aiSettings')) { return ''; }
         function v(id){ var el = document.getElementById(id); return el ? String(el.value === undefined ? '' : el.value) : '<missing>'; }
         function t(id){ var el = document.getElementById(id); return el ? String(el.textContent || '').trim() : '<missing>'; }
-        var ids = [];
-        var box = document.getElementById('modelList');
-        var curMarked = '';
-        if (box) {
-          var items = box.querySelectorAll('.modelitem');
-          for (var i = 0; i < items.length; i++) {
-            var idEl = items[i].querySelector('.id');
-            var nmEl = items[i].querySelector('.nm');
-            var isCur = items[i].classList.contains('on');
-            if (isCur && idEl) { curMarked = String(idEl.textContent || ''); }
-            ids.push({
-              id: idEl ? String(idEl.textContent || '') : '',
-              name: nmEl ? String(nmEl.textContent || '') : '',
-              cur: isCur
-            });
-          }
-        }
         return JSON.stringify({
           base: v('setBase'), key: v('setKey'), keyHint: t('setKeyHint'),
-          model: v('setModel'), temp: v('setTemp'), maxTok: v('setMaxTok'), maxIter: v('setMaxIter'),
+          model: v('setModel'), proto: v('setProto'),
+          temp: v('setTemp'), maxTok: v('setMaxTok'), maxIter: v('setMaxIter'),
           state: t('setState'), endpoint: t('setEndpoint'),
-          models: ids, curMarked: curMarked, sessionModel: (typeof CJ !== 'undefined') ? String(CJ.sessionModel || '') : '',
-          warn: box ? String(box.textContent || '').indexOf('不在') >= 0 : false,
-          note: t('setNote').slice(0, 90)
+          sessionModel: (typeof CJ !== 'undefined') ? String(CJ.sessionModel || '') : '',
+          testBtn: !!document.getElementById('setTest'),
+          testLabel: t('setTest').slice(0, 20),
+          probe: (function(){
+            var p = (typeof CJ !== 'undefined' && CJ.probe) ? CJ.probe : null;
+            return p ? { state: String(p.state || ''), ms: (typeof p.ms === 'number') ? p.ms : -1,
+                         frames: p.frames || 0, on: !!p.on, model: String(p.model || ''),
+                         src: String(p.src || '') } : null;
+          })(),
+          note: t('setNote').slice(0, 120)
         });
       })(),
+      // 测试连通（0.39.62）：这三项让「按钮有没有真的干活」可被自动断言——
+      // state 空=没测过；ok/empty/fail/timeout/cancelled=真的收尾了；ms=这一次往返耗时。
+      settingsProbe: (function(){
+        var p = (typeof CJ !== 'undefined' && CJ.probe) ? CJ.probe : null;
+        return p ? String(p.state || '') : '';
+      })(),
+      settingsProbeMs: (function(){
+        var p = (typeof CJ !== 'undefined' && CJ.probe) ? CJ.probe : null;
+        return (p && typeof p.ms === 'number') ? p.ms : -1;
+      })(),
+      settingsProbeNote: (function(){
+        var p = (typeof CJ !== 'undefined' && CJ.probe) ? CJ.probe : null;
+        return p ? String(p.note || '').slice(0, 200) : '';
+      })(),
+      settingsProbeFrames: (function(){
+        var p = (typeof CJ !== 'undefined' && CJ.probe) ? CJ.probe : null;
+        return (p && typeof p.frames === 'number') ? p.frames : 0;
+      })(),
+      // 候选清单已删（0.39.62）：这两个字段只为兼容旧报告留着，恒为 0，
+      // **不表示任何"校验"**——模型名以表单/配置为准。
+      settingsModelEmpty: 0,
+      // 接入协议（0.39.62）：表单里选中的值 + 仓颉侧从配置文件读回的值，两者不一致说明"改了还没重启"
+      settingsProto: (function(){
+        var el = document.getElementById('setProto');
+        return el ? String(el.value || '') : '';
+      })(),
+      settingsProtoSaved: (function(){
+        var c = (typeof SETTINGS_CACHE !== 'undefined' && SETTINGS_CACHE) ? SETTINGS_CACHE : null;
+        return c ? String(c.protocol || '') : '';
+      })(),
+      // ⚙ 按钮的作用域缺陷（0.39.62）：桥拿到没拿到，是"点了没反应"那类问题的第一现场
+      settingsOpenBridge: (typeof window.__aiSettingsOpen === 'function') ? 1 : 0,
       // P6 验证与报告（⑥ 屏真数据）
       verifyOk: VERIFY.ok === true,
       verifyRate: (typeof VERIFY.rate === "number") ? VERIFY.rate : -1,
@@ -7247,6 +7455,12 @@ withBridge(function(tauri){
         return l.kind + ' ' + String(l.text || '').slice(0, 200);
       })(),
       // 回合结束的解释（0.39.51）：turnEndReason=为什么停；lastToolErr=最后一条工具报错
+      // 错误卡计数（0.39.63）：用户实测"发 hello 却收到一张红卡说迁移还没完成"——
+      // 这种"屏幕上多了个红块"的问题必须能被数字断言，不能靠人眼。
+      errorCards: (function(){
+        var box = document.getElementById('aiChat');
+        return box ? box.querySelectorAll('.errmsg').length : 0;
+      })(),
       turnEndReason: (window.__turnEnd && window.__turnEnd.reason) ? String(window.__turnEnd.reason) : '',
       lastToolErr: (window.__turnEnd && window.__turnEnd.lastErr) ? String(window.__turnEnd.lastErr) : '',
       lastToolErrName: (window.__turnEnd && window.__turnEnd.tool) ? String(window.__turnEnd.tool) : '',
@@ -7291,9 +7505,10 @@ withBridge(function(tauri){
     if (aiHidden()) { applyAiHidden(false); }
     showSettings(true);
     loadSettings();
-    loadModels();
     setTimeout(function(){ reportUi('settings'); }, 700);
   }
+  // 外层作用域（⚙ 按钮那段）不能直接调本函数（AGENTS §4-107），统一走这条桥（0.39.62）
+  window.__aiSettingsOpen = openSettings;
 
   /* ===== 界面自检序列（LINGQU_UI_PROBE=1 时由页面自己跑）=====
    * 三步：① 初始版面 → ② 打开模型设置（会真的去读 /api/models）→ ③ 折叠 / 展开。
@@ -7303,6 +7518,65 @@ withBridge(function(tauri){
     // 断点续迁先观测一次：让 ui_report 的 resume* 字段有值可断言（纯读盘，不会拖慢序列）
     setTimeout(function(){ loadResumeBoard(resumePathValue()); }, 200);
     setTimeout(function(){ reportUi('probe-initial'); }, 400);
+    // 测试连通自检（LINGQU_UI_PROBE=probe，0.39.62）：打开设置页 → 点「测试连通」→ 回投结果。
+    // 判据：settingsProbe ∈ ok|empty|fail|timeout（不是空串，说明探针真的收尾了）、
+    //       settingsProbeMs ≥ 0、settingsProbeRows 里能看到按钮从「测试中…」回到「测试连通」、
+    //       errorCount=0；且**配置一字未改**（settingsDump 的 model/base 与启动时一致）。
+    // 这是「没有视觉也能证明按钮真的干了事」的唯一办法——探针真的会花一次模型调用。
+    if (mode === 'probe') {
+      setTimeout(function(){ openSettings(); }, 1000);
+      setTimeout(function(){ reportUi('probe-settings-open'); }, 2400);
+      setTimeout(function(){
+        var btn = $('setTest');
+        if (btn) { btn.click(); window.__probeClicked = true; }
+        reportUi('probe-conn-clicked');
+      }, 3000);      setTimeout(function(){ reportUi('probe-conn-running'); }, 7000);
+      // 45 秒超时 + 余量：收尾帧最晚在这里之前到达
+      setTimeout(function(){ reportUi('probe-conn-done'); }, 52000);
+      return;
+    }
+    // 接入协议自检（LINGQU_UI_PROBE=protocol，0.39.62）：选中 → 保存 → 回投 → 再切回原值 → 回投。
+    // 判据：settingsProtoSaved 跟着变（= 写进配置文件并读回来了）、settingsDump.note 里带
+    // 「接入协议」，errorCount=0。**必须用假 HOME（USERPROFILE 指向临时目录）跑**——
+    // 这个探针会真的写 `<home>/.cjh/settings.json`，不许动用户自己的配置。
+    if (mode === 'protocol') {
+      setTimeout(function(){ openSettings(); }, 1000);
+      setTimeout(function(){
+        if ($('setProto')) { $('setProto').value = 'anthropic'; }
+        saveSettings(['探针：切到 anthropic']);
+      }, 2600);
+      setTimeout(function(){ reportUi('protocol-saved-anthropic'); }, 6000);
+      setTimeout(function(){
+        if ($('setProto')) { $('setProto').value = 'openai'; }
+        saveSettings(['探针：切回 openai']);
+      }, 7500);
+      setTimeout(function(){ reportUi('protocol-saved-openai'); }, 11000);
+      return;
+    }
+    // 回合收尾话术自检（LINGQU_UI_PROBE=turnend，0.39.63）：复现用户那次实测——
+    //   ① **普通问答**（AIP.active=false）正常收尾：屏幕上**不许**出现任何红卡，`turnEndReason` 必须为空
+    //      （原来的 bug：这里会冒出一张「为什么停…迁移还没完成」）；`errorCards` 应为 0。
+    //   ② **迁移监管态在跑**（AIP.active=true）同样一条 done：应当给一张红卡 + turnEndReason 非空
+    //      —— 这才是那段话术该出现的场合。两次上报对比即判据。
+    if (mode === 'turnend') {
+      AIP.active = false;
+      setTimeout(function(){
+        newAssistantTurn();
+        onFrame({ type: 'delta', text: 'Hello! How can I help you today?' });
+        onFrame({ type: 'done', finish_reason: 'stop',
+                  summary: { rounds: 1, tools: 0, duration_ms: 1000 } });
+        reportUi('turnend-plain');
+      }, 1400);
+      setTimeout(function(){
+        AIP.active = true;             // 模拟"AI 自动迁移监管态在跑"
+        newAssistantTurn();
+        onFrame({ type: 'done', finish_reason: 'stop',
+                  summary: { rounds: 1, tools: 0, duration_ms: 900 } });
+        reportUi('turnend-migration');
+        AIP.active = false;
+      }, 3200);
+      return;
+    }
     // 5 样本矩阵自检（LINGQU_UI_PROBE=batch，0.39.29）：切到 ⑦ 迁移报告 → 进屏自动按落档出矩阵，
     // 再回投 batchSamples/batchPassed/batchSource/batchSumText —— 证明"迁移成功的项目"进屏即见。
     // 注意：要让这里出真数据，启动应用时得给 LINGQU_SAMPLES_ROOT（或 LINGQU_WORKSPACES）指向样本父目录。
