@@ -5,6 +5,41 @@
 
 ---
 
+## [0.39.57] - 2026-11-02
+
+**主题**：Linux 侧回归与文档收口——`bareLqRel` 跨平台分隔符修复 + README「为什么是它」。
+
+### Fixed
+
+- **`bareLqRel` 反斜杠前缀剥离绑死平台分隔符（Linux 上必挂）**：
+  `testBareLqRelStripsLingquPrefix` 在 Linux FAILED——`bareLqRel(".lingqu\\scan\\habit-tree.json")`
+  原样返回，未剥 `.lingqu\` 前缀。根因：反斜杠分支用 `cjhPathSep()` 构造前缀，而该函数
+  `@When` 平台分支在 Linux 返回 `/`——Windows 反斜杠路径（报告收数可能收到归档里的 Win 路径）
+  在 Linux 上两个分支都匹配不上。处置：`.lingqu\\` 分支无条件判断（不依赖平台），与 §4-26
+  同纪律（剥前缀/取末段，**两种分隔符都认**）。验证：Linux 上四道闸全绿，396 例 FAILED=0。
+
+### Added
+
+- **README「为什么是它」**：与传统「技能包 / 散装 CLI」路线的六维形态对比（感知全景 /
+  生命周期 / 迁移质量 / 经验沉淀 / 上手成本 / 谁来干活），凸显项目价值——
+  一句话定位：**技能包给 AI 一本攻略书，灵渠给 AI 一条带闸门的流水线和一个会自己写攻略的大脑**。
+
+### 证据
+
+```
+cjpm build      → 0 warning
+cjpm test       → TOTAL=396, FAILED=0, ERROR=0（含此前在 Linux 挂掉的该用例）
+scripts/test.sh → 六项全绿（build-biz / test / check / js-syntax / build-app / build-cli）
+环境            → Linux x86_64 首跑（cjc 1.2.0 / cj-tauri @ 7dfea72 / CLI 重编）
+```
+
+### 备注
+
+- cj-tauri CLI `sync` 不展开 `cjpm.toml` 依赖路径的 `${CJ_TAURI_ROOT}` 占位符（cjpm 能展开）
+  已提上游 issue：`cj-tauri#7`；本机以 `sync --framework "$CJ_TAURI_ROOT"` 绕过。
+
+---
+
 ## [0.39.56] - 2026-11-02
 
 **主题**：**飞轮阶段 1——把"候选池"做成可操作的东西**（不联网、不碰用户工程）。
