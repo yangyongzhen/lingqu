@@ -920,6 +920,40 @@ public class DiagnoseCommand <: CommandHandler {
     }
 }
 
+/**
+ * t2h:pr_prepare —— 飞轮阶段 2：把候选经验整理成"人只点提交"的草稿 PR 产物。
+ * 产物落 `<工程>/.lingqu/pr/<工程>/`（pr-body.md / pitfalls-suggestion.md / branch.txt），
+ * **不碰 skills/ 本体**——合并仍要人/CI（飞轮 §8 的"永远不做"清单）。
+ * token 只认环境变量 LINGQU_GITCODE_TOKEN：有则 canSubmit，无则退化本地产物（degraded），
+ * **绝不读取/写回 settings.json**（密钥在 auth.json，也不碰）。
+ */
+public class PrPrepareCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        if (path.size == 0) {
+            path = "."
+        }
+        let projName = sanitizeFileName(projectNameOf(path))
+        let token = envOr("LINGQU_GITCODE_TOKEN", "")
+        let r = preparePr(path, projName, token)
+        var res = r.toJson()
+        res.put("ok", JsonBool(r.outError == ""))
+        res.put("project", JsonString(projName))
+        if (r.outError != "") {
+            res.put("error", JsonString(r.outError))
+            eprintln("[lingqu][pr_prepare] ${projName}: 落盘失败 ${r.outError}")
+        } else {
+            eprintln("[lingqu][pr_prepare] ${projName}: prepared=${r.prepared} canSubmit=${r.canSubmit}")
+        }
+        return res
+    }
+}
+
 // ============================================================
 // 业务装配点
 // ============================================================
@@ -5650,6 +5684,7 @@ public func build(): AppSpec {
             app.register("t2h:revert", RevertCommand())
             app.register("t2h:decisions", DecisionsCommand())
             app.register("t2h:diagnose", DiagnoseCommand())
+            app.register("t2h:pr_prepare", PrPrepareCommand())
     app.register("t2h:notes", NotesCommand())
         app.register("t2h:build", BuildCommand())
         app.register("t2h:hap", HapCommand())

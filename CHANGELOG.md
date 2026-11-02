@@ -5,6 +5,44 @@
 
 ---
 
+## [0.39.58] - 2026-11-02
+
+**主题**：**P8 迁移指南 + 飞轮阶段 2（半自动 PR）**——面向用户的指南落地，经验入库从"机器提议"推进到"人只点提交"。
+
+### Added
+
+- **`docs/迁移指南.md`**（P8，验收 A5 的"迁移指南"件）：面向想把 Tauri 应用迁到鸿蒙 PC 的使用者——
+  迁移画像读什么（C1/C2/阻塞项、依赖矩阵分档不是判决）、8 步流水线**每步信什么 + 最容易踩的坑**、
+  规则/AI 双路径与 diagnose 三级递进（指纹 → AI 长尾 → fork 先行）、高频坑速查表、
+  迁完之后的报告/断点/飞轮回填、样本实证表（3/5 可复现口径）。素材与 `skills/t2h-ohos-port` 同源，一次蒸馏两份产出
+- **README 同步**：文档地图加迁移指南入口；路线 P8 ✅；验收 A5 `已实现`
+- **飞轮阶段 2：`t2h:pr_prepare`**（`src/pr_prepare.cj` + `PrPrepareCommand`，三处联动）：
+  - 产物落 `<工程>/.lingqu/pr/<工程>/`：`pr-body.md`（PR 正文，证据链六要素：标题/现象/根因/
+    复现含样本与次数/修法 + **提交前三问**）、`pitfalls-suggestion.md`（四段→三段的建议追加段，
+    **不碰 skills/ 本体**——合并是人/CI 的事）、`branch.txt`（`flywheel/<工程>-notes-<条数>`，
+    git ref 安全集字节级清洗，全非法兜底 proj）
+  - **token 纪律**：只认环境变量 `LINGQU_GITCODE_TOKEN`（有则 `canSubmit=true`），
+    无则退化本地产物（`degraded=true`，人复核后自行提交）；**绝不读取/写回 settings.json**
+  - 没有满足门槛的候选 → 不产文件、note 明说（不假装准备好）
+- **7 例新单测**（总 403）：分支名清洗（中文按字节换 `-`、全非法兜底 proj）、
+  PR 正文证据链六要素与提交前三问、空候选明说、pitfalls 建议段三段形态、
+  编排真实落盘（tmp 种子两条候选 → 三份产物 + degraded）、token 在但无候选的组合
+
+### 验证
+
+```
+cjpm build      → 0 warning
+cjpm test       → TOTAL=403, FAILED=0, ERROR=0（+7 例）
+scripts/test.sh → 六项全绿（build-biz / test / check / js-syntax / build-app / build-cli）
+```
+
+### 未验证（如实标注）
+
+- `canSubmit=true` 路径**没有真发 PR**（token 只探测不使用，提交动作永远在人手里——阶段 3 再谈自动化）；
+- 403 例里 `pr_prepare` 的编排用例依赖 `/tmp` 可写（不可写时自动跳过，不造假绿）。
+
+---
+
 ## [0.39.57] - 2026-11-02
 
 **主题**：Linux 侧回归与文档收口——`bareLqRel` 跨平台分隔符修复 + README「为什么是它」。
