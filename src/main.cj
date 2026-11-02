@@ -1873,6 +1873,11 @@ public class UiReportCommand <: CommandHandler {
         // 错误卡计数（0.39.63）：用户实测"发 hello 收到正常回复后，屏幕上多出一张红卡说迁移还没完成"。
         // 这类"多了个红块"的问题必须能数字断言——聊天正常收尾时它必须是 0。
         o.put("errorCards", JsonInt(argInt(args, "errorCards", 0)))
+        // 从头重跑（0.39.64）：归档搬了几项 / 搬到哪个目录 / 失败原因（-1 = 还没点过）
+        o.put("resetMoved", JsonInt(argInt(args, "resetMoved", -1)))
+        o.put("resetArchive", JsonString(argStr(args, "resetArchive", "")))
+        o.put("resetOk", JsonBool(argBool(args, "resetOk", false)))
+        o.put("resetErr", JsonString(argStr(args, "resetErr", "")))
         // AI 跑完自动出报告（0.39.54）：done=真出了；path=md 落档；risk=风险总体；err=失败原因
         o.put("autoReportDone", JsonBool(argBool(args, "autoReportDone", false)))
         o.put("autoReportPath", JsonString(argStr(args, "autoReportPath", "")))
@@ -3482,8 +3487,51 @@ public class VerifyCommand <: CommandHandler {
  * 口径与 `t2h:verify` 一致：落档不存在 = 没跑过（pending，不是失败）；
  * 落档存在但判定没过 = failed（**存在 ≠ 成功**）。
  */
-public class ResumeCommand <: CommandHandler {
+/**
+ * t2h:reset_records —— 「从头重跑」：把该工程的迁移落档搬进 `.lingqu/_archive-<时间戳>/`。
+ *
+ * 为什么需要它（0.39.64，用户实测）：判定只认落档，跑过一轮的工程 8 步落档都在，
+ * 再点「AI 一键迁移」agent 一看 `resume` 就"没活可干"，界面表现为"点一下直接完成"。
+ * 想真重跑就必须让观测从零开始 —— 但**只能搬我们自己的落档**（经验/台账/截图/源码不碰），
+ * 而且**搬走不删**（档案可回退、可对账）。
+ *
+ * 入参：{path}
+ * 出参：{ok, archiveDir, moved:[], failed:[], error}
+ */
+public class ResetRecordsCommand <: CommandHandler {
     public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_SCAN_PATH", "")
+        }
+        var res = JsonObject()
+        if (path.size == 0) {
+            res.put("ok", JsonBool(false))
+            res.put("error", JsonString("从头重跑需要工程路径"))
+            return res
+        }
+        let out = archiveMigrateRecords(path, nowText())
+        var mv = JsonArray()
+        for (m in out.moved) {
+            mv.add(JsonString(m))
+        }
+        var fa = JsonArray()
+        for (f in out.failed) {
+            fa.add(JsonString(f))
+        }
+        eprintln("[lingqu][reset] path=${path} archive=${out.archiveDir} moved=${out.moved.size} failed=${out.failed.size}")
+        res.put("ok", JsonBool(out.ok))
+        res.put("archiveDir", JsonString(out.archiveDir))
+        res.put("moved", mv)
+        res.put("failed", fa)
+        res.put("error", JsonString(out.error))
+        return res
+    }
+}
+
+public class ResumeCommand <: CommandHandler {    public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
         var path = argStr(args, "path", "")
@@ -3576,6 +3624,12 @@ public class ResumeCommand <: CommandHandler {
         res.put("sessionId", JsonString(board.sessionId))
         res.put("summary", JsonString(taskBoardSummary(board)))
         res.put("steps", arr)
+        // 报告落档（0.39.64，用户实测"AI 跑完 8/8、报告也自动生成了，但左栏「报告」徽标仍是未开始"）：
+        // 断点板只有 8 步（scan…verify），**没有 report 这一步**，而左栏第 6 项按 `rows['report']` 取数
+        // ⇒ 永远 undefined ⇒ 永远「未开始」。这里把报告文件的存在性与路径直接回投，让徽标有据可依。
+        let repPath = if (writePath.size > 0) { reportOutPathOf(writePath, board.project) } else { "" }
+        res.put("reportOut", JsonString(repPath))
+        res.put("reportExists", JsonBool(repPath.size > 0 && exists(Path(repPath))))
         res.put("error", JsonString(err))
         res.put("outError", JsonString(outError))
         eprintln("[lingqu][resume] ${board.project} action=${action} " +
@@ -3584,9 +3638,25 @@ public class ResumeCommand <: CommandHandler {
     }
 }
 
+/**
+ * 报告落档路径（与 `t2h:report` 的默认落点同一口径：`<工程>/.lingqu/report/<工程>.md`）。
+ *
+ * 单独收成函数是因为**产出方与消费方必须共用一份构造规则**（§4-33：只改一处 = 静默破坏另一条链路）。
+ * 左栏「报告」徽标、断点板、报告命令三处都从这里取。
+ */
+public func reportOutPathOf(projPath: String, projName: String): String {
+    if (projPath.size == 0) {
+        return ""
+    }
+    let name = if (projName.size > 0) { projName } else { sanitizeFileName(projectNameOf(projPath)) }
+    if (name.size == 0) {
+        return ""
+    }
+    return lqDirOf(projPath) + cjhPathSep() + "report" + cjhPathSep() + reportFileBase(name) + ".md"
+}
+
 /** 步骤 id 列表（错误提示里要能列全，别让人猜） */
-func taskStepIdsJoined(): String {
-    var text = ""
+func taskStepIdsJoined(): String {    var text = ""
     for (id in taskStepIds()) {
         if (text != "") {
             text += "|"
@@ -5708,6 +5778,8 @@ public func build(): AppSpec {
         app.register("t2h:deploy", DeployCommand())
         app.register("t2h:verify", VerifyCommand())
         app.register("t2h:resume", ResumeCommand())
+        // 从头重跑（0.39.64）：把该工程的迁移落档搬进 .lingqu/_archive-<时间戳>/，让观测从零开始
+        app.register("t2h:reset_records", ResetRecordsCommand())
         app.register("t2h:report", ReportCommand())
         app.register("t2h:batch", BatchCommand())
         app.register("t2h:skill", SkillCommand())

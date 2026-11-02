@@ -20,6 +20,7 @@
     "t2h:deploy",
     "t2h:verify",
     "t2h:resume",
+    "t2h:reset_records",
     "t2h:report",
     "t2h:batch",
     "t2h:skill",

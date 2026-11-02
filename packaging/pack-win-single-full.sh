@@ -125,20 +125,50 @@ restore() {
 }
 trap restore EXIT
 
-UI_B64="$(base64 -w0 assets/ui/index.html)"
-CAPS_B64=""
-for f in assets/capabilities/*.json; do
-    [ -f "$f" ] || continue
-    one="$(base64 -w0 "$f")"
-    if [ -z "$CAPS_B64" ]; then CAPS_B64="$one"; else CAPS_B64="$CAPS_B64,$one"; fi
-done
+# 内嵌哪几个常量，**以存根声明为准**（照 cj-tauri/scripts/pack-win-single.sh 的做法）：
+# 存根里写了几行 `public let PACKED_*_B64: String = ""`，这里就必须生成几行。
+# 为什么要这样：0.39.64 之前两个脚本都写死 "只生成 UI + CAPS"，而 0.39.x 给技能正文加了
+# `PACKED_SKILL_B64` ⇒ 单文件构建直接编不过（`undeclared identifier 'PACKED_SKILL_B64'`）。
+# 写死清单的脚本，永远会跟存根漂移；改成"按声明生成 + 不认识就报错"才不会再犯。
+gen_asset() {
+    local name="$1"
+    case "$name" in
+        PACKED_UI_B64)
+            base64 -w0 assets/ui/index.html ;;
+        PACKED_CAPS_B64)
+            local out="" one
+            for f in assets/capabilities/*.json; do
+                [ -f "$f" ] || continue
+                one="$(base64 -w0 "$f")"
+                if [ -z "$out" ]; then out="$one"; else out="$out,$one"; fi
+            done
+            [ -n "$out" ] || die "assets/capabilities/ 下没有 json（单文件产物没有随行清单，命令会全被拒）"
+            printf '%s' "$out" ;;
+        PACKED_SKILL_B64)
+            [ -f skills/t2h-ohos-port/SKILL.md ] || die "缺 skills/t2h-ohos-port/SKILL.md（单文件包里装技能会失败）"
+            base64 -w0 skills/t2h-ohos-port/SKILL.md ;;
+        *)
+            # 存根声明了本脚本不认识的资源：宁可失败，也不要悄悄产出一个"少一块内容"的单文件包
+            die "存根声明了 $name，但本脚本不知道怎么生成它（新增内嵌资源请在这里补一行）" ;;
+    esac
+}
+
+ASSET_NAMES=()
+while IFS= read -r n; do
+    [ -n "$n" ] && ASSET_NAMES+=("$n")
+done < <(sed -n 's/^public let \(PACKED_[A-Z0-9_]*_B64\): String = "".*/\1/p' "$PA")
+[ ${#ASSET_NAMES[@]} -gt 0 ] || die "src/packed_assets.cj 里没有 `public let PACKED_*_B64` 空存根（单文件包必须有内嵌资源）"
+
 {
     echo 'package lingqu'
     echo ''
     echo '/* 由 packaging/pack-win-single-full.sh 在构建期整体覆盖（仓库里是空存根）。 */'
     echo ''
-    printf 'public let PACKED_UI_B64: String = "%s"\n' "$UI_B64"
-    printf 'public let PACKED_CAPS_B64: String = "%s"\n' "$CAPS_B64"
+    for n in "${ASSET_NAMES[@]}"; do
+        v="$(gen_asset "$n")"
+        printf 'public let %s: String = "%s"\n' "$n" "$v"
+        echo "      $n：$((${#v} / 1024)) KB(base64)" >&2
+    done
 } > "$PA"
 
 # ---------- ③ 改派生 cjpm.toml：静态三件套 + 静态桥 + 资源对象 ----------
@@ -169,8 +199,25 @@ rm -rf targets/desktop/target
 
 EXE="targets/desktop/target/release/bin/main.exe"
 [ -f "$EXE" ] || die "没有产出 $EXE"
+SIZE_RAW="$(stat -c%s "$EXE")"
 cp "$EXE" "$OUT/main.exe"
 cp packaging/README-full.md "$OUT/README.md"
+
+# strip（照 cj-tauri/scripts/pack-win-single.sh）：仓颉 release 产物带着完整调试信息，
+# 静态单文件实测 61 MB → strip 后小一大截，交出去才像回事。
+# 两个已被踩过的坑：
+#   ① 原生 llvm 工具（strip/objcopy）只认 `C:/...` 形式路径，传 MSYS 的 `/e/...` 报 No such file；
+#   ② llvm-mingw 的 `strip.exe` 是包装器，真身 `llvm-strip` 有些发行包里缺失 —— 直接 `2>/dev/null`
+#      会把真实报错吞掉、看起来像"strip 对这个 exe 无效"。所以失败回退 SDK 自带的 llvm-objcopy。
+EXE_W="$(to_win "$OUT/main.exe")"
+if strip "$EXE_W" 2>/dev/null; then
+    echo "[strip] $SIZE_RAW → $(stat -c%s "$OUT/main.exe") 字节（strip）"
+elif [ -f "$CANGJIE_HOME/third_party/llvm/bin/llvm-objcopy.exe" ] && \
+     "$(to_posix "$CANGJIE_HOME/third_party/llvm/bin/llvm-objcopy.exe")" --strip-all "$EXE_W" 2>/dev/null; then
+    echo "[strip] $SIZE_RAW → $(stat -c%s "$OUT/main.exe") 字节（llvm-objcopy 回退）"
+else
+    echo "[strip] 警告：strip 失败，保留未裁剪的 exe（$SIZE_RAW 字节）" >&2
+fi
 
 # ---------- ⑤ 自检：不许再依赖那些 DLL，且必须有资源节 ----------
 echo "[5/6] 自检（导入表 / 资源节）"

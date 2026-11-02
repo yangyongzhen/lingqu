@@ -5,6 +5,63 @@
 
 ---
 
+## [0.39.64] - 2026-11-02
+
+**主题**：**「从头重跑」+ 两处"看着像 bug 的观测口径"** + **打包链修到能出新版单文件 exe**
+（用户实测：*点 AI 一键迁移怎么直接完成了？那我没办法重新跑一遍吗* / *报告已生成但左栏还是未开始* /
+*为啥启动时总报少 libstdx.dll* / *单个可执行文件的*）。
+
+### Added
+
+- **`t2h:reset_records` + ① 屏「↻ 从头重跑」**（命令数 38 → 39）：把该工程的迁移落档
+  （8 步目录 + report + `tasks.json`）**搬进 `<工程>/.lingqu/_archive-<时间戳>/`**，让观测从零开始，
+  搬完立刻起 AI 迁移。为什么需要它：判定只认落档（`observeTaskStep` 每次按盘上 `.lingqu/` 重新观测），
+  跑过一轮的工程 8 步落档都在 ⇒ 再点「AI 一键迁移」agent 一看 `resume` 就"没活可干"，
+  界面表现就是"点一下直接完成"——不是它偷懒，是真没有可干的活。
+  纪律：**只搬灵渠自己的落档**（`notes`/`diagnose`/`evidence`/源码一律不碰）、**搬走不删**（档案可回退）、
+  判据是"源不在且目标在"而不是"rename 没抛异常"。纯函数 `resetTargetsOf` / `archiveDirNameOf` + 5 例单测。
+  ⚠ 写这一版时又撞上 `StringBuilder.append(Byte)` 按十进制打印的老坑（`-` 变成 "45"）——
+  单测用**整串精确值**断言当场抓出（弱判据"不含 `:`"照样过，§4-62 同族）。
+- **`scripts/collect-runtime-dlls.sh`**：按导入闭包把运行时 DLL 收进
+  `targets/desktop/target/release/bin/`（Windows 的 DLL 搜索顺序里 exe 目录排第一），
+  并把它接进 `scripts/run-dev.sh`。起因：`main.exe` 导入 `libstdx.*.dll` / `libcangjie-runtime.dll` /
+  `libcjtbridge.dll`，它们只在 SDK/框架目录里 ⇒ **双击 exe 必报"缺少 libstdx.dll"并启动即退（0xC0000135）**，
+  只有走 `run-dev.bat`（配好 PATH）才起得来。收起后双击也能跑，且带闭包自检（漏一个就失败）。
+
+### Fixed
+
+- **左栏「报告」徽标永远「未开始」**：`RAIL_STEPS.report = ['report']`，而断点板只有 8 步
+  （scan…verify）**没有 report 这一步** ⇒ `rows['report']` 恒 undefined。现在 `t2h:resume` 直接回投
+  `reportOut` / `reportExists`（路径由 `reportOutPathOf` 统一构造，与 `t2h:report` 的落点同一口径），
+  前端据此合成一行观测。
+- **单文件打包链三处真问题**（用户要求"单个可执行文件的"，照 `cj-tauri/scripts/` 的做法修）：
+  ① `packaging/pack-assets.txt` 漏了 `libboundscheck.dll`（0.39.61 引擎升 1.6.5 时新增）——
+  释放出来却过不了 `cjhVendorVerified` 的五项 SHA256，运行期表现为"AI 引擎缺失"（§4-55）；
+  ② 两个打包脚本都**写死只生成 `PACKED_UI_B64`/`PACKED_CAPS_B64`**，而 0.39.x 给技能正文加了
+  `PACKED_SKILL_B64` ⇒ 单文件构建直接编不过；现在改成**按 `src/packed_assets.cj` 的存根声明逐行生成**
+  （存根声明了本脚本不认识的资源就报错退出），与框架 `scripts/pack-win-single.sh` 同款；
+  ③ **补 strip**（61.5 MB → 34.6 MB）：优先 `strip`，失败回退 SDK 自带 `llvm-objcopy --strip-all`
+  ——llvm-mingw 的 `strip.exe` 是包装器、真身 `llvm-strip` 可能缺失，直接 `2>/dev/null` 会把真实报错吞掉。
+
+### 验证到什么程度
+
+- `cjpm build` 0 warning；`cjpm test` **413 / FAILED 0 / ERROR 0**；`scripts/test.sh` **六项全绿**；
+- **单文件包实跑**（`dist/lingqu-0.39.63-win-x64-full/main.exe`，**只有 main.exe + README**）：
+  在**别的目录 + 只剩系统 PATH**（模拟双击）启动 → 窗口起来、内嵌引擎释放 5 件
+  （`cjh.exe` + 4 个 DLL）、`/api/health` **200 / version 1.6.5**、页面自写 `ui-report`（`errorCount=0`）；
+  导入表只剩系统 DLL（无 `libcgtbridge`/`libstdx.*`/`WebView2Loader`），有 `.rsrc` 资源节；
+- **从头重跑探针**（`LINGQU_UI_PROBE=reset`，只验归档不真发任务书）：`resetOk=true`、搬走 11 项、
+  档案目录 `_archive-2026-11-02-...`、`notes/` 仍在原位。
+
+### 未验证（如实）
+
+- 「从头重跑」**没有在真机上把一轮完整迁移跑完并归档再重跑一遍**（只验了归档与起点）；
+- 单文件包的**鸿蒙端**从未打过（只做 Windows x64）；
+- 静态单文件 **34.6 MB** 里约 18 MB 是 base64 内嵌资源（页面 711 KB + 技能 10 KB + 引擎 ~21 MB 作为 PE 资源），
+  再用 `-Woff`/去符号挤空间没做；`llvm-strip` 缺真身这条是**本机事实**，换机器请重看 `[strip]` 那行输出。
+
+---
+
 ## [0.39.63] - 2026-11-02
 
 **主题**：**聊完一句「hello」不许再弹"迁移还没完成"的红卡**（用户实测，发 hello 后的截图原话：

@@ -633,6 +633,10 @@ body.ai-hidden .ai-show{display:block}
             <button class="btn primary" id="btnAiPort" title="把目标与工具箱交给 AI（cjh），它自己迭代到迁完">🤖 开始 AI 自动迁移</button>
             <button class="btn" id="btnAiPortContinue" title="AI 回合结束了但还没迁完：让它按任务书接着干" style="display:none">继续</button>
             <button class="btn" id="btnMigrateStart" title="不用 AI 的确定性流程：按固定顺序跑 8 个命令（可复现，失败就停）">▶ 确定性流程</button>
+            <!-- 从头重跑（0.39.64）：判定只认落档，跑过一轮的工程 8 步落档都在 ⇒ 再点一键迁移
+                 agent 一看 resume 就"没活可干"，表现为"点一下直接完成"。这个按钮把上一轮落档
+                 **搬进 .lingqu/_archive-<时间戳>/**（不删、可回退、只搬灵渠自己的落档），让观测从零开始。 -->
+            <button class="btn" id="btnAiPortReset" title="把上一轮的迁移落档归档（不删），让 AI 从头重新跑一遍">↻ 从头重跑</button>
             <button class="btn" id="btnMigrateStop" disabled>停止</button>
           </div>
         </div>
@@ -4095,7 +4099,8 @@ withBridge(function(tauri){
         var c = (typeof st.concludedCount === 'number') ? st.concludedCount : 0;
         var t = (typeof st.total === 'number') ? st.total : 0;
         aiPortNote('全部步骤都已有结论（' + c + '/' + t + '，含明确跳过的）——活已经干完，'
-          + '落档不再变化属正常；可以直接看结果卡/报告，需要收尾就点「停止」。');
+          + '落档不再变化属正常；可以直接看结果卡/报告，需要收尾就点「停止」。'
+          + '（这多半是上一轮跑过的落档：想从头再跑一遍就点「↻ 从头重跑」，它会把旧落档归档再开始）');
       } else if (st.stalled === true) {
         aiPortNote(String(st.escalation || 'AI 好像绕圈了'));
         reportUi('autoport-stalled');
@@ -4206,6 +4211,50 @@ withBridge(function(tauri){
   }
 
   if ($('btnAiPort')) { $('btnAiPort').onclick = startAiPort; }
+
+  /* 从头重跑（0.39.64，用户实测："点 AI 一键迁移怎么直接完成了？那我没办法重新跑一遍吗？"）
+   * 为什么必须这么做：判定只认落档（observeTaskStep 每次都按盘上的 `.lingqu/` 重新观测）。
+   * 跑过一轮的工程 8 步落档都在，再点一键迁移 agent 一看 resume 就"没活可干"——不是它偷懒，
+   * 是真的没有可干的活（上一轮 8/8 全绿）。想真重跑，只能让观测从零开始。
+   * 纪律：**只搬灵渠自己的落档**（8 步目录 + report + tasks.json），经验/台账/截图/源码不碰；
+   * **搬走不删**（`.lingqu/_archive-<时间戳>/` 可回退）；搬完立刻起 AI 迁移，不让人再点一次。
+   */
+  function resetAndRerun(skipConfirm){
+    var p = migratePathValue();
+    if (!p) { aiPortNote('请先填 Tauri 工程路径。'); if ($('migratePath')) { $('migratePath').focus(); } return; }
+    if (!skipConfirm) {
+      var ok = window.confirm('从头重跑会把上一轮的迁移落档搬到：\n' + p + '\\.lingqu\\_archive-<时间戳>\\\n\n'
+        + '· 搬走的是：8 步落档（scan/deps/port/build/hap/sign/deploy/verify）+ report + tasks.json\n'
+        + '· **不删任何东西**（档案可回退），也不动源码、经验（notes）、未命中台账、截图\n'
+        + '· 工程代码里已被改过的地方保持不变（那是上一轮改的，回滚请用 ④ 屏「回滚」）\n\n'
+        + '继续吗？（搬完会立刻开始 AI 自动迁移）');
+      if (!ok) { return; }
+    }
+    if ($('btnAiPortReset')) { $('btnAiPortReset').disabled = true; }
+    aiPortNote('正在归档上一轮落档…');
+    invoke('t2h:reset_records', { path: p }).then(function(r){
+      r = r || {};
+      if ($('btnAiPortReset')) { $('btnAiPortReset').disabled = false; }
+      var moved = (r.moved || []).length;
+      window.__resetResult = { ok: r.ok === true, moved: moved,
+        archive: String(r.archiveDir || ''), err: String(r.error || '') };
+      reportUi('reset-records');
+      if (r.ok !== true) {
+        aiPortNote('归档失败：' + String(r.error || '未知原因') + '（没有开始迁移）');
+        return;
+      }
+      migAiPush('ok', '已归档上一轮落档：' + moved + ' 项 → ' + String(r.archiveDir || '（本来就没有落档）'));
+      // 归档完立刻起迁移：否则用户还得再点一次，也不知道该点什么
+      if (skipConfirm) { return; }   // 自检只验归档，不真发任务书（那会花模型轮次）
+      startAiPort();
+    }).catch(function(e){
+      if ($('btnAiPortReset')) { $('btnAiPortReset').disabled = false; }
+      window.__resetResult = { ok: false, moved: 0, archive: '', err: String(e && e.message ? e.message : e) };
+      reportUi('reset-records');
+      aiPortNote('归档失败：' + (e && e.message ? e.message : e));
+    });
+  }
+  if ($('btnAiPortReset')) { $('btnAiPortReset').onclick = function(){ resetAndRerun(false); }; }
   // ④ 屏「🤖 交给 AI 改造」= 半自动：只干改造这一步，做完停下等人点下一步
   if ($('btnPortAi')) {
     $('btnPortAi').onclick = function(){
@@ -7462,6 +7511,11 @@ withBridge(function(tauri){
         return box ? box.querySelectorAll('.errmsg').length : 0;
       })(),
       turnEndReason: (window.__turnEnd && window.__turnEnd.reason) ? String(window.__turnEnd.reason) : '',
+      // 从头重跑（0.39.64）：搬了几项、搬到哪、失败原因——"点了没反应"要能一眼看出是归档还是迁移侧的问题
+      resetMoved: (window.__resetResult && typeof window.__resetResult.moved === 'number') ? window.__resetResult.moved : -1,
+      resetArchive: (window.__resetResult && window.__resetResult.archive) ? String(window.__resetResult.archive) : '',
+      resetOk: !!(window.__resetResult && window.__resetResult.ok === true),
+      resetErr: (window.__resetResult && window.__resetResult.err) ? String(window.__resetResult.err) : '',
       lastToolErr: (window.__turnEnd && window.__turnEnd.lastErr) ? String(window.__turnEnd.lastErr) : '',
       lastToolErrName: (window.__turnEnd && window.__turnEnd.tool) ? String(window.__turnEnd.tool) : '',
       // AI 跑完自动出报告（0.39.54）：done/路径/结论/风险——空 = 还没触发过
@@ -7551,6 +7605,19 @@ withBridge(function(tauri){
         saveSettings(['探针：切回 openai']);
       }, 7500);
       setTimeout(function(){ reportUi('protocol-saved-openai'); }, 11000);
+      return;
+    }
+    // 从头重跑自检（LINGQU_UI_PROBE=reset，0.39.64）：**只验归档**，不真发任务书。
+    // 跑法：`LINGQU_SCAN_PATH=<一个拷来的工程>` 启动，判据 = `resetOk=true`、`resetMoved≥1`、
+    // `resetArchive` 落在该工程 `.lingqu/_archive-*`、且 `notes/`（经验）**还在原位**（不许被顺手清掉）。
+    // 一定要用拷来的工程跑：这个探针真的会搬落档（虽然只搬到档案目录、可回退）。
+    if (mode === 'reset') {
+      setTimeout(function(){
+        var p = String(window.__scanPath || '') || migratePathValue();
+        if (p) { setCurrentProject(p); }
+        resetAndRerun(true);
+      }, 1600);
+      setTimeout(function(){ reportUi('reset-done'); }, 5200);
       return;
     }
     // 回合收尾话术自检（LINGQU_UI_PROBE=turnend，0.39.63）：复现用户那次实测——
@@ -8305,6 +8372,18 @@ window.__railApply = function(res){
       note: s.note || ''
     };
   });
+  // 报告这项（0.39.64，用户实测"报告已生成、左栏仍是未开始"）：断点板只有 8 步
+  // （scan…verify），**没有 report 这一步**，而左栏第 6 项按 `rows['report']` 取数 ⇒ 永远 undefined
+  // ⇒ 永远「未开始」。现在后端 `t2h:resume` 直接回投报告落档是否存在，这里补一行合成观测。
+  if (res && typeof res.reportExists === 'boolean') {
+    rows['report'] = {
+      step: 'report',
+      title: '迁移报告',
+      ran: res.reportExists === true,
+      ok: res.reportExists === true,
+      note: res.reportExists === true ? String(res.reportOut || '') : '还没出报告（⑦ 屏点「生成报告」）'
+    };
+  }
   renderRailBadges(rows);
   window.__rail.rows = ((res && res.steps) || []).length;
   window.__rail.err = '';

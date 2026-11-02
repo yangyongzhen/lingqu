@@ -51,18 +51,25 @@ for f in assets/capabilities/*.json; do
     fi
 done
 [ -n "$CAPS_B64" ] || { echo "[x] assets/capabilities/ 下没有 json" >&2; exit 1; }
+# 技能正文（0.39.64 补）：漏了它单文件构建编不过（`undeclared identifier 'PACKED_SKILL_B64'`），
+# 且单文件产物里没有 skills/ 目录 ⇒ 不带这份正文就装不上迁移技能。
+SKILL_MD="skills/t2h-ohos-port/SKILL.md"
+SKILL_B64=""
+[ -f "$SKILL_MD" ] && SKILL_B64="$(base64 -w0 "$SKILL_MD")"
 {
     echo 'package lingqu'
     echo ''
     echo '/* 本文件由 packaging/pack-win-single.sh 在构建期整体覆盖（仓库里是空存根）：'
     echo ' * PACKED_UI_B64  = assets/ui/index.html 的 base64'
     echo ' * PACKED_CAPS_B64 = assets/capabilities 下各 json 的 base64，英文逗号分隔'
-    echo ' * 取用见 src/packed_resources.cj（内嵌优先、缺则读盘）。 */'
+    echo ' * PACKED_SKILL_B64 = skills/t2h-ohos-port/SKILL.md 的 base64'
+    echo ' * 取用见 src/packed_resources.cj 与 src/skill_install.cj（内嵌优先、缺则读盘）。 */'
     echo ''
     printf 'public let PACKED_UI_B64: String = "%s"\n' "$UI_B64"
     printf 'public let PACKED_CAPS_B64: String = "%s"\n' "$CAPS_B64"
+    printf 'public let PACKED_SKILL_B64: String = "%s"\n' "$SKILL_B64"
 } > "$PA"
-echo "      页面 $((${#UI_B64} / 1024)) KB(base64)｜能力清单 $((${#CAPS_B64} / 1024)) KB(base64)"
+echo "      页面 $((${#UI_B64} / 1024)) KB｜能力清单 $((${#CAPS_B64} / 1024)) KB｜技能正文 $((${#SKILL_B64} / 1024)) KB（base64）"
 
 echo "[2/3] 静态构建 + 打包（不带 assets/）"
 ./packaging/build-static-win.sh --no-assets

@@ -110,6 +110,16 @@ fi
 
 [ -f "$BIN" ] || { bad "找不到产物 $BIN —— 先跑 ./scripts/run-dev.sh -b"; exit 1; }
 
+# 把运行时 DLL 收进产物目录（用户实测："为啥启动时总报少 libstdx.dll 啊"）：
+# 本脚本自己配了 PATH 所以能起，但**双击 main.exe / 快捷方式**不会带我们的 PATH ——
+# 那些 libstdx.*.dll / libcjtbridge.dll 不在 exe 旁边就找不到，启动即退（0xC0000135）。
+# 拷一份到 exe 隔壁（Windows 搜索顺序里 exe 目录排第一），双击也就稳了。
+if [ "$OS" = "windows" ] && [ -x "$ROOT/scripts/collect-runtime-dlls.sh" -o -f "$ROOT/scripts/collect-runtime-dlls.sh" ]; then
+  say "[dll] 收运行时 DLL 到产物目录（幂等，只补缺的）"
+  ( "$ROOT/scripts/collect-runtime-dlls.sh" ) || warn "收 DLL 失败——用本脚本仍能起（PATH 已配），但别指望双击 main.exe"
+  good "done"
+fi
+
 say "[run] $BIN"
 printf '      cwd: %s\n' "$ROOT"
 ( cd "$ROOT" && "$BIN" )
