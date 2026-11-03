@@ -127,13 +127,15 @@
 
 ![迁移报告](docs/imgs/report.png)
 
-**真机侧（鸿蒙 PC，HAD-W32 / HarmonyOS 7.0.0.111 / API 26）** — 迁移后的 habit-tree 在真机上运行、ArkWeb 已渲染：
+**真机侧（鸿蒙 PC，HAD-W32 / HarmonyOS 7.0.0.111 / API 26）** — Rust+ArkWeb 混合应用在真机上的运行画面：
 
-![真机上的 habit-tree](samples/evidence/habit-tree-ohos-device-fixed.jpeg)
+![鸿蒙真机上的 Rust+ArkWeb 应用](docs/imgs/ohos-music-screenshot.jpg)
 
 > 截图口径：前两张是**真实应用窗口**（`CopyFromScreen` 抓取本应用窗口区域，非示意图）；
 > 报告屏那一张是用 `LINGQU_UI_PROBE=risk` 触发一次真实的 `t2h:report` 后截的（报告内容 100% 来自落档）。
-> 第三张是 0.17.0 真机首验留的证据图。**界面里没有示意数据**——所有数字都绑定真实落档（§4-94/§4-95）。
+> 第三张是 cj-tauri `examples/ohos/ohos-music` 在鸿蒙 PC 真机上的运行画面——**下一个迁移样本
+> [`rust-music`](https://atomgit.com/qq8864/rust-music)（Rust + Tauri 2 的同口径对照实现）的移植目标形态**。
+> **界面里没有示意数据**——所有数字都绑定真实落档（§4-94/§4-95）。
 
 ---
 
