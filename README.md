@@ -52,6 +52,7 @@
 | **凭什么叫完成** | **落档说了算**：`.lingqu/<步骤>/<工程>.json` 里的判定字段通过才算通过；退出码 0 不算、AI 说"好了"也不算 |
 | **为什么是仓颉** | 外壳（`cj-tauri`）、迁移引擎、AI 引擎（`cjh`）同栈；一个业务包 `src/` 编出桌面与鸿蒙两端产物，没有 Node/Python 运行时依赖 |
 | **特色** | **AI 自动进化飞轮**：经验与未命中错误由 agent 自己落盘，攒够次数后由人裁决进指纹 / 规则 / 技能库，下一轮自动吃上（见 [专章](#-ai-自动进化飞轮本项目的特色)，设计细节见 [`docs/AI自进化飞轮.md`](docs/AI自进化飞轮.md)） |
+| **特色** | **HAP 包自签名机制（纯仓颉实现，全程摆脱 DevEco Studio）**：本地签名链（纯仓颉 AES-128-GCM 解密口令 + 调用 hap-sign-tool）与 AGC 云生成双路线，`sign --auto` 一条命令 → `signed=true` + 真机装机启动——**迁移的最后一公里不依赖任何重型 IDE，一键到真机跑起来** |
 | **现状** | **v0.39.56**：37 个 `t2h:*` 命令 · 20 条 CLI 子命令 · 396 例单测 · 15 条改造规则 · 20 条错误指纹 · 8 步流水线六项门禁全绿；**3/5 样本**已跑到真机验证（habit-tree 100% / m3u8dl-tauri 100% / juCang 85%） |
 
 ---
@@ -161,7 +162,7 @@ rust-music 迁移中，右侧 AI 助手面板正在落笔经验（`hashline_edit
 | **规则改造**（确定性，幂等可回滚） | ✅ 15 条规则 | `R2-PORT-001…015`（含 0.39.53 的 015：自动注掉 hvigorfile 的 tauri 钩子，修 `00308018`） |
 | **错误指纹库**（命中不调模型） | ✅ 20 条 | `FP-001…FP-020`，`t2h:diagnose` 命中即给修法 |
 | **HAP 装配 + 闸门** | ✅ 真机 15 MB 级产物 | 点名校验 `lib<module>.so`、前端指纹闸（`.so` 内嵌 AssetKey ↔ `dist/`） |
-| **自动签名（路线 A：AGC 云生成）** | ✅ 真机打通 | `sign --auto` 一条命令 → `signed=true` + `install bundle successfully`，**不需要打开 DevEco** |
+| **HAP 包自签名（路线 A：AGC 云生成 + 本地签名链）** | ✅ 真机打通，**全程摆脱 DevEco Studio** | **纯仓颉 AES-128-GCM 解密签名口令 + hap-sign-tool 本地签名链**（`compiler/sign_*.cj`），`sign --auto` 一条命令 → `signed=true` + `install bundle successfully`——签名两态自动判定（debug/release）+ 上架前强提醒 |
 | **真机部署与验证** | ✅ 3 个样本 | `hdc install` / `aa start` / `hilog` / `uitest dumpLayout` 四段判据；可用率 habit-tree 100% · m3u8dl 100% · juCang 85% |
 | **AI 一体化**：一键迁移（后台 8 步）+ **把任务书交给 cjh 让它自己干** | ✅ 实机跑过 | `t2h:migrate` / `t2h:autoport_*`；juCang 一轮 AI 自动迁移 8/8 |
 | **报告**：三段式 + 风险分级 + 自动出报告 | ✅ | `t2h:report`；AI 路径跑完自动出报告（0.39.54） |
