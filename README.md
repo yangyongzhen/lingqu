@@ -115,8 +115,8 @@ rust-music 迁移中，右侧 AI 助手面板正在落笔经验（`hashline_edit
 
 > 截图口径：前两张是**真实应用窗口**（`CopyFromScreen` 抓取本应用窗口区域，非示意图）；
 > 报告屏那一张是用 `LINGQU_UI_PROBE=risk` 触发一次真实的 `t2h:report` 后截的（报告内容 100% 来自落档）。
-> 第三张是 cj-tauri `examples/ohos/ohos-music` 在鸿蒙 PC 真机上的运行画面——**下一个迁移样本
-> [`rust-music`](https://atomgit.com/qq8864/rust-music)（Rust + Tauri 2 的同口径对照实现）的移植目标形态**。
+> 第三张是迁移样本 [`rust-music`](https://atomgit.com/qq8864/rust-music)（Rust + Tauri 2）
+> **真实移植成功后在鸿蒙 PC 真机上的运行画面**。
 > **界面里没有示意数据**——所有数字都绑定真实落档（§4-94/§4-95）。
 
 ---
