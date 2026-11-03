@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-11-03T00:00:00.000Z" agent="drawio-chart" version="24.0.0">
+  <diagram name="ai-flywheel" id="ai-flywheel-1">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="820" math="0" shadow="0" background="#F8FAFC">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="AI 自动进化飞轮（灵渠迁移台）" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=20;fontStyle=1;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="440" y="20" width="320" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="n1" value="① 迁移现场&#xa;cjh 跑 8 步流水线" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="140" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n2" value="② 事实层（自动）&#xa;.lingqu/&lt;步骤&gt;/&lt;工程&gt;.json&#xa;agent/trace.jsonl · report/*" style="shape=cylinder3;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="300" width="200" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="n3" value="③ 经验层（agent 自述）&#xa;notes --action append&#xa;→ notes/&lt;工程&gt;.md（四段+次数）" style="shape=cylinder3;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="460" width="200" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="n4" value="④ 证据层（自动）&#xa;diagnose 未命中 →&#xa;diagnose/misses.jsonl&#xa;（归一签名，同形态累加）" style="shape=cylinder3;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="620" width="200" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="n5" value="⑤ 候选池（机器提议）&#xa;notes --action suggest&#xa;门槛：次数 ≥2 + 四段齐 + 未入库&#xa;／同签名未命中 ≥3 次&#xa;+ 逐条 PR 正文草稿" style="rounded=1;whiteSpace=wrap;fillColor=#E4C189;strokeColor=none;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="440" y="330" width="280" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="human" value="人（唯一人工闸门）&#xa;复核裁决 → 补「- 入库：&lt;引用&gt;」" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="450" y="170" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="archive" value="archive：入库条目移出候选池&#xa;台账 ≥200 行整体归档" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="445" y="510" width="270" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="n6" value="⑥ 认知层（固化）&#xa;指纹库 FP-001… · 规则库 R2-PORT-…&#xa;技能库 skills/t2h-ohos-port/ · §4 坑清单" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="840" y="330" width="300" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="n7" value="⑦ 回流（下次启动生效）&#xa;t2h:skill 装进 ~/.cjh/skills/&#xa;（进 system prompt，不热替换）" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="845" y="510" width="290" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" value="每步落档" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="n1" target="n2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" value="撞坑：报错 / 重试 ≥2 / 换方案" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="n1" target="n3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e14" value="不认识就攒" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;dashed=1;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="n1" target="n4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e35" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="n3" target="n5" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e45" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="n4" target="n5" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="eh5" value="裁决" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#DC2626;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#DC2626;" edge="1" source="human" target="n5" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e56" value="确认入库" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="n5" target="n6" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5a" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="n5" target="archive" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e67" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="n6" target="n7" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e71" value="下一轮：同一个 agent，但「知道得更多」" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#4CA497;dashed=1;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#4CA497;" edge="1" source="n7" target="n1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="990" y="760"/>
+              <mxPoint x="170" y="760"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

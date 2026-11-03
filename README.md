@@ -68,32 +68,7 @@
 迁移工具的通病是**每次迁移都从零开始**：这次的报错、这次的绕法，写在会话里、日志里、人的脑子里，
 下一个应用再来一遍。灵渠把它做成一个**闭环**：干活的 agent 自己写经验，机器攒证据，人只做裁决。
 
-```
-① 迁移现场（cjh 逐步骤跑 8 步流水线）
-   │  每步落档                            │  撞坑：报错 / 重试 ≥2 次 / 换方案
-   ▼                                      ▼
-② 事实层（自动）                    ③ 经验层（agent 自述）
-   .lingqu/<步骤>/<工程>.json          lingqu-cli notes --action append --body note-in.json
-   .lingqu/agent/trace.jsonl             → <工程>/.lingqu/notes/<工程>.md（四段 + 次数）
-   .lingqu/report/*.{md,html,json}
-   │
-   │ ④ 不认识就攒证据（自动）：t2h:diagnose 未命中 → .lingqu/diagnose/misses.jsonl
-   │    （归一签名：数字折叠成 #、空白压一格、ASCII 小写 → 同一形态能累加次数）
-   ▼
-⑤ 候选池（机器提议，**唯一的人工闸门**）— 0.39.56 已落地
-   lingqu-cli notes --action suggest   → <工程>/.lingqu/notes/<工程>-candidates.md
-     门槛：经验 次数 ≥2 且四段齐全且未入库 · 同签名未命中 ≥3 次
-     产物：候选清单 + 每条一段 PR 正文草稿（备案给 `docs/经验入库规则.md`）
-   │  人（或人评审的 PR）确认 → 在那条经验下补 `- 入库：<引用>`
-   ▼
-   lingqu-cli notes --action archive   → 已入库条目移出候选池；台账 ≥200 行整体归档
-   ▼
-⑥ 认知层（固化）：指纹库 FP-001…FP-020 · 规则库 R2-PORT-001…015 ·
-   技能库 skills/t2h-ohos-port/ · AGENTS.md §4 坑清单（119 条）
-   │  ⑦ 回流：t2h:skill 装进 ~/.cjh/skills/（进 system prompt）+ 任务书写清「遇到什么查什么」
-   ▼
-   下一轮 ①（同一个 agent，但"知道得更多"）
-```
+![AI 自动进化飞轮](docs/imgs/flywheel.png)
 
 **关键设计（为什么不是"让 AI 自己改技能库"）**
 

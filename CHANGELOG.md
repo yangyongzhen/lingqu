@@ -5,6 +5,32 @@
 
 ---
 
+## [0.39.67] - 2026-11-03
+
+**主题**：README「AI 自动进化飞轮」框图化（drawio 源文件 + SVG + PNG）+ 案例素材批量扩容。
+
+### Changed
+
+- **README 飞轮章框图**：ASCII 流程示意替换为正式框图（`docs/imgs/flywheel.png`，1600×1094）；
+  源文件同批入库：`docs/imgs/flywheel-arch.drawio`（drawio 原生，可编辑）+ `flywheel.svg`（矢量源）。
+  框图覆盖 ①迁移现场 → ②事实层/③经验层/④证据层 → ⑤候选池（**人工闸门**单列）→ archive →
+  ⑥认知层 → ⑦回流 → 回到①的完整闭环，语义配色（青=现场/橙=存储/红=人工闸门/绿=回流）
+- **`docs/案例素材.md` 批量扩容**（§1.3 迁移目标队列 +5、§二 +1、§4.2 +1，全部 2026-11-03 本机验证）：
+  - **NextChat**（曾用名 ChatGPT-Next-Web，88k+ star，MIT）：多模型 AI 聊天助手，桌面端 Tauri ~5MB——LLM 流式对话/SSE + `tauri fetch` Rust 侧转发、30+ Provider 抽象（⚠️ 现仓名已改 `ChatGPTNextWeb/NextChat`）
+  - **EcoPaste**（6.9k star，Apache-2.0）：剪贴板历史管理，Tauri v2 + React + SQLite/sqlx——全局快捷键/多类型剪贴板/OCR/托盘；v1→v2 升级 PR（#634，+9044−4782）可作大版本升级 diff 语料
+  - **QuantumTV**（MIT）：本地优先影视聚合播放器（Tauri 2 + Next.js + Axum + SQLite + HLS.js）——在线播放半个媒体域、内嵌 API server
+  - **Pake**：网页转桌面应用——**最简 Tauri 工程**，验证流水线下限与 P3 判据 1"零失败样本"
+  - **CapCut 平替类剪辑**：Clypra / WolfCut（Tauri v2 + FFmpeg）——工程复杂度天花板，FFmpeg 原生依赖是 P3 依赖矩阵高危域（用户所指具体项目待从官方文档定位）
+  - **Peekoo AI**（feed-mob/peekoo-ai，MIT）：桌面智能宠物（AI 对话 + 任务管理 + 番茄钟）——多 crate 分层架构、OS keychain 存密钥（凭据管理新考点）
+  - **§二**：Tauri 官方主仓（tauri-apps/tauri，112k+ star）：15 个核心 crate、tao/WRY——规则库 patch 对象（R2-PORT-002/006）的源码口径
+  - **§4.2**：awesome-tauri（官方生态清单）——迁移目标队列后续扩容入口
+
+### 验证
+
+六项门禁全绿（纯文档 + 图片资源改动）；版本 0.39.67 三处一致（sync 重派生消漂移）。
+
+---
+
 ## [0.39.66] - 2026-11-03
 
 **主题**：README 真机截图更换（锁屏画面 → 可用画面）+ 迁移目标队列登记（rust-music 对照对）。
