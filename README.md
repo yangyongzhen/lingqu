@@ -286,6 +286,23 @@ cjh 以 web 模式被驱动：`cjh web --port 8765 --bind 127.0.0.1`，对外 RE
 就绪判据只有一条（`GET /api/health` 200）；**复用优先**（8765 上已有 cjh 就不抢不杀）；
 **只绑回环**；随包产物 **4 个文件逐个 SHA256** 校验不过绝不解包、不执行。
 
+**FAQ：为什么不集成 Claude Code / OpenCode 这类通用 agent，而非要 cjh？**
+
+先拆层：**模型层本来就是开放的**——cjh 是 harness 不是模型，设置页可选 openai 兼容 /
+anthropic 接入协议，DeepSeek / OpenAI / Gemini / 通义 等 LLM 随便接。被选定的只是
+**harness 层**（驱动模型干活的引擎），换通用 agent CLI 会撞上四堵墙：
+
+1. **鸿蒙 PC 可运行性（决定性）**：通用 agent CLI 依赖 Node/Python 运行时，而鸿蒙 PC 上
+   跑不了这些运行时——**能跑在鸿蒙 PC 的仓颉 agent 引擎，cjh 是唯一路线**；且 cjh 的
+   Windows / Linux / 鸿蒙三端形态统一，迁移工具本身也要"被迁移"时同样适用；
+2. **小巧可内嵌 + 协议干净（项目思路成立的前提）**：通用 agent **动辄数百 MB**（自带运行时与依赖树），既不方便内嵌进桌面产物，接入协议也各不相同、未必方便集成；cjh **单文件 ~18MB**、以标准 REST + WS 对外（就绪判据一条 `GET /api/health`），与外壳同为仓颉、整个桌面产物是**一个 main.exe**（cjh 成 PE 资源运行期释放）——**正因为有它这样小巧且易集成的引擎，「桌面工作台内置完整 agent」这个项目思路才成立**；换通用 agent 会把"10MB 级轻量"打回 Electron 时代；
+3. **编排件是共同设计的**：任务书（autoport）、失败现场自动拼提问、agent 轨迹观测 /
+   停滞判定 / 轮次预算、审批卡、技能回流（`t2h:skill` → system prompt）、经验四段式落档
+   （`t2h:notes`）——这些与 lingqu 的落档/证据体系咬合，换 harness 全部重做；
+4. **安全与可控**：进程外只绑 127.0.0.1（不少 harness 默认 `0.0.0.0` 且无鉴权）、
+   SHA256 验不过不解包不执行、token 只走环境变量绝不落盘；且 cjh 是 MIT 自有仓——
+   缺口走 issue/PR/fork 分支先行的回馈闭环已实测跑通（`docs/上游回馈-cjh.md`）。
+
 **加一条命令要三处联动**（漏一处就是运行期报错，`cj-tauri check` 会拦）：
 `src/main.cj` 注册 → `assets/capabilities/default.json` 放行 → `assets/ui/index.html` 调用。
 
