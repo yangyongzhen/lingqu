@@ -70,6 +70,13 @@
 
 ![AI 自动进化飞轮](docs/imgs/flywheel.png)
 
+**每一次迁移的经验都自动沉淀**——不用人催、不用人记：agent 在迁移途中把学到的写进
+`<工程>/.lingqu/notes/<工程>.md`，未命中的报错自动进台账，攒够次数进入候选池。下图是实拍：
+rust-music 迁移中，右侧 AI 助手面板正在落笔经验（`hashline_edit` 写 `notes/rust-music.md`），
+中栏是同轮迁移八步全绿的现场：
+
+![飞轮实拍：迁移经验自动沉淀](docs/imgs/flywheel_shortcut.png)
+
 **关键设计（为什么不是"让 AI 自己改技能库"）**
 
 | 决策 | 理由 |
