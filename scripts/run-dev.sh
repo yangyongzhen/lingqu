@@ -115,7 +115,7 @@ fi
 # 那些 libstdx.*.dll / libcjtbridge.dll 不在 exe 旁边就找不到，启动即退（0xC0000135）。
 # 拷一份到 exe 隔壁（Windows 搜索顺序里 exe 目录排第一），双击也就稳了。
 if [ "$OS" = "windows" ] && [ -x "$ROOT/scripts/collect-runtime-dlls.sh" -o -f "$ROOT/scripts/collect-runtime-dlls.sh" ]; then
-  say "[dll] 收运行时 DLL 到产物目录（幂等，只补缺的）"
+  say "[dll] 收运行时 DLL 到产物目录（幂等：缺则拷、内容不同则刷新）"
   ( "$ROOT/scripts/collect-runtime-dlls.sh" ) || warn "收 DLL 失败——用本脚本仍能起（PATH 已配），但别指望双击 main.exe"
   good "done"
 fi

@@ -68,6 +68,17 @@ if [ "$CLEAN" = "1" ]; then
     echo "[clean] 已清掉 $BIN_DIR 里的运行时 DLL"
 fi
 
+# 两个文件内容是否一致（有 sha256sum 就用它，没有退 cmp）
+# 为什么需要：产物目录里的 DLL **不能"缺了才拷"**——框架/SDK 一升级，旧拷贝会顶掉新库，
+# 症状是子进程起不来、退出码 `0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND`（见 §4-121）。
+same_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$(sha256sum "$2" | cut -d' ' -f1)" ]
+    else
+        cmp -s "$1" "$2"
+    fi
+}
+
 SEARCH=(
     "$CANGJIE_HOME/runtime/lib/windows_x86_64_cjnative"
     "$CANGJIE_HOME/lib/windows_x86_64_cjnative"
@@ -89,10 +100,14 @@ SEARCH=(
 # 症状是 http 照常 200、**只有 ws 握手失败**（`Can not load openssl library or function RAND_bytes`）。
 # 我们随包的 cjh（vendor/cjh/win-x64）里正好带着同版本 OpenSSL 3，直接收过来即可。
 for pair in "libcrypto-3-x64.dll" "libssl-3-x64.dll"; do
-    [ -f "$BIN_DIR/$pair" ] && continue
     for d in "$CJ_TAURI_ROOT/native" "$CJ_TAURI_ROOT/native/webview2" "$ROOT/vendor/cjh/win-x64" \
              "$CANGJIE_STDX" "$CANGJIE_HOME/runtime/lib/windows_x86_64_cjnative"; do
-        if [ -f "$d/$pair" ]; then cp -f "$d/$pair" "$BIN_DIR/"; break; fi
+        [ -f "$d/$pair" ] || continue
+        # 已有但内容不同也要刷新（同 §4-121：旧拷贝会顶掉新库）
+        if [ ! -f "$BIN_DIR/$pair" ] || ! same_file "$BIN_DIR/$pair" "$d/$pair"; then
+            cp -f "$d/$pair" "$BIN_DIR/"
+        fi
+        break
     done
 done
 
@@ -100,6 +115,7 @@ pending=("$EXE")
 declare -A seen=()
 round=0
 copied=0
+refreshed=0
 while [ ${#pending[@]} -gt 0 ]; do
     round=$((round + 1))
     next=()
@@ -110,14 +126,19 @@ while [ ${#pending[@]} -gt 0 ]; do
             [ -z "$dep" ] && continue
             # 只关心我们的库；系统 DLL（KERNEL32/USER32/msvcrt…）不拷，拷了反而出错
             case "$dep" in lib*|stdx*) ;; *) continue ;; esac
-            if [ -f "$BIN_DIR/$dep" ]; then
-                next+=("$BIN_DIR/$dep")
-                continue
-            fi
             found=""
             for d in "${SEARCH[@]}"; do
                 if [ -f "$d/$dep" ]; then found="$d/$dep"; break; fi
             done
+            if [ -f "$BIN_DIR/$dep" ]; then
+                # 已有 ≠ 最新：内容不同就刷新（否则框架升级后旧 DLL 一直顶掉新库）
+                if [ -n "$found" ] && ! same_file "$BIN_DIR/$dep" "$found"; then
+                    cp -f "$found" "$BIN_DIR/"
+                    refreshed=$((refreshed + 1))
+                fi
+                next+=("$BIN_DIR/$dep")
+                continue
+            fi
             if [ -n "$found" ]; then
                 cp -f "$found" "$BIN_DIR/"
                 copied=$((copied + 1))
@@ -148,5 +169,5 @@ if [ -n "$MISSING" ]; then
 fi
 
 TOTAL=$(ls "$BIN_DIR"/*.dll 2>/dev/null | wc -l | tr -d ' ')
-echo "[ok] 运行时已就位：$BIN_DIR（本轮新拷 ${copied} 个，现有 ${TOTAL} 个 DLL；闭包自检通过）"
+echo "[ok] 运行时已就位：$BIN_DIR（本轮新拷 ${copied} 个、刷新 ${refreshed} 个，现有 ${TOTAL} 个 DLL；闭包自检通过）"
 echo "     现在直接双击 $BIN_DIR/main.exe 也能起（不再依赖 PATH）"

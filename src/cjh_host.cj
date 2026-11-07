@@ -6,6 +6,7 @@ import stdx.crypto.digest.*   // 具体实现 SHA256 在 stdx 侧（两处都要
 import std.env.*
 import std.fs.*
 import std.io.*            // InputStream（读 HTTP 响应体）
+import std.net.*           // TcpSocket：拉起前"端口上有没有人在听"的快速探测
 import std.time.*          // DateTime（健康检查的宽容窗口要取时刻）
 import std.collection.*    // ArrayList
 // SubProcess / launch：非 Windows 分支一直用；Windows 侧 0.39.40 起也用它（让 cjh 继承
@@ -325,6 +326,61 @@ public func cjhHealthyWithRetry(port: Int64, tries: Int64): Bool {
     return false
 }
 
+/**
+ * 端口上**有没有进程在监听**（纯 TCP 连接，一个字节都不发）。
+ *
+ * 为什么不直接用 `/api/health` 问这件事（0.39.78 实测）：仓颉的 `ClientBuilder` **没有
+ * connectTimeout**（上游 cj-tauri `plugin_http.cj` 与 cjh `web_fetch.cj` 两处注释都记了这坑），
+ * 目标不可达时就卡在 TCP connect —— 端口空着时一次健康检查要 **2007 ms**（`.lingqu/cjh-start.log`
+ * 实测），拉起前重试 5 次就是 15 秒；而内置 cjh 自己从 fork 到 `/api/health`=200 只要 **85 ms**。
+ * 用户体感的"内置引擎起得好慢"，慢的全在这段白等上。
+ *
+ * 这里只问"有人在听吗"：连上立刻关掉，不打扰正在跑长回合的引擎。超时给 250ms 只当保险丝——
+ * 本机回环要么立刻连通、要么立刻 RST。
+ */
+func cjhPortListening(port: Int64): Bool {
+    try {
+        let sock = TcpSocket("127.0.0.1", UInt16(port))
+        try {
+            sock.connect(timeout: Duration.millisecond * 250)
+        } catch (e: Exception) {
+            let _ = e
+            return false
+        }
+        try {
+            sock.close()
+        } catch (e: Exception) {
+            let _ = e
+        }
+        return true
+    } catch (e: Exception) {
+        // 端口值非法之类：当作"没人在听"，让上层走拉起；真起不来会在拉起阶段如实报错
+        let _ = e
+        return false
+    }
+}
+
+/**
+ * 拉起前的统一探活（`ensureCjhWeb` / `cjhDeployAndStart` 共用）：先问"端口上有没有人在听"。
+ *
+ *   · 没人在听 → 立刻返回 false（几毫秒），上层直接拉起，不再白等健康检查的超时；
+ *   · 有人在听 → 说明引擎可能在跑长回合（忙），这时才走 `/api/health` 的宽容重试，
+ *     否则会拉起一只绑不上端口的僵尸（§4-103 那类"连接反复横跳"的源头）。
+ *
+ * 收在一处是有原因的：这两条路径原先各写一份重试次数（6 / 4），口径很容易走岔。
+ */
+func cjhCheckBeforeSpawn(port: Int64, retries: Int64): Bool {
+    if (!cjhPortListening(port)) {
+        traceStartup("端口 ${port} 空着（无监听）→ 直接拉起", 0)
+        return false
+    }
+    // 有 socket 在听：可能是引擎、也可能只是别人占了这个端口，交给健康检查分辨
+    let t0 = DateTime.now().toUnixTimeStamp().toMilliseconds()
+    let ok = cjhHealthyWithRetry(port, retries)
+    traceStartup("端口 ${port} 有监听→健康检查重试结果 ${ok}", DateTime.now().toUnixTimeStamp().toMilliseconds() - t0)
+    return ok
+}
+
 /** 可用端点的统一形状：页面拿到就能自己接上 */
 public func putEndpoints(obj: JsonObject, port: Int64): Unit {
     obj.put("port", JsonInt(port))
@@ -568,6 +624,28 @@ let CJH_VENDOR_FILES: Array<(String, String)> = [
     ("libcrypto-3-x64.dll", "a997e132b8c548212d4c292bb3f61bcdee88cf726b89c60f32969ad6cbaa9698")
 ]
 
+/**
+ * 启动计时证据落档（0.39.78）：`<工程>/.lingqu/cjh-start.log`。
+ *
+ * 为什么不用 eprintln：**仓颉的 eprintln 不进应用日志**（§4-14 实测），上一版想用日志看
+ * "引擎拉起前花了多久"根本看不到。要当证据的东西必须落文件。
+ * 每行：`<时刻> <标签> <耗时>ms`；只在慢的时候落，正常启动不写盘。
+ */
+func traceStartup(tag: String, ms: Int64): Unit {
+    try {
+        let dir = getWorkingDirectory().toString() + cjhPathSep() + ".lingqu"
+        if (!exists(Path(dir))) {
+            Directory.create(Path(dir), recursive: true)
+        }
+        let p = dir + cjhPathSep() + "cjh-start.log"
+        let f = File(Path(p), OpenMode.Append)
+        f.write("${DateTime.now()} ${tag} ${ms}ms\n".toArray())
+        f.close()
+    } catch (e: Exception) {
+        let _ = e
+    }
+}
+
 /** 对文件算 SHA256 十六进制（读不到回空串） */
 func sha256FileHex(p: String): String {
     var bytes: Array<Byte> = []
@@ -655,12 +733,43 @@ func installBinPath(): String {
 }
 
 /**
+ * ② 档（部署目录里的副本）能不能用：文件可读 **且** 内容与随包清单一致。
+ *
+ * 为什么不能只判"文件在"（0.39.77 实测）：`%LOCALAPPDATA%\lingqu\cjh\cjh.exe` 是上一次释放
+ * 留下来的 **1.6.5**，而 0.39.75 已把随包引擎升到 1.6.12 —— ② 档抢在 ③ 档（vendor，校验过）
+ * 前面命中旧副本，于是"升了级却还在跑旧引擎"，界面完全看不出来：`/api/health` 照样 200，
+ * 只有 `version` 字段不同。
+ *
+ * 与 §4-121（exe 同目录旧 DLL 顶掉新库）同族：**会执行的二进制必须校验内容，不能只判存在**。
+ */
+public func installBinUsable(readable: Bool, verified: Bool): Bool {
+    return readable && verified
+}
+
+/**
  * cjh 可执行文件的实际路径，按优先级找；都没有返回空串（上层如实报「引擎缺失」，不猜路径）。
- *   ① LINGQU_CJH 环境变量
- *   ② 部署过的安装目录
+ *   ① LINGQU_CJH 环境变量（显式指定，开发期跑自建 cjh 用；不校验，用户自己负责）
+ *   ② 部署过的安装目录（**校验通过**才用）
  *   ③ 仓内 vendor 目录（**校验通过**才用）
+ *   ④ 内嵌资源释放出来的副本（同样是**释放且校验通过**才用）
+ */
+/**
+ * 带计时的外壳（0.39.78）：解析要过 SHA256（②③ 档都要核内容），文件大、盘慢时可能上百毫秒，
+ * 而这个函数还会被状态轮询调用。**只在明显慢时留痕**，否则日志会被它刷满。
  */
 public func cjhBinPath(): String {
+    let t0 = DateTime.now().toUnixTimeStamp().toMilliseconds()
+    let p = cjhBinPathResolve()
+    let dt = DateTime.now().toUnixTimeStamp().toMilliseconds() - t0
+    if (dt >= 200) {
+        eprintln("[lingqu] cjh: 二进制解析耗时 ${dt}ms（结果：${p}）")
+        traceStartup("解析（${p}）", dt)
+    }
+    return p
+}
+
+/** 解析本体（四档优先级见下）；带计时的外壳是 `cjhBinPath()` */
+func cjhBinPathResolve(): String {
     let fromEnv = firstNonEmptyEnv(["LINGQU_CJH"])
     if (fromEnv.size > 0 && fileReadable(fromEnv)) {
         // 成功路径也要留一行证据：排查"引擎没起来"时，先看它用的是哪个二进制
@@ -668,9 +777,13 @@ public func cjhBinPath(): String {
         return fromEnv
     }
     let install = installBinPath()
-    if (install.size > 0 && fileReadable(install)) {
-        eprintln("[lingqu] cjh: 用部署目录里的${install}")
+    if (install.size > 0 && installBinUsable(fileReadable(install), cjhVendorVerified(cjhInstallDir()))) {
+        eprintln("[lingqu] cjh: 用部署目录里的${install}（SHA256 校验通过）")
         return install
+    }
+    if (install.size > 0 && fileReadable(install)) {
+        // 有副本但内容不符：**不执行**，但必须把"为什么不执行"说清楚，否则现场只剩"引擎缺失"没法查
+        eprintln("[lingqu] cjh: 部署目录副本与随包清单不符，跳过 ${install}（多半是升级前的旧引擎残留）")
     }
     let vendor = cjhVendorDir()
     if (cjhVendorVerified(vendor)) {
@@ -833,10 +946,15 @@ func launchCjhInheritingConsole(bin: String): Option<SubProcess> {
 @When[os == "Windows"]
 func awaitCjhOwned(h: CjhHandle, how: String): Bool {
     gCjhProc = Some(h)
+    // 记一行"拉起后多久就绪"：用户体感"引擎起得慢"时，先看这几个数分清是**解析/拉起前**慢
+    // 还是**拉起后**慢（0.39.78 实测：引擎自身 85ms，慢的地方在拉起前）
+    let t0 = DateTime.now().toUnixTimeStamp().toMilliseconds()
     match (awaitCjhReady(cjhPort(), { => h.isAlive() })) {
         case CjhWait.Ready =>
             gCjhOwned = true
-            eprintln("[lingqu] cjh web 已就绪（${how}）")
+            let dt = DateTime.now().toUnixTimeStamp().toMilliseconds() - t0
+            eprintln("[lingqu] cjh web 已就绪（${how}，拉起后 ${dt}ms）")
+            traceStartup("拉起后就绪（${how}）", dt)
             return true
         case CjhWait.Died =>
             eprintln("[lingqu] cjh web 进程退出（${how}）——检查这个可执行文件与 cjh 配置")
@@ -911,8 +1029,8 @@ func terminateCjhProc(p: SubProcess): Unit {
  */
 public func ensureCjhWeb(): Bool {
     let port = cjhPort()
-    // 先按"可能只是忙"重试，避免在长回合期间误判引擎已死、再拉起一只绑不上端口的僵尸
-    if (cjhHealthyWithRetry(port, 6)) {
+    // 先探活：端口空着（拒连）就立刻拉起；只有"有 socket 但在忙"才多试，别白等（见 cjhCheckBeforeSpawn）
+    if (cjhCheckBeforeSpawn(port, 5)) {
         eprintln("[lingqu] cjh web 已在运行（port=${port}），直接复用")
         gCjhOwned = false
         return true
@@ -1079,8 +1197,8 @@ func cjhExtractBundle(bundle: String, installDir: String): Option<String> {
 func cjhDeployAndStart(): JsonObject {
     let obj = JsonObject()
     let port = cjhPort()
-    // 同 ensureCjhWeb：引擎忙的时候 health 会慢，先重试再下"没有引擎"的结论
-    if (cjhHealthyWithRetry(port, 4)) {
+    // 同 ensureCjhWeb：走同一条分流探活（端口空着就立刻拉起，忙才重试）
+    if (cjhCheckBeforeSpawn(port, 4)) {
         obj.put("ok", JsonBool(true))
         obj.put("reused", JsonBool(true))
         putEndpoints(obj, port)
@@ -1133,19 +1251,29 @@ func cjhDeployAndStart(): JsonObject {
         return obj
     }
     let installed = installDir + cjhPathSep() + cjhBinName()
-    if (!fileReadable(installed)) {
+    // 判据与 `cjhBinPath()` 第 ② 档保持一致：**副本内容对**才算可用。
+    // 只看"文件在"会执行升级前的旧引擎（0.39.77 实测：装的是 1.6.5，随包已升 1.6.12）。
+    if (!installBinUsable(fileReadable(installed), cjhVendorVerified(installDir))) {
         let bundle = cjhBundlePath()
         if (bundle.size == 0 || !fileReadable(bundle)) {
             obj.put("ok", JsonBool(false))
-            obj.put("error", JsonString("仓内 vendor 校验未通过，且没有可用安装包（设 LINGQU_CJH_BUNDLE 指向 zip）"))
+            obj.put("error", JsonString("部署目录副本与随包清单不符（${installed}），且没有可用安装包" +
+                "（设 LINGQU_CJH_BUNDLE 指向 zip）——不执行未校验的二进制"))
             return obj
         }
+        // bsdtar -xf 会覆盖同名文件，所以"重解一次"同时就是刷新
         match (cjhExtractBundle(bundle, installDir)) {
             case Some(why) =>
                 obj.put("ok", JsonBool(false))
                 obj.put("error", JsonString("解包/安装失败：${why}"))
                 return obj
             case None => ()
+        }
+        // 解完要**再核一次**：解包成功 ≠ 内容就是我们要的那一版（§4-44：改完派生值要按新内容重算）
+        if (!installBinUsable(fileReadable(installed), cjhVendorVerified(installDir))) {
+            obj.put("ok", JsonBool(false))
+            obj.put("error", JsonString("解包完成但副本仍与随包清单不符（${installed}）——不执行未校验的二进制"))
+            return obj
         }
         eprintln("[lingqu] cjh 已部署到 ${installed}")
     }

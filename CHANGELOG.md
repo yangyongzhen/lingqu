@@ -5,6 +5,118 @@
 
 ---
 
+## [0.39.78] - 2026-11-07
+
+**主题**：**内置 cjh「起得慢」不是引擎慢** —— 实测引擎自身 fork→`/api/health`=200 只要 **85 ms**，
+而应用从启动到引擎可用是 **15.5 秒**，慢的全在**拉起之前**的白等上；修完 **613 ms**。
+
+### Fixed
+
+- **拉起前的探活改用纯 TCP「有没有人在听」（`cjhPortListening`）**：
+  - **现象**（用户反馈"内置的 cjh 引擎起的这么慢"）：主进程启动 → 引擎进程诞生相隔 15 秒，
+    而引擎自己被拉起后瞬间就绪；
+  - **根因**：仓颉的 `ClientBuilder` **没有 connectTimeout**（上游 cj-tauri `plugin_http.cj`、
+    cjh `web_fetch.cj` 两处注释都记了这坑），目标不可达时卡在 TCP connect —— 端口空着时
+    **一次** `/api/health` 就要 **2007 ms**（`.lingqu/cjh-start.log` 实测）；原来拉起前先
+    `cjhHealthyWithRetry(port, 6)`，2s + 5×(2s+0.7s) ≈ 15 秒，全花在"确认端口上没人"上；
+  - **处置**：先 `TcpSocket("127.0.0.1", port).connect(timeout: 250ms)` 探端口（一个字节都不发，
+    不打扰正在跑长回合的引擎）——没人在听就立刻拉起；有人在听才走 `/api/health` 的宽容重试
+    （否则会拉起绑不上端口的僵尸，§4-103 那类"连接反复横跳"）；
+- **`ensureCjhWeb` / `cjhDeployAndStart` 共用 `cjhCheckBeforeSpawn`**：两处原先各写一份重试次数
+  （6 / 4），口径容易走岔；现在只有一处判定。
+
+### Added
+
+- **启动计时证据落档 `.lingqu/cjh-start.log`**（`traceStartup`）：仓颉 `eprintln` **不进应用日志**
+  （§4-14），上一版想靠日志看"拉起前花了多久"根本看不到。现在慢的阶段会自己写一行
+  `<时刻> <标签> <耗时>ms`，正常启动不刷盘。
+
+### Changed
+
+- 版本号三处一致 0.39.78
+
+### 验证
+
+- **实测（本机 win-x64，2026-11-07）**：同一台机器、同一份产物结构，改前 **15518 ms** / **15528 ms**，
+  改后 **613 ms**；落档 `2026-11-07T12:22:08 端口 8765 空着（无监听）→ 直接拉起 0ms`，
+  随后 `GET /api/health` → `{"status":"ok","version":"1.6.12"}`；
+- 隔离计时：vendor cjh 直接跑 `web --port 8772`，fork→健康检查 200 = **85 ms**（证明慢不在引擎）；
+- 单测 `TOTAL: 414 / FAILED: 0 / ERROR: 0`（`installBinUsable` 1 条为新；TCP 探测属 I/O，按 §1-5 不进单测，
+  以实机计时为准）。
+
+---
+
+## [0.39.77] - 2026-11-07
+
+**主题**：**「文件在」不等于「内容对」** —— 随包引擎升到 cjh 1.6.12 后，应用却一直在跑
+`%LOCALAPPDATA%\lingqu\cjh` 里 11-02 留下的 **1.6.5**；界面完全看不出来（`/api/health` 照样 200）。
+
+### Fixed
+
+- **`src/cjh_host.cj` 的 `cjhBinPath()` 第 ② 档（部署过的安装目录）补 SHA256 校验**：
+  - **现象**：本轮启动实测 `/api/health` 回 `{"status":"ok","version":"1.6.5"}`，
+    而 `vendor/cjh/win-x64/cjh.exe` 已是 1.6.12（0.39.75 升级，SHA256 常量也换了）；
+  - **根因**：第 ② 档只判 `fileReadable(install)` 就 `return`，抢在第 ③ 档（vendor，**校验通过才用**）
+    前面命中旧副本 —— 升级后的 1.6.12 永远轮不到执行；
+  - **处置**：新增纯函数 `installBinUsable(readable, verified)`（两件都满足才算可用），
+    第 ② 档改用它；副本内容不符时**不执行**，并打一行「部署目录副本与随包清单不符，跳过 …（多半是
+    升级前的旧引擎残留）」——排查时能看见"为什么不执行"，而不是只剩「引擎缺失」；
+- **`cjhDeployAndStart()` 的 ② 档同口径**：副本不符时不再"读得到就拉起"，改为
+  **有安装包就 `bsdtar -xf` 重解一次当刷新**（解完再核一次，解包成功 ≠ 内容对），
+  没有任何可解来源时如实拒绝：「不执行未校验的二进制」。
+
+### Changed
+
+- `cjhBinPath()` 的文档补齐四档优先级与各自的可信度（① `LINGQU_CJH` 显式指定不校验；②③④ 都要校验）
+- 版本号三处一致 0.39.77
+
+### 验证
+
+- **单测**：新增 `testInstallBinUsable`（主路径 / 文件在但内容不符 / 校验过但文件不在 / 两者都不成立）；
+  `cjpm test` → `TOTAL: 414, PASSED: 414, FAILED: 0, ERROR: 0`（原 413 + 1）；
+- **实机**：重编 `targets/desktop` 后重启应用 —— `Get-Process` 显示引擎路径为
+  `E:\test\rust\test1\lingqu\vendor\cjh\win-x64\cjh.exe`，
+  `GET /api/health` → `{"status":"ok","version":"1.6.12","web_port":8765}`。
+
+---
+
+## [0.39.76] - 2026-11-07
+
+**主题**：**「已存在就不再拷」把旧 DLL 钉死在产物目录** —— 框架升级后门禁 `cj-tauri check`
+退出码 `0xC0000139`（STATUS_ENTRYPOINT_NOT_FOUND）；顺带补验 win-x64 随包引擎。
+
+### Fixed
+
+- **`scripts/collect-runtime-dlls.sh`**：依赖闭包由「缺则拷」（`[ -f "$BIN_DIR/$dep" ] && continue`）
+  改为「缺则拷、**内容不同则刷新**」（新增 `same_file()`，有 `sha256sum` 用它、没有退 `cmp`）；
+  OpenSSL 两件（`libcrypto-3-x64.dll` / `libssl-3-x64.dll`）同样的跳过逻辑一并改成刷新；
+  汇总行增「刷新 N 个」。起因见下：
+  - **现象**：`./scripts/test.sh` 的 ③ 闸报
+    `[cj-tauri] 三方比对：无头导出退出异常（code=3221225785）`，
+    手跑 `targets/desktop/target/release/bin/main.exe` 同样起不来；
+  - **根因**：`targets/desktop/target/release/bin/` 里的 `libcjtbridge.dll` 还是 2026-11-02 那份
+    （732,160 B），而框架 `native/libcjtbridge.dll` 在 cj-tauri 2.1.2（2026-11-05）已换成 742,912 B；
+    Windows 加载顺序里 **exe 同目录优先于 PATH**，于是 `main.exe`（11-07 重新链接）用旧桥 DLL，
+    导入符号对不上 → `0xC0000139`。收集脚本按「已存在就跳过」的逻辑，永远不会把旧拷贝换掉；
+  - **处置**：脚本改成按内容比对刷新；本次现场用 `--clean` 重收一遍（新拷 46 个），`check` 立刻通过
+
+### Changed
+
+- `scripts/run-dev.sh` 的提示语由「幂等，只补缺的」改为「幂等：缺则拷、内容不同则刷新」
+- 版本号三处一致 0.39.76
+
+### 验证
+
+- **回归**：把产物里的 `libcjtbridge.dll` 故意换成 `libssl-3-x64.dll` 的内容 →
+  脚本报「刷新 1 个」，哈希回到与框架 `native/libcjtbridge.dll` 一致（`d4f3dc43…`）；
+- `cj-tauri check` → `[cj-tauri] check 通过：com.lingqu.migrator@0.39.76`；
+- **win-x64 随包引擎补验**（0.39.75 遗留的未验证项）：5 个文件 SHA256 与 `CJH_VENDOR_FILES`
+  逐条一致；`cjh.exe --version` → `cjh v1.6.12`；`web --port 8772 --bind 127.0.0.1` +
+  `GET /api/health` → 200 `{"status":"ok","version":"1.6.12"}`（验完收进程，未动 8765）；
+- 六项门禁见 `docs/进度记录.md`。
+
+---
+
 ## [0.39.75] - 2026-11-07
 
 **主题**：**随包引擎升级 cjh 1.6.5 → 1.6.12**（vendor 两平台 + SHA256 校验链 + 灌包脚本）。

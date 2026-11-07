@@ -96,6 +96,25 @@ public func testShouldUseExtracted(): Unit {
     // 释放了但校验不过 → 绝不用（来路不明的同名文件不该被静默执行）
     @Assert(shouldUseExtracted(4, false), false)
 }
+
+/* ---------- 部署目录副本的可用判据（0.39.77） ---------- */
+
+/**
+ * 现象：0.39.75 把随包引擎升到 1.6.12，应用却一直跑 `%LOCALAPPDATA%\lingqu\cjh` 里的 1.6.5。
+ * 根因：② 档「部署过的安装目录」只判 `fileReadable` 就返回，抢在 ③ 档（vendor，校验过）前面。
+ * 判据：**文件在** 与 **内容对** 是两件事，会执行的二进制必须两件都满足。
+ */
+@Test
+public func testInstallBinUsable(): Unit {
+    // 主路径：文件在 + 校验通过 → 可用
+    @Assert(installBinUsable(true, true), true)
+    // 错误路径①：文件在但内容不符（升级前的旧引擎）→ 不可用
+    @Assert(installBinUsable(true, false), false)
+    // 错误路径②：校验通过但文件不在（删掉了）→ 不可用
+    @Assert(installBinUsable(false, true), false)
+    // 边界：两个都不成立（没部署过）→ 不可用，且不该算错误
+    @Assert(installBinUsable(false, false), false)
+}
 /**
  * 0.39.42：健康检查的「宽容窗口」。
  *
