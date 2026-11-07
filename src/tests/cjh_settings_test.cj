@@ -195,3 +195,30 @@ public func testSetProviderProtocolHandlesEscapesAndCamel(): Unit {
     @Assert(camel.contains("\"providerProtocol\": \"anthropic\""), true)
     @Assert(camel.contains("provider_protocol"), false)
 }
+
+/**
+ * 0.39.82：轮次预算「落地了没有」的判据。
+ *
+ * 现场：用户实测整应用迁移跑到 **62/40** 就停了，界面只写"回合结束"。
+ * 查下来 `ensureCjhIterationBudget` 返回 `file:…（需重启 cjh 生效）`——
+ * 值写进了 `~/.cjh/settings.json`，但正在跑回合的引擎内存里还是默认 40，
+ * 于是"抬上去"这件事等于没做，直到 40 轮被截断。判据必须区分"写进去了"与"引擎认了"。
+ */
+@Test
+public func testIterBudgetStateOf(): Unit {
+    // 引擎现在就认：live（POST 生效）与 restart-ok（重启后复验通过）都算落地
+    @Assert(iterBudgetStateOf("live:40->120"), "applied")
+    @Assert(iterBudgetStateOf("restart-ok:120"), "applied")
+    // 本来就够：不必动
+    @Assert(iterBudgetStateOf("already:120>=120"), "already")
+    // 只写了文件 = **没生效**（本次 62/40 的真凶）
+    @Assert(iterBudgetStateOf("file:40->120（需重启 cjh 生效）"), "needs-restart")
+    // 写不进去的几种形态都要归到 failed，别被当成"已落地"
+    @Assert(iterBudgetStateOf("error:FSException: permission denied"), "failed")
+    @Assert(iterBudgetStateOf("no-settings"), "failed")
+    // 边界：空串/认不出的形态 → failed（宁可报没做成，也不能报做成）
+    @Assert(iterBudgetStateOf(""), "failed")
+    @Assert(iterBudgetStateOf("  "), "failed")
+    // 边界：前后空白不影响判定（日志里带缩进是常事）
+    @Assert(iterBudgetStateOf("  file:40->120  "), "needs-restart")
+}

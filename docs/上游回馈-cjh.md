@@ -382,6 +382,83 @@ TCP 127.0.0.1:8765 -> 127.0.0.1:2189   CLOSE_WAIT   14668   （×15，来源进�
 让客户端能可靠区分"引擎挂了"与"引擎正忙"。客户端侧（灵渠 0.39.38）已改为
 **连续两次判掉且不在干活时才断开**，但引擎侧给出可靠的健康语义更根本。
 
+---
+
+## 12. 超时收尾只杀得掉会话 bash 本体 → 孤儿握着管道，`p.wait` 永不返回（agent 卡死在一条工具调用里）
+
+**现象**（2026-11-07 灵渠实机，`rust-music-2` 全流程回归时撞到）
+
+agent 自己写的全盘扫描 `find / -maxdepth 6 -type d -name "ohos" -path "*gen*" | head -10`
+带 `timeout: 120` 发出，120s 后会话被杀、超时提示本该回到模型，但**工具调用再也不返回**：
+灵渠界面停在「执行中 565s」，`.lingqu/agent/trace.jsonl` 停在 13:30:55 之后再无 `tool_done`，
+整轮迁移就此僵住。
+
+现场两条证据：
+
+```
+find.exe  PID 23964  起于 13:30:55  累计 CPU 605s（会话 bash 已于 ~13:32:55 被超时杀掉）
+.lingqu/agent/trace.jsonl  最后一条 tool_call 13:30:55，此后无 tool_done
+```
+手工 `taskkill /F /IM find.exe` 之后 **3 秒内** agent 恢复（13:44:15 新的工具调用、13:44:16 `tool_done`）
+—— 说明卡住的就是 `killSession()` 里的 `p.wait`，它在等一个**被孤儿握着写端**的管道。
+
+**根因**
+
+`src/tools/bash_session.cj` 超时分支：`procSnapshotOf()` → `killSession()` →
+`p.terminate(force: true)` → `p.wait(timeout: 5s)`。
+`terminate` 只能作用于 `SubProcess` 句柄那一个进程（Git 的 `bash.exe` 启动器），
+而命令真正的执行者是它 fork/exec 出来的 `/usr/bin/bash` 及其子孙；子孙持有 stdout 管道的
+**写端**，于是管道永不 EOF，`wait` 就永远等不到——超时提示卡在工具调用里回不到模型。
+
+**为什么"顺手"的三种写法都不行（逐条实测，别再重踩）**
+
+| 写法 | 实测结果 |
+|---|---|
+| `taskkill /T /F /PID <pid>` | 只收掉启动器（`terminate` 报 `pid not exist`），`find.exe` 仍活（三次分别 PID 21972 / 21216 / 24008），`wait` 照挂 |
+| 用 `ps -W` 的 WINPID 把原生 PID 对成 MSYS PID、再按 **PPID 递归**收子孙 | 只收到根 1 个：干活的 bash 被 re-parent 成 `PPID=1`，从启动器连不过去 —— 实测同一时刻 `4203880 0 0 9576`（启动器）与 `12279 1 12279 8940`（worker）**无父子关系** |
+| 按 **Windows 原生父子链**递归 | 中间那层也已消失：`find.exe (22244)` 的 `ParentProcessId` 查出来是 GONE |
+| `usr\bin\bash.exe` 替代 `bin\bash.exe` 让 `SubProcess.pid` 指向本体 | 一样：`p.pid` 仍是启动器、worker 仍 `PPID=1` |
+
+（隔离验证：`kill -9 <MSYS pid>` 从**另一个** bash 发是有效的——`sleep` 立刻消失；
+所以问题不在 `kill` 本身，而在**找不到该杀谁**。）
+
+**唯一可靠的线索：进程组**
+
+同一时刻 `ps -W`：
+
+```
+12298    1  12298  20552  /usr/bin/bash     ← worker：PGID == 自己的 MSYS pid
+12299 12298 12298  22244  /usr/bin/find     ← 子命令在同一个进程组里
+```
+
+即 worker bash 是进程组组长，子命令及其 `head` 全在组内。据此实测
+`kill -9 -<pgid>` → `find-alive=0`，比 `/T` 干净。
+
+**修法**（`src/tools/bash_session.cj`）
+
+1. 会话启动后立刻让 bash 把自己的 `$$` 写进一份临时文件
+   （`/tmp/cjh-sess-<启动器 pid>.pid`，文件名带 pid 保证每个会话唯一）；
+2. `killSession()` 收尾时 `kill -9 -$(cat '<pidfile>') 2>/dev/null; rm -f '<pidfile>'`
+   —— 一次把 worker bash、`find`、`head` 整组收掉，写端随之关闭，`p.wait` 立即返回；
+3. `taskkill /T /F /PID` 保留为兜底（非 bash 模式，或 pid 文件没写上时至少收掉启动器）；
+4. 拿不到 pid 文件时退回原行为，不引入新的失败面。
+
+**验证**（cjh 本轮改动，本机 Windows）
+
+- 新增用例 `src/tests/bash_session_win_test.cj` 的
+  `BashSessionWindowsTest.testTimeoutReturnsWithGrandchildHoldingPipe`：
+  `find / … | head -10` + `timeout 5` → **PASSED，6.08 s 返回**（旧实现 644s+ 不返回），
+  且返回后会话可重建（`echo recovered` 正常）；
+- 跑完测试 `tasklist /FI "IMAGENAME eq find.exe"` → **无残留**；
+- 原 `bash_session_test.cj` 整个类带 `@When[os != "Windows"]`，正是该路径零 Windows 覆盖
+  的原因——这次把 Windows 侧补成独立文件；
+- cjh `build warning: 0`。
+
+**仍建议上游做的一步（更彻底）**：把会话进程放进 Windows **Job Object**
+（`CreateJobObject` + `AssignProcessToJobObject` + 超时 `TerminateJobObject`），
+即使子孙再 re-parent 也逃不出 job。pid 文件方案已能解掉挂死与残留，故不阻塞本次修复。
+
+
 
 
 

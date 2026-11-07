@@ -31,6 +31,22 @@ public func testCargoConfigTomlSubstitutesSdkPath(): Unit {
 }
 
 @Test
+public func testCargoConfigTomlSafeForWindowsPath(): Unit {
+    // 0.39.79 实测复现（rust-music-2 全流程）：NATIVE_OHOS_SDK 是 Windows 形态时，
+    // 路径被原样拼进 TOML 双引号串 → `\o`/`\D` 不是合法转义 → cargo 报
+    // `could not parse TOML configuration`，build 连 manifest 都读不进去（exit=101）。
+    // 判据：生成的内容里**一个反斜杠都不该剩**，且路径仍是可用的正斜杠形态。
+    let win = cargoConfigToml("D:\\oh\\DevEcoStudio\\sdk\\default\\openharmony\\native")
+    @Assert(win.contains("D:/oh/DevEcoStudio/sdk/default/openharmony/native/llvm/bin/clang"), true)
+    @Assert(win.contains("\\"), false)
+    // 追加片段（guide 档的 after）同口径
+    let envOnly = cargoEnvOnlyToml("D:\\oh\\sdk\\native")
+    @Assert(envOnly.contains("\\"), false)
+    // Linux 形态不受影响
+    @Assert(tomlSafePath("/opt/sdk/native"), "/opt/sdk/native")
+}
+
+@Test
 public func testLibRsInjectionBlockShape(): Unit {
     let block = libRsInjectionBlock()
     @Assert(block.contains("fn resolve_app_data_dir"), true)

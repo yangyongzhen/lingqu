@@ -713,10 +713,15 @@ public class RevertPair {
     }
 }
 
-/** apply 的备份目录（0.11.0 起的形态） */
-public func backupDirOf(safeName: String): String {
+/** apply 的备份目录（**相对工程根**）；拼绝对路径走命令层的 `portBackupDirOf`，两边同源 */
+public func backupRelDirOf(safeName: String): String {
     return ".lingqu/port/${safeName}"
 }
+
+/** 回滚目标的相对基准：**含 Cargo.toml 的那层**（传统工程是 `src-tauri/`，扁平工程是工程根） */
+public let REL_SRC = "<src>/"
+/** 回滚目标的相对基准：工程根 */
+public let REL_PROJECT = "<project>/"
 
 /** 旧版（<=0.10.0）的单文件备份路径——revert 兼容它，避免升级后旧备份变孤儿 */
 public func legacyCargoBakOf(safeName: String): String {
@@ -727,15 +732,118 @@ public func legacyCargoBakOf(safeName: String): String {
  * 回滚单元全表（顺序即回滚顺序：Cargo.toml 最后写，先回滚依赖链再回滚配置）。
  * Cargo.toml 的 relTarget 为空串——它可能在 src-tauri/ 也可能在工程根，命令层用
  * cargoTomlPathOf 解析后再回滚，不在这里猜。
+ *
+ * 0.39.81 修：以前这里每条都写死 `src-tauri/...`，扁平布局工程（`rust-music-2` 的
+ * `src-tauri` 就在工程根）回滚时**一个文件都对不上**，提示"没有备份可回滚"。
+ * 现在用 REL_SRC / REL_PROJECT 标记，由 `resolveRevertTarget` 按实际布局解析。
  */
 public func revertPairs(): ArrayList<RevertPair> {
     let out = ArrayList<RevertPair>()
-    out.add(RevertPair(BAK_TOOLCHAIN, "src-tauri/rust-toolchain.toml"))
-    out.add(RevertPair(BAK_CARGO_CONFIG, "src-tauri/.cargo/config.toml"))
-    out.add(RevertPair(BAK_LIBRS, "src-tauri/src/lib.rs"))
-    out.add(RevertPair(BAK_INDEX, "index.html"))
+    out.add(RevertPair(BAK_TOOLCHAIN, REL_SRC + "rust-toolchain.toml"))
+    out.add(RevertPair(BAK_CARGO_CONFIG, REL_SRC + ".cargo/config.toml"))
+    out.add(RevertPair(BAK_LIBRS, REL_SRC + "src/lib.rs"))
+    out.add(RevertPair(BAK_INDEX, REL_PROJECT + "index.html"))
     // R2-PORT-015（0.39.53）：回滚时把 hvigorfile.ts 还原成带 tauri 钩子的原样
-    out.add(RevertPair(BAK_HVIGORFILE, "src-tauri/gen/ohos/entry/hvigorfile.ts"))
+    out.add(RevertPair(BAK_HVIGORFILE, REL_SRC + "gen/ohos/entry/hvigorfile.ts"))
     out.add(RevertPair(BAK_CARGO, ""))
     return out
+}
+
+/**
+ * 回滚目标绝对路径（纯函数）。`srcDir` = 含 Cargo.toml 的那层目录（可能为空 = 工程里没有 Cargo.toml）。
+ *
+ * 解析不出（该用 src 目录但 srcDir 为空）时返回空串，由命令层计入 skipped——
+ * **不猜路径**，猜错会写到工程外的别处去。
+ */
+public func resolveRevertTarget(relTarget: String, projectDir: String, srcDir: String,
+    cargoTomlPath: String): String {
+    if (relTarget.size == 0) {
+        return cargoTomlPath
+    }
+    if (relTarget.startsWith(REL_SRC)) {
+        if (srcDir.size == 0) {
+            return ""
+        }
+        return "${srcDir}/${relTarget[REL_SRC.size..]}"
+    }
+    if (relTarget.startsWith(REL_PROJECT)) {
+        return "${projectDir}/${relTarget[REL_PROJECT.size..]}"
+    }
+    return "${projectDir}/${relTarget}"
+}
+
+/** decisions.json 的 schema（与 `t2h:decisions` 一致） */
+public let DECISIONS_SCHEMA = "lingqu/decisions/v1"
+
+/**
+ * decisions.json 的内容（纯函数）：保留既有 `items`（人工决策），只替换 `portRun` 块。
+ *
+ * 为什么 port 要落这份：以前**只有记过一条人工决策**才会生成 `decisions.json`，
+ * 于是"这个工程跑过 port 没有"在断点板和 agent 上下文里无从判断——观测侧只能靠
+ * `.lingqu/port/<工程>/` 备份目录猜（§4-58 记录的正是这个窟窿）。现在 port 每次跑完
+ * 都把本轮摘要写进来：跑过 / 写过什么 / 几条要人拍板，都有据可查。
+ *
+ * 合并规则：`existing` 解析失败（坏文件）按空 `items` 起，但**不抹掉** portRun 以外的
+ * 未知字段是不做的——本文件归灵渠所有，schema 由这里定义。
+ */
+public func decisionsJsonWithPortRun(existing: String, projectName: String, apply: Bool,
+    applied: Int64, autoCount: Int64, humanCount: Int64, atMillis: Int64,
+    outcomes: ArrayList<String>): String {
+    var items = JsonArray()
+    try {
+        let root = JsonValue.fromStr(existing)
+        match (root.kind()) {
+            case JsonKind.JsObject => match (root.asObject().get("items")) {
+                case Some(v) => items = v.asArray()
+                case None => ()
+            }
+            case _ => ()
+        }
+    } catch (e: Exception) {
+        let _ = e  // 坏文件：items 按空表起，portRun 照写（观测侧至少还认得出"跑过"）
+    }
+    var run = JsonObject()
+    run.put("apply", JsonBool(apply))
+    run.put("applied", JsonInt(applied))
+    run.put("auto", JsonInt(autoCount))
+    run.put("human", JsonInt(humanCount))
+    run.put("at", JsonInt(atMillis))
+    var outs = JsonArray()
+    for (o in outcomes) {
+        outs.add(JsonString(o))
+    }
+    run.put("outcomes", outs)
+    var root = JsonObject()
+    root.put("schema", JsonString(DECISIONS_SCHEMA))
+    root.put("project", JsonString(projectName))
+    root.put("items", items)
+    root.put("portRun", run)
+    return root.toJsonString()
+}
+
+/** 从 decisions.json 文本里取「本轮 port 跑过的时刻」（纯函数；没有 portRun → -1） */
+public func portRunAtOf(text: String): Int64 {
+    if (text.size == 0) {
+        return -1
+    }
+    try {
+        let root = JsonValue.fromStr(text)
+        match (root.kind()) {
+            case JsonKind.JsObject =>
+                match (root.asObject().get("portRun")) {
+                    case Some(v) => match (v.asObject().get("at")) {
+                        case Some(t) => match (t.kind()) {
+                            case JsonKind.JsInt => return t.asInt().getValue()
+                            case _ => return -1
+                        }
+                        case None => return -1
+                    }
+                    case None => return -1
+                }
+            case _ => return -1
+        }
+    } catch (e: Exception) {
+        return -1
+    }
+    return -1
 }

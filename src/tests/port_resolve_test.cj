@@ -104,6 +104,20 @@ public func testDialogAssetsContentShape(): Unit {
 }
 
 @Test
+public func testFrontendDirOfLayouts(): Unit {
+    // 经典布局（Cargo.toml 在 <工程>/src-tauri）：前端目录是工程根，行为不变
+    @Assert(frontendDirOf("E:/p/demo", "E:/p/demo/src-tauri", "../dist"), "E:/p/demo/src-tauri/..")
+    // 扁平布局（0.39.79 rust-music-2 实测）：srcTauriDir == 工程根，
+    // 绝不能退成 "<工程>/.."——那会读到**别的工程**的 lingqu-dialog.js，
+    // 表现为 014 假"已存在"+ 012 证据里出现 juCang 路径。
+    @Assert(frontendDirOf("C:/w/demo2", "C:/w/demo2", "ui"), "C:/w/demo2/ui")
+    @Assert(frontendDirOf("C:/w/demo2", "C:/w/demo2", "./ui"), "C:/w/demo2/ui")
+    // 没有 frontendDist / 是绝对或越界路径 → 留在工程根，不拼到外面
+    @Assert(frontendDirOf("C:/w/demo2", "C:/w/demo2", ""), "C:/w/demo2")
+    @Assert(frontendDirOf("C:/w/demo2", "C:/w/demo2", "../dist"), "C:/w/demo2")
+}
+
+@Test
 public func testDialogAssetsOutcomeOnNonexistentDir(): Unit {
     // 目录不存在（文件必然不存在）→ applied=true 待生成
     let outs = dialogAssetsOutcome("/tmp/lingqu-nonexistent-port-probe")

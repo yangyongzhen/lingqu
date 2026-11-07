@@ -9,6 +9,7 @@ import std.io.*            // InputStream（读 HTTP 响应体）
 import std.net.*           // TcpSocket：拉起前"端口上有没有人在听"的快速探测
 import std.time.*          // DateTime（健康检查的宽容窗口要取时刻）
 import std.collection.*    // ArrayList
+import std.sync.*          // Mutex：探活+拉起整段互斥（0.39.82，防并发双拉）
 // SubProcess / launch：非 Windows 分支一直用；Windows 侧 0.39.40 起也用它（让 cjh 继承
 // 我们的隐藏控制台，避免它再拉 bash/find 时各自弹黑窗）。因此两边都要 import——
 // 但各自仍需 @When 门禁，否则另一平台会多一条 unused import 警告。
@@ -48,6 +49,24 @@ public var gCjhProc: Option<CjhHandle> = None
 public var gCjhProc: Option<SubProcess> = None
 /** true = cjh 是本应用拉起的（退出时要收尾）；false = 本来就在跑（别动人家的） */
 public var gCjhOwned: Bool = false
+/**
+ * 本应用**实际拉起的**那个二进制路径（0.39.84）。
+ *
+ * 为什么需要它：安装目录里可能躺着内容不符的旧副本（`cjhBinPathResolve` 会跳过、**不执行**），
+ * 可回投若按"哪条路径可读"去猜，界面报的就会是那个旧副本，而真正在跑的是 `vendor/` 那份
+ * ——「报的和跑的不一致」等于换了种方式撒谎（§4-109 口径）。自己拉起的就记下确切的路径。
+ */
+public var gCjhBinUsed: String = ""
+
+/**
+ * 拉起/复用的互斥（0.39.82）。
+ *
+ * 「探活 → 判断 → 拉起」是一段读-判断-写：两路同时进来会**各拉起一只**。
+ * 实测（2026-11-07 `.lingqu/cjh-start.log`）：18:17:51 出现两条一模一样的
+ * 「健康检查重试结果 false」、18:18:05 出现两条「拉起后就绪」——同一时刻两路并发，
+ * 机器上于是留下 2 只新引擎，加上上一轮的孤儿共 **3 只同时监听 8765**。
+ */
+let gCjhSpawnLock = Mutex()
 
 /**
  * 两种拉起方式的统一句柄（0.39.40，仅 Windows）。
@@ -361,24 +380,68 @@ func cjhPortListening(port: Int64): Bool {
 }
 
 /**
+ * 拉起前的三态决策（0.39.82）。
+ *
+ * 为什么要三态而不是 Bool：原来这里把「端口空着」与「端口有人听但不响应」**都返回 false**，
+ * 而两个调用方（`ensureCjhWeb` / `cjhDeployAndStart`）都把 false 读成"没有引擎 → 拉起一只"。
+ * 于是引擎**忙于长回合**（`/api/health` 连续超时）时被误判成"引擎没了"，应用又拉起第二只；
+ * 而 Windows 允许**重复绑定同一端口**（SO_REUSEADDR），第二只静默"就绪"，之后 WS 与 REST
+ * 可能落在不同实例上——会话、模型配置、轮次预算全对不上（实测 3 只同占 8765）。
+ */
+public enum CjhSpawnDecision {
+    | Spawn       // 端口空着 → 可以拉起
+    | Reuse       // 有人在听且健康 → 复用，别动它
+    | Occupied    // 有人在听但不响应 → **绝不拉起第二只**
+}
+
+/** 纯函数：两个事实 → 一个决定。单测钉住"有人在听就不许再拉起"这条线 */
+public func spawnDecisionOf(listening: Bool, healthy: Bool): CjhSpawnDecision {
+    if (!listening) {
+        return CjhSpawnDecision.Spawn
+    }
+    if (healthy) {
+        return CjhSpawnDecision.Reuse
+    }
+    return CjhSpawnDecision.Occupied
+}
+
+/**
+ * 纯函数：决策 → 字符串视图。
+ *
+ * 为什么要它：仓颉里的枚举在本仓一律用 `match` 比（没有 `==` 的用法先例），
+ * 而单测比对字符串最直白；日志与 `ui_report` 也正好要这个可读值。
+ */
+public func spawnDecisionName(d: CjhSpawnDecision): String {
+    match (d) {
+        case CjhSpawnDecision.Spawn => return "spawn"
+        case CjhSpawnDecision.Reuse => return "reuse"
+        case CjhSpawnDecision.Occupied => return "occupied"
+    }
+}
+
+/**
  * 拉起前的统一探活（`ensureCjhWeb` / `cjhDeployAndStart` 共用）：先问"端口上有没有人在听"。
  *
- *   · 没人在听 → 立刻返回 false（几毫秒），上层直接拉起，不再白等健康检查的超时；
- *   · 有人在听 → 说明引擎可能在跑长回合（忙），这时才走 `/api/health` 的宽容重试，
- *     否则会拉起一只绑不上端口的僵尸（§4-103 那类"连接反复横跳"的源头）。
+ *   · 没人在听 → Spawn（几毫秒），上层直接拉起，不再白等健康检查的超时；
+ *   · 有人在听 → 才走 `/api/health` 的宽容重试，结果分 Reuse / Occupied。
  *
- * 收在一处是有原因的：这两条路径原先各写一份重试次数（6 / 4），口径很容易走岔。
+ * **判死要把原因一起记下来**：只写 false 的话，事后分不清是"忙""读超时"还是"端点没了"——
+ * 这次事故就只能靠进程表倒推（gLastHealthErr 一直在，却没人写进日志）。
  */
-func cjhCheckBeforeSpawn(port: Int64, retries: Int64): Bool {
+func probeCjhForSpawn(port: Int64, retries: Int64): CjhSpawnDecision {
     if (!cjhPortListening(port)) {
-        traceStartup("端口 ${port} 空着（无监听）→ 直接拉起", 0)
-        return false
+        traceStartup("端口 ${port} 空着（无监听）→ 允许拉起", 0)
+        return CjhSpawnDecision.Spawn
     }
-    // 有 socket 在听：可能是引擎、也可能只是别人占了这个端口，交给健康检查分辨
     let t0 = DateTime.now().toUnixTimeStamp().toMilliseconds()
     let ok = cjhHealthyWithRetry(port, retries)
-    traceStartup("端口 ${port} 有监听→健康检查重试结果 ${ok}", DateTime.now().toUnixTimeStamp().toMilliseconds() - t0)
-    return ok
+    let dt = DateTime.now().toUnixTimeStamp().toMilliseconds() - t0
+    if (ok) {
+        traceStartup("端口 ${port} 有监听→健康检查通过 → 复用", dt)
+    } else {
+        traceStartup("端口 ${port} 有监听→健康检查未通（${dt}ms，原因：${gLastHealthErr}）→ 不拉起第二只", dt)
+    }
+    return spawnDecisionOf(true, ok)
 }
 
 /** 可用端点的统一形状：页面拿到就能自己接上 */
@@ -616,8 +679,11 @@ func cjhBinName(): String {
  */
 @When[os == "Windows"]
 let CJH_VENDOR_FILES: Array<(String, String)> = [
-    // cjh v1.6.12（selfcontained 五件套：exe + 4 DLL；本版 4 个 DLL 与 1.6.5 逐字节相同，只有 exe 变）
-    ("cjh.exe", "2cb384f0cde35ab558c0dea6e4f07d4cc859e594c03da57e7d3d17da13b23cb7"),
+    // cjh v1.6.12（selfcontained 五件套：exe + 4 DLL；4 个 DLL 与 1.6.5 逐字节相同）
+    // 0.39.84 起 exe 换成 PR #12（fix/bash-timeout-kill-process-group @9a4f6d5）的本地构建：
+    // 超时收尾按进程组杀整棵树，避免 killSession 只收 bash 启动器、p.wait 挂在孤儿管道上（§4-131）。
+    // 官方 1.6.12 是 2cb384f0…；这份含修复，特征串 `sessionPgFile` / `/tmp/cjh-sess-`。
+    ("cjh.exe", "7dda9caf21148a2e9e6b0be5c47d2027e5b561fb83e756077e5b907f5fc990d1"),
     ("libcangjie-runtime.dll", "03f4d59a13c7fc1d71523bdd42a05587657105aff14c8288adfdd8fbe5bea089"),
     ("libboundscheck.dll", "07b33dd3de22489b442cc32f0fe8ddfc80b753443b17fb2053133b2e7ffb6c78"),
     ("libssl-3-x64.dll", "bbaf8a8c37b4cfdd7fe5feee9ff1d0072078f430bb5ef2b3da38a600f4039b03"),
@@ -830,8 +896,8 @@ public func cjhStatusJson(): JsonValue {
         // 这里**不做 SHA256 校验**（已在跑就不该因为校验慢卡住轮询），只查 env 与安装目录两条。
         let envBin = firstNonEmptyEnv(["LINGQU_CJH"])
         let installBin = installBinPath()
-        obj.put("binPath", JsonString(knownBinPath(envBin, fileReadable(envBin), installBin,
-            fileReadable(installBin))))
+        obj.put("binPath", JsonString(knownBinPath(gCjhBinUsed, gCjhOwned, envBin,
+            fileReadable(envBin), installBin, fileReadable(installBin))))
         return obj
     }
     // 判活要宽容、判死要有证据（0.39.42）：一次 `/api/health` 读超时就改口说"引擎缺失"，
@@ -851,6 +917,22 @@ public func cjhStatusJson(): JsonValue {
         putEndpoints(obj, port)
         obj.put("owned", JsonBool(gCjhOwned))
         obj.put("note", JsonString("健康检查最近一次成功在 ${HEALTH_GRACE_MS / 1000} 秒内，按「在跑」处理"))
+        return obj
+    }
+    // 端口上有监听、但健康检查连续不通（0.39.82）：**不许再谎报"没在跑"**。
+    //
+    // 旧逻辑这时回 state=ready，界面就显示「引擎还没起来」并把「立刻拉起」摆出来——
+    // 用户照点（或某条自动路径）就会拉起第二只；而 Windows 允许重复绑定同一端口，
+    // 第二只静默"就绪"，之后 WS 与 REST 可能落在不同实例上。实测事故正是这么起来的。
+    // 现在：如实说"在跑，但读不到"，并且**不再叠加实例**。
+    if (cjhPortListening(port)) {
+        obj.put("state", JsonString("running"))
+        obj.put("unstable", JsonBool(true))
+        obj.put("portBusy", JsonBool(true))
+        putEndpoints(obj, port)
+        obj.put("owned", JsonBool(gCjhOwned))
+        obj.put("note", JsonString("端口 ${port} 有监听但健康检查未通（${gLastHealthErr}）——" +
+            "按「引擎在忙」处理，不会再拉起第二只；迟迟不通可用「重启引擎」"))
         return obj
     }
     let bin = cjhBinPath()
@@ -908,6 +990,8 @@ func spawnCjhWeb(bin: String): Bool {
         terminateCjhProc(old)
         gCjhProc = None
     }
+    // 记下**这一次真正拉起的**路径：`cjh_status` 回投 binPath 时以它为准（0.39.84）
+    gCjhBinUsed = bin
     // 0.39.40：本进程若已分到**隐藏控制台**（win_console.ensureHiddenConsole），就让 cjh
     // **继承**它（走 std.process.launch），而不是 DETACHED 掉——这样 cjh 再拉 bash / find /
     // lingqu-cli 时都继承这个看不见的 console，用户不会再看到一个个黑窗闪。
@@ -972,6 +1056,7 @@ func spawnCjhWeb(bin: String): Bool {
         terminateCjhProc(old)
         gCjhProc = None
     }
+    gCjhBinUsed = bin
     var launched: Option<SubProcess> = None
     try {
         launched = Some(launch(bin, cjhWebArgs()))
@@ -1028,12 +1113,29 @@ func terminateCjhProc(p: SubProcess): Unit {
  * 没有就按 cjhBinPath() 找二进制并拉起。失败不致命——页面拿「未连接」，其余功能照常。
  */
 public func ensureCjhWeb(): Bool {
-    let port = cjhPort()
-    // 先探活：端口空着（拒连）就立刻拉起；只有"有 socket 但在忙"才多试，别白等（见 cjhCheckBeforeSpawn）
-    if (cjhCheckBeforeSpawn(port, 5)) {
-        eprintln("[lingqu] cjh web 已在运行（port=${port}），直接复用")
-        gCjhOwned = false
-        return true
+    // 整段互斥（0.39.82）：探活到拉起之间不许第二路插进来，否则两路各拉起一只引擎
+    var ok = false
+    synchronized(gCjhSpawnLock) {
+        ok = ensureCjhWebLocked(cjhPort())
+    }
+    return ok
+}
+
+func ensureCjhWebLocked(port: Int64): Bool {
+    // 先探活：端口空着（拒连）就立刻拉起；只有"有 socket 但在忙"才多试，别白等（见 probeCjhForSpawn）
+    match (probeCjhForSpawn(port, 5)) {
+        case CjhSpawnDecision.Reuse =>
+            eprintln("[lingqu] cjh web 已在运行（port=${port}），直接复用")
+            gCjhOwned = false
+            return true
+        case CjhSpawnDecision.Occupied =>
+            // 有人在听，只是这几次 health 没通：**不许再拉起第二只**。
+            // 引擎忙完会自己恢复（实测：误判那 20 秒后 WS 自己重连成功）；
+            // 真要强制重启，界面上有「重启引擎」，走 cjhDeployAndStart 的 Owned 分支。
+            eprintln("[lingqu] 端口 ${port} 有监听但未响应（${gLastHealthErr}）——不再拉起第二只；" +
+                "忙完会自动恢复，需要强制重启请点「重启引擎」")
+            return false
+        case CjhSpawnDecision.Spawn => ()
     }
     let bin = cjhBinPath()
     if (bin.size == 0) {
@@ -1195,15 +1297,47 @@ func cjhExtractBundle(bundle: String, installDir: String): Option<String> {
  * 三档优先级：已跑就复用 → 仓内 vendor 校验通过就用它 → 否则按安装包部署。
  */
 func cjhDeployAndStart(): JsonObject {
+    // 与 ensureCjhWeb 共用同一把锁（0.39.82）：两条路径同时被触发（启动线程 + 用户点按钮）
+    // 时，不许各自拉起一只
+    var out = JsonObject()
+    synchronized(gCjhSpawnLock) {
+        out = cjhDeployAndStartLocked()
+    }
+    return out
+}
+
+func cjhDeployAndStartLocked(): JsonObject {
     let obj = JsonObject()
     let port = cjhPort()
-    // 同 ensureCjhWeb：走同一条分流探活（端口空着就立刻拉起，忙才重试）
-    if (cjhCheckBeforeSpawn(port, 4)) {
-        obj.put("ok", JsonBool(true))
-        obj.put("reused", JsonBool(true))
-        putEndpoints(obj, port)
-        obj.put("detail", JsonString("端口 ${port} 上已有 cjh，直接复用"))
-        return obj
+    // 同 ensureCjhWeb：走同一条三态探活（端口空着就立刻拉起；忙/不响应绝不叠加第二只）
+    match (probeCjhForSpawn(port, 4)) {
+        case CjhSpawnDecision.Reuse =>
+            obj.put("ok", JsonBool(true))
+            obj.put("reused", JsonBool(true))
+            putEndpoints(obj, port)
+            obj.put("detail", JsonString("端口 ${port} 上已有 cjh，直接复用"))
+            return obj
+        case CjhSpawnDecision.Occupied =>
+            // 用户显式点了「拉起 / 重启引擎」：**自己拉起的**就真重启它；
+            // 不是自己拉起的，按 D-003 不抢不杀（也给不出"重启别人进程"这种动作）
+            if (!gCjhOwned) {
+                obj.put("ok", JsonBool(false))
+                obj.put("external", JsonBool(true))
+                obj.put("error", JsonString("端口 ${port} 上有进程在监听，但健康检查不通（${gLastHealthErr}）——" +
+                    "它不是本应用拉起的，按 D-003 不抢不杀。请手动结束它，或换端口（LINGQU_CJH_PORT）"))
+                return obj
+            }
+            eprintln("[lingqu] 端口 ${port} 上的引擎无响应（${gLastHealthErr}），按用户要求重启它")
+            shutdownCjh()
+            gCjhProc = None
+            gCjhOwned = false
+            // 等端口真的空出来再拉新的，否则新实例绑定失败会变成"重启后引擎缺失"
+            var waited: Int64 = 0
+            while (waited < 5000 && cjhPortListening(port)) {
+                sleep(Duration.millisecond * 100)
+                waited += 100
+            }
+        case CjhSpawnDecision.Spawn => ()
     }
 
     // ⓪ 显式指定（`LINGQU_CJH`）最优先：开发期跑的是**自己构建的 cjh**，
@@ -1590,15 +1724,26 @@ public class CjhCommands <: CommandHandler {
 /**
  * 纯函数：引擎已经在跑时，报告「用的是哪一份二进制」。
  *
- * 只认两条**不需要 SHA 校验**的来源（`LINGQU_CJH` 与安装目录）：正在跑的进程不该因为
- * 轮询里做 4 个文件的哈希而变慢；校验只在"要拉起"的路径上做（`cjhBinPath`）。
- * 两条都拿不到就回空串——界面据此显示「已在运行（来源未知）」，不编造路径。
+ * 优先级：**本应用亲手拉起的那份**（`usedBin` + `owned`）→ `LINGQU_CJH`（用户显式指定）→
+ * 安装目录副本（**仅当这次是我们自己解析并拉起的**）。都拿不到就回空串——界面据此显示
+ * 「来源未知」，不编造路径。
+ *
+ * 为什么这么严（0.39.84 实测两半都被撞到）：
+ * ① 安装目录里可能躺着**内容不符的旧副本**（`cjhBinPathResolve` 会跳过它、绝不执行），真正在跑的是
+ *    `vendor/` 那份；② 更常见的「复用已有实例」——那是上一轮遗留的进程，盘上任何路径都跟它无关。
+ * 两种情形下按"哪条路径可读"回投都是在**报一个没在跑的路径**，比报"未知"更糟。
+ * 后两条只判可读、不做 SHA 校验（正在跑的进程不该因为轮询里做 4 个文件哈希而变慢；
+ * 校验只发生在"要拉起"的路径上，见 `cjhBinPath`）。
  */
-public func knownBinPath(fromEnv: String, envReadable: Bool, installBin: String, installReadable: Bool): String {
+public func knownBinPath(usedBin: String, owned: Bool, fromEnv: String, envReadable: Bool,
+    installBin: String, installReadable: Bool): String {
+    if (owned && usedBin.size > 0) {
+        return usedBin
+    }
     if (envReadable && fromEnv.size > 0) {
         return fromEnv
     }
-    if (installReadable && installBin.size > 0) {
+    if (owned && installReadable && installBin.size > 0) {
         return installBin
     }
     return ""

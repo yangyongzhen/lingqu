@@ -33,41 +33,64 @@ public func rustToolchainToml(hostIsWindows: Bool): String {
     return s
 }
 
+/**
+ * 纯函数：把路径改成能安全放进 TOML **双引号串**的形态。
+ *
+ * 0.39.79 实测（rust-music-2 全流程）：`sdkNative` 传入 Windows 形态
+ * `D:\oh\DevEcoStudio\sdk\...\native` 时，生成的 `.cargo/config.toml` 里是
+ * `linker = "D:\oh\..."` —— TOML 只认 `\b \t \n \f \r \\ \" \uXXXX`，
+ * `\o` 是非法转义，cargo 直接报：
+ *   `could not parse TOML configuration in ...\.cargo\config.toml`
+ *   `missing escaped value, expected 'b', 'e', 'f', 'n', 'r', '\\', '"', 'x', 'u', 'U'`
+ * 于是 build 连 manifest 都读不进去（exit=101）。cargo 在 Windows 上同样认
+ * 正斜杠，所以统一转 `/` 最省事，也顺带避开 `\t`/`\n` 这类"看着合法其实变形"的坑。
+ */
+public func tomlSafePath(p: String): String {
+    return p.replace("\\", "/")
+}
+
 /** `.cargo/config.toml` 全文（sdkNative = OHOS native SDK 根目录） */
 public func cargoConfigToml(sdkNative: String): String {
+    let sdk = tomlSafePath(sdkNative)
     var s = ""
     s += "# === lingqu: R2-PORT-008 ===\n"
     s += "# OHOS (OpenHarmony) 交叉编译配置 —— 由 lingqu t2h:port 生成\n"
     s += "# 直接以 NDK clang 作链接器（NDK 自带 aarch64-unknown-linux-ohos-clang 是 Unix shell 脚本）。\n"
     s += "[target.aarch64-unknown-linux-ohos]\n"
-    s += "linker = \"${sdkNative}/llvm/bin/clang\"\n"
-    s += "ar = \"${sdkNative}/llvm/bin/llvm-ar\"\n"
+    s += "linker = \"${sdk}/llvm/bin/clang\"\n"
+    s += "ar = \"${sdk}/llvm/bin/llvm-ar\"\n"
     s += "rustflags = [\n"
     s += "    \"-C\", \"link-arg=-target\",\n"
     s += "    \"-C\", \"link-arg=aarch64-linux-ohos\",\n"
-    s += "    \"-C\", \"link-arg=--sysroot=${sdkNative}/sysroot\",\n"
+    s += "    \"-C\", \"link-arg=--sysroot=${sdk}/sysroot\",\n"
     s += "    \"-C\", \"link-arg=-fuse-ld=lld\",\n"
     s += "    \"-C\", \"link-arg=--rtlib=compiler-rt\",\n"
     s += "]\n"
     s += "\n"
     s += "# C 依赖（cc crate）编译环境变量：纯 Rust 依赖树用不到，备用\n"
     s += "[env]\n"
-    s += "CC_aarch64_unknown_linux_ohos = \"${sdkNative}/llvm/bin/clang\"\n"
-    s += "AR_aarch64_unknown_linux_ohos = \"${sdkNative}/llvm/bin/llvm-ar\"\n"
-    s += "CFLAGS_aarch64_unknown_linux_ohos = \"-target aarch64-linux-ohos --sysroot=${sdkNative}/sysroot -D__MUSL__\"\n"
+    s += "# 0.39.79 实测（rust-music-2）：ohos-arkui-sys 的 build.rs 直接\n"
+    s += "# `env::var(\"OHOS_NDK_HOME\").expect(...)`，缺它 build 当场 panic（exit=101）。\n"
+    s += "# cargo 的 [env] 段对 build script 同样生效，所以写在这里工程就自足了。\n"
+    s += "OHOS_NDK_HOME = \"${sdk}\"\n"
+    s += "CC_aarch64_unknown_linux_ohos = \"${sdk}/llvm/bin/clang\"\n"
+    s += "AR_aarch64_unknown_linux_ohos = \"${sdk}/llvm/bin/llvm-ar\"\n"
+    s += "CFLAGS_aarch64_unknown_linux_ohos = \"-target aarch64-linux-ohos --sysroot=${sdk}/sysroot -D__MUSL__\"\n"
     return s
 }
 
 /** 只含 `[env]` 段的片段：给"已有 .cargo/config.toml 但缺 C 依赖环境"的工程追加用 */
 public func cargoEnvOnlyToml(sdkNative: String): String {
+    let sdk = tomlSafePath(sdkNative)
     var s = ""
     s += "\n# === lingqu: R2-PORT-008（补齐 C 依赖交叉编译环境）===\n"
     s += "# 缺这段时 ring / openssl 这类 C 依赖的 cc-rs 会退回宿主 `cc`，报\n"
     s += "# `cc-rs: command did not execute successfully: \"cc\" … --target=aarch64-unknown-linux-ohos`。\n"
     s += "[env]\n"
-    s += "CC_aarch64_unknown_linux_ohos = \"${sdkNative}/llvm/bin/clang\"\n"
-    s += "AR_aarch64_unknown_linux_ohos = \"${sdkNative}/llvm/bin/llvm-ar\"\n"
-    s += "CFLAGS_aarch64_unknown_linux_ohos = \"-target aarch64-linux-ohos --sysroot=${sdkNative}/sysroot -D__MUSL__\"\n"
+    s += "OHOS_NDK_HOME = \"${sdk}\"\n"
+    s += "CC_aarch64_unknown_linux_ohos = \"${sdk}/llvm/bin/clang\"\n"
+    s += "AR_aarch64_unknown_linux_ohos = \"${sdk}/llvm/bin/llvm-ar\"\n"
+    s += "CFLAGS_aarch64_unknown_linux_ohos = \"-target aarch64-linux-ohos --sysroot=${sdk}/sysroot -D__MUSL__\"\n"
     return s
 }
 

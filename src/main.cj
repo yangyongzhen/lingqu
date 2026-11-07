@@ -16,6 +16,7 @@ import std.env.*
 import std.fs.*
 import std.process.*
 import std.sync.*
+import std.time.*
 import stdx.encoding.json.*
 
 /*
@@ -1076,7 +1077,16 @@ public class PortCommand <: CommandHandler {
         result.outcomes.add(libOutcome)
         let libPath = if (exists(Path(libRs))) { libRs } else { "${srcTauriDir}/src/main.rs" }
         result.outcomes.add(setupWiringOutcome(libPath))
-        let frontend = "${srcTauriDir}/.."
+        var frontendDist = ""
+        let confPath = "${srcTauriDir}/tauri.conf.json"
+        if (exists(Path(confPath))) {
+            try {
+                frontendDist = jsonStringFieldOf(String.fromUtf8(File.readFrom(confPath)), "frontendDist")
+            } catch (e: Exception) {
+                frontendDist = ""
+            }
+        }
+        let frontend = frontendDirOf(path, srcTauriDir, frontendDist)
         result.outcomes.add(localStorageOutcome("${frontend}/index.html"))
         let dialogAssets = dialogAssetsOutcome(frontend)
         for (d in dialogAssets) {
@@ -1113,7 +1123,7 @@ public class PortCommand <: CommandHandler {
             // 逐文件备份 + 落盘：Cargo.toml / rust-toolchain.toml / .cargo/config.toml / lib.rs / index.html
             try {
                 ensurePortDirs(lqDirOf(path) + cjhPathSep() + "port")
-                backupPath = lqDirOf(path) + cjhPathSep() + "port" + cjhPathSep() + "${safeName}"
+                backupPath = portBackupDirOf(path, safeName)
                 // 每个工程的备份目录要**自己建**：ensurePortDirs 只建到 `.lingqu/port`。
                 // 0.36.0 一键迁移实跑暴露了这个洞——只有先记过人工决策（DecisionsCommand 会建
                 // `<safeName>/`）才恰好能备份；新工程第一次 apply 会直接抛
@@ -1123,7 +1133,9 @@ public class PortCommand <: CommandHandler {
                 }
                 var wroteAny = false
                 if (result.appliedCount() > 0) {
-                    File.writeTo("${backupPath}/${BAK_CARGO}", before.toArray())
+                    // 备份只在**不存在**时写：二次 apply 时工程里已是迁移后的文件，
+                    // 若照样覆盖，备份里存的就是迁移态——revert 只会"回滚"成迁移态（0.39.79 实测）。
+                    backupFile(tomlPath, "${backupPath}/${BAK_CARGO}")
                     File.writeTo(tomlPath, result.afterText.toArray())
                     wroteAny = true
                 }
@@ -1214,6 +1226,32 @@ public class PortCommand <: CommandHandler {
             }
         }
 
+        // 落 decisions.json（0.39.81）：以前**只有记过一条人工决策**才会生成它，于是
+        // "这个工程跑过 port 没有"在断点板与 agent 上下文里无从判断（§4-58 的窟窿）。
+        // 现在每次跑完都把本轮摘要写进去，`items` 保持原样（不抹人工决策）。
+        try {
+            let decDir = portBackupDirOf(path, safeName)
+            ensureDirOf(decDir)
+            let decFile = "${decDir}/decisions.json"
+            var runOutcomes = ArrayList<String>()
+            for (o in result.outcomes) {
+                var line = "${o.id} ${if (o.applied) { "applied" } else { o.tier }}"
+                if (o.note.size > 0) {
+                    line += " | ${o.note}"
+                }
+                runOutcomes.add(line)
+            }
+            let atMs = DateTime.now().toUnixTimeStamp().toMilliseconds()
+            let decText = decisionsJsonWithPortRun(readTextOrEmpty(decFile), safeName, apply,
+                result.appliedCount(), result.autoCount(), result.humanCount(), atMs, runOutcomes)
+            File.writeTo(decFile, decText.toArray())
+        } catch (e: Exception) {
+            // 证据没落地必须能被发现（D-013）：只打日志等于没有（§4-14）
+            if (outErr.size == 0) {
+                outErr = "decisions.json 落盘失败：${e}"
+            }
+        }
+
         res.put("ok", JsonBool(outErr == ""))
         res.put("toml", JsonString(tomlPath))
         res.put("apply", JsonBool(apply))
@@ -1239,11 +1277,27 @@ func ensurePortDirs(dir: String): Unit {
     ensureDirOf(dir)
 }
 
-/** 备份单文件（目标存在才备；备份路径是 .lingqu/port 下的绝对工程外位置） */
-func backupFile(src: String, dst: String): Unit {
+/**
+ * 备份单文件（目标存在才备；**已有备份不再覆盖**）。
+ *
+ * 第二条是 0.39.81 修的：二次 apply 时源文件已是迁移后的内容，覆盖备份等于把
+ * "原始状态"弄丢，revert 之后工程还是迁移态——回滚能力静默失效（§4-33 同族）。
+ */
+public func backupFile(src: String, dst: String): Unit {
     if (exists(Path(src)) && !exists(Path(dst))) {
         File.writeTo(dst, File.readFrom(src))
     }
+}
+
+/**
+ * apply / revert 共用的备份目录（**绝对路径，跟着工程走**）。
+ *
+ * 0.39.81 修：revert 以前用 CWD 相对的 `.lingqu/port/<工程>`，而 apply 写的是
+ * `<工程>/.lingqu/port/<工程>`——只要 CWD 不是该工程目录，回滚就永远"没有备份"。
+ * 单点构造（产出方与消费方共用这一条），别再各拼一份（§4-33）。
+ */
+public func portBackupDirOf(projectDir: String, safeName: String): String {
+    return lqDirOf(projectDir) + cjhPathSep() + "port" + cjhPathSep() + safeName
 }
 
 /**
@@ -1300,7 +1354,7 @@ public class RevertCommand <: CommandHandler {
             name = "project"
         }
         let safeName = sanitizeFileName(name)
-        let dir = backupDirOf(safeName)
+        let dir = portBackupDirOf(path, safeName)
         let legacy = legacyCargoBakOf(safeName)
         let tomlPath = cargoTomlPathOf(path)
 
@@ -1311,21 +1365,22 @@ public class RevertCommand <: CommandHandler {
         var usedLegacy = false
 
         if (exists(Path(dir))) {
+            // src 目录 = 含 Cargo.toml 的那层：传统工程是 src-tauri/，扁平工程就是工程根。
+            // 回滚表用 REL_SRC / REL_PROJECT 标记，这里按实际布局解析（0.39.81：不再硬编码 src-tauri/）
+            var revSrcDir = ""
+            if (tomlPath != "") {
+                revSrcDir = tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+            }
             // 工程目录：按表逐文件回滚
             for (pair in revertPairs()) {
                 let bak = "${dir}/${pair.backupFile}"
                 if (!exists(Path(bak))) {
                     continue
                 }
-                // 目标路径：Cargo.toml 用解析结果，其余按相对路径；lib.rs 单 bin 工程退回 main.rs
-                var target = ""
-                if (pair.relTarget == "") {
-                    target = tomlPath
-                } else {
-                    target = "${path}/${pair.relTarget}"
-                    if (pair.backupFile == BAK_LIBRS && !exists(Path(target))) {
-                        target = "${path}/src-tauri/src/main.rs"
-                    }
+                // 目标路径：Cargo.toml 用解析结果，其余按布局标记解析；lib.rs 单 bin 工程退回 main.rs
+                var target = resolveRevertTarget(pair.relTarget, path, revSrcDir, tomlPath)
+                if (pair.backupFile == BAK_LIBRS && (target == "" || !exists(Path(target)))) {
+                    target = if (revSrcDir.size > 0) { "${revSrcDir}/src/main.rs" } else { "" }
                 }
                 if (target == "") {
                     skipped.add(JsonString(pair.backupFile))
@@ -1340,14 +1395,32 @@ public class RevertCommand <: CommandHandler {
                 }
             }
             // 014 生成的前端资源：带 lingqu 标记才算工具产物，删掉才算"回到干净仓库"
-            for (f in ["lingqu-dialog.js", "lingqu-dialog.css"]) {
-                let p = "${path}/${f}"
-                if (fileContains(p, "lingqu: R2-PORT-014")) {
+            // 路径口径必须与写入侧（frontendDirOf）一致，否则回滚永远删不到；
+            // 同时看工程根——历史版本曾写到 `<工程>/`（扁平工程 frontendDist 读不到时的退路）。
+            var frontendForRevert = path
+            if (tomlPath != "") {
+                let revSrc = tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+                var revDist = ""
+                let revConf = "${revSrc}/tauri.conf.json"
+                if (exists(Path(revConf))) {
                     try {
-                        remove(Path(p))
-                        removed.add(JsonString(p))
+                        revDist = jsonStringFieldOf(String.fromUtf8(File.readFrom(revConf)), "frontendDist")
                     } catch (e: Exception) {
-                        errMsg = "删除 ${p} 失败：${e}"
+                        revDist = ""
+                    }
+                }
+                frontendForRevert = frontendDirOf(path, revSrc, revDist)
+            }
+            for (f in ["lingqu-dialog.js", "lingqu-dialog.css"]) {
+                for (dir in [frontendForRevert, path]) {
+                    let p = "${dir}/${f}"
+                    if (fileContains(p, "lingqu: R2-PORT-014")) {
+                        try {
+                            remove(Path(p))
+                            removed.add(JsonString(p))
+                        } catch (e: Exception) {
+                            errMsg = "删除 ${p} 失败：${e}"
+                        }
                     }
                 }
             }
@@ -1520,6 +1593,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("modelItems", JsonInt(argInt(args, "modelItems", 0)))
         o.put("modelError", JsonString(argStr(args, "modelError", "")))
         o.put("wsState", JsonString(argStr(args, "wsState", "unknown")))
+        // 轮次预算用完后的自动续跑次数（0.39.82）：用户报"62/40 又做一半停了"，
+        // 这一项直接说明有没有走到续跑、续了几次（0 = 没触发）；白名单不加等于报告里查不到（§4-60）。
+        o.put("autoContinue", JsonInt(argInt(args, "autoContinue", 0)))
+        // 登录入口证据（0.39.82）：卡片状态 + 登录页 URL（有值说明"可点链接"真的给到了界面）
+        o.put("signLoginState", JsonString(argStr(args, "signLoginState", "")))
+        o.put("signLoginUrl", JsonString(argStr(args, "signLoginUrl", "")))
         // 对话通道连不上的原话（0.39.65）：用户实测"网页能打开 8765，软件却说未连接"，
         // 而报告里只有 connected/closed 两态、拿不到原因 —— 加这三项才排得动。
         o.put("wsErr", JsonString(argStr(args, "wsErr", "")))
@@ -1841,6 +1920,11 @@ public class UiReportCommand <: CommandHandler {
         o.put("reportMd", JsonString(argStr(args, "reportMd", "")))
         o.put("reportConclusion", JsonString(argStr(args, "reportConclusion", "")))
         o.put("reportRows", JsonInt(argInt(args, "reportRows", 0)))
+        // 报告与落档同代（0.39.85）：stale=界面上这一代已落后于 ⑥ 屏最新落档（必须 false）；
+        // generatedAt=这一代按什么时候的落档出的；autoCount=进屏自动重出了几次。白名单两处都要加（§4-60）
+        o.put("reportStale", JsonBool(argBool(args, "reportStale", false)))
+        o.put("reportGeneratedAt", JsonString(argStr(args, "reportGeneratedAt", "")))
+        o.put("reportAutoCount", JsonInt(argInt(args, "reportAutoCount", 0)))
         // 风险分级（0.39.47）：总体级别 / 标签 / 条数 / 高风险条数——白名单两处都要加（§4-60）
         o.put("reportRisk", JsonString(argStr(args, "reportRisk", "")))
         o.put("reportRiskLabel", JsonString(argStr(args, "reportRiskLabel", "")))
@@ -2039,7 +2123,18 @@ public class BuildCommand <: CommandHandler {
         var spawnError = ""
         // verifyOnly：跳过 cargo，只拿已有 .so 与 dist/ 做前端指纹校验（CI 与"自证"场景用）
         let verifyOnly = argBool(args, "verifyOnly", false)
+        var ndkHome = ""
         if (!verifyOnly) {
+            // OHOS crate（ohos-arkui-sys 等）的 build.rs 直接 `env::var("OHOS_NDK_HOME").expect(...)`，
+            // 缺它当场 panic（0.39.79 rust-music-2 实测 exit=101）。新工程的 [env] 段里已经带上，
+            // 这里再兜一层：救"已迁移但没重跑 port"的老工程。子进程 cargo 继承本进程环境。
+            if (envOr("OHOS_NDK_HOME", "") == "") {
+                let ndk = envOr("NATIVE_OHOS_SDK", "")
+                if (ndk != "") {
+                    setVariable("OHOS_NDK_HOME", ndk)
+                    ndkHome = ndk
+                }
+            }
             try {
                 let argv = ["build", "--release", "--target", target, "--message-format=json"]
                 let (code, rawOut, rawErr) = executeWithOutput(cargoBin, argv, workingDirectory: Path(srcDir))
@@ -2089,9 +2184,15 @@ public class BuildCommand <: CommandHandler {
         // 真实 diff 由 t2h:port 幂等重跑产生），拿 0/0 去撞"空补丁"闸只会造出假失败（实测撞到过）。
         let gateReports = ArrayList<GateReport>()
         let baselineErrors = if (verifyOnly) { -1 } else { lastBuildErrorCountOf(path) }
+        // 鸿蒙产物闸的输入（0.39.81）：库名与 cdylib 声明决定"期望的产物叫什么"
+        let cargoTomlText = readTextOrEmpty("${srcDir}/Cargo.toml")
+        let expectedSo = expectedLibNameOf(cargoTomlText, projectNameOf(path))
         if (!verifyOnly) {
             gateReports.add(checkCompileGate(exitCode, effectiveErrors))
             gateReports.add(checkRegressionGate(baselineErrors, effectiveErrors))
+            // 编译成功 ≠ 移植产物出来了：只编出 exe（没有 cdylib）的工程在这里被拦下
+            gateReports.add(checkOhosArtifactGate(exitCode, effectiveErrors, expectedSo,
+                soPathFinal, hasCdylibCrateType(cargoTomlText)))
         }
         if (soPathFinal != "" && assetError == "") {
             gateReports.add(checkAssetFingerprintGate(Int64(assetDiff.staleInSo.size),
@@ -2132,6 +2233,7 @@ public class BuildCommand <: CommandHandler {
             root.put("diagnosis", dj)
             root.put("gates", gates.toJson())
             root.put("soPath", JsonString(soPathFinal))
+            root.put("expectedSo", JsonString(expectedSo))
             root.put("distDir", JsonString(distDir))
             root.put("assetDiff", assetDiff.toJson())
             root.put("stderrTail", JsonString(firstLines("\n" + stderrText, 200)))
@@ -2159,6 +2261,8 @@ public class BuildCommand <: CommandHandler {
         res.put("suggestRerunPort", suggest.getOrThrow())
         res.put("gates", gates.toJson())
         res.put("soPath", JsonString(soPathFinal))
+        // 兜底注入的证据（空串 = 环境里本来就有，或没设 NATIVE_OHOS_SDK）
+        res.put("ndkHome", JsonString(ndkHome))
         res.put("distDir", JsonString(distDir))
         res.put("assetDiff", assetDiff.toJson())
         res.put("assetError", JsonString(assetError))
@@ -2677,6 +2781,67 @@ public class HapCommand <: CommandHandler {
  *
  * 落档：`.lingqu/sign/<工程>.json`（lingqu/sign/v1）+ `.log`（hdc 原始输出与扫描明细）
  */
+/**
+ * 后台登录入口（0.39.82）：立刻返回 `{ok, started|already}`，登录页地址由
+ * `t2h:sign_login_status` 轮询回投。
+ *
+ * 为什么不复用 `t2h:sign --login`：那条是**阻塞**的（起本机回调 + 等人点浏览器，
+ * 最长 5 分钟），一跑就把整个 IPC 命令面堵住——页面连"正在等你登录"都刷不出来（§4-68）。
+ * 用户实测的原话就是「没有提示让我访问网页登录呀」。
+ */
+public class SignLoginCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        let openBrowser = !argBool(args, "noBrowser", false)
+        return startSignLogin(openBrowser)
+    }
+}
+
+/** 登录进度查询（只读、不联网）：界面每 1 秒问一次，拿到 URL 就给可点链接 */
+public class SignLoginStatusCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, _: JsonObject, _: IpcContext): JsonValue {
+        return signLoginStatusJson()
+    }
+}
+
+/**
+ * 在系统浏览器打开一个链接（0.39.82，用户提的："能否在 UI 里跳转到网页登录链接"）。
+ *
+ * 为什么不让页面直接 `<a target="_blank">`：界面跑在 WebView2 / ArkWeb 里，
+ * 新窗口请求**不保证**能唤起系统浏览器（有的宿主直接拦掉，用户点了没反应——
+ * 那比没有链接更糟：他会以为登录坏了）。所以链接统一走这条命令，交给系统默认浏览器。
+ *
+ * 安全边界：只放行 http/https，且**不做 shell 拼接**——`openUrlInBrowser` 按 argv 传参，
+ * §4-80 那类「`cmd /c start` 把 `&` 当命令分隔符、URL 被截断」的坑不会重现。
+ * 非 http(s) 一律拒绝，免得被拿来打开本地文件/命令。
+ */
+public class OpenUrlCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        let url = argStr(args, "url", "").trimAscii()
+        let o = JsonObject()
+        // 注意：`||` 不能写在行首——编译器会报 "possibly confusing line terminator"
+        // （零警告是硬门禁），所以拆成两个变量再合并。
+        let okLower = url.startsWith("http://") || url.startsWith("https://")
+        let okUpper = url.startsWith("HTTP://") || url.startsWith("HTTPS://")
+        let okScheme = okLower || okUpper
+        if (!okScheme) {
+            o.put("ok", JsonBool(false))
+            o.put("error", JsonString("只允许 http/https 链接（收到：${url}）"))
+            return o
+        }
+        let msg = openUrlInBrowser(url)
+        o.put("ok", JsonBool(msg.size == 0))
+        o.put("url", JsonString(url))
+        o.put("error", JsonString(msg))
+        return o
+    }
+}
+
 public class SignCommand <: CommandHandler {
     public init() {}
 
@@ -4950,9 +5115,12 @@ public class AutoPortStartCommand <: CommandHandler {
         let keepRunning = ensureCjhKeepRunning(userHomeDir())
         // 轮次预算（0.39.53）：整应用迁移实测 41 轮就撞上 cjh 默认的 max_iterations=40，
         // 回合被截断、agent 没机会收尾（juCang 现场就是这样停住的）。
-        // 开跑前抬到 AUTOPORT_MIN_ITERATIONS：先 live（POST /api/settings），不通才落文件并注明需重启。
-        let iterBudget = ensureCjhIterationBudget(userHomeDir(), AUTOPORT_MIN_ITERATIONS)
+        // 0.39.82（用户实测 62/40 停了）：原来只调 ensureCjhIterationBudget——它写盘成功就返回
+        // `file:…（需重启 cjh 生效）`，而**正在跑回合的引擎内存里还是 40**，于是"抬升"白做。
+        // 现在改 enforceIterBudgetBeforeRun：要重启才生效的，就在开跑前重启（不拖到中途被截断）。
+        let iterBudget = enforceIterBudgetBeforeRun(userHomeDir(), AUTOPORT_MIN_ITERATIONS)
         eprintln("[lingqu][autoport] 轮次预算：${iterBudget}")
+        traceStartup("autoport 轮次预算：${iterBudget}", 0)
         let inp = AutoPortInput()
         inp.project = name
         inp.projectDir = path
@@ -5077,7 +5245,24 @@ public class AutoPortStatusCommand <: CommandHandler {
         let sig = autoportSnapshotWith(rows, agentTraceLines(path)) + "|a=${activity}"
         // 但**单个长工具调用期间**连轨迹都不动（tool / tool_done 各一条）——
         // 这时按"正在干活"处理：不判停滞，并清空已攒的快照（否则工具一结束就立刻误报）
-        let busy = agentTraceBusy(path)
+        //
+        // 0.39.80：这个豁免**必须有上限**。工具一旦挂死（2026-11-07 实测：引擎的
+        // `find /` 把工具调用挂住 565s+，trace.jsonl 再无 tool_done），busy 永远为真
+        // ⇒ 停滞判定被永久清空 ⇒ 界面只剩「执行中 565s」，既不报停滞也不给建议。
+        // 超过 AUTOPORT_BUSY_MAX_SECS 就恢复判定，并把 busySecs 回投给界面当证据。
+        let busyRaw = agentTraceBusy(path)
+        var busy = busyRaw
+        var busySecs: Int64 = 0
+        synchronized(gAutoPortLock) {
+            if (busyRaw) {
+                busySecs = gAutoPort.noteBusy(nowMsOf())
+            } else {
+                gAutoPort.clearBusy()
+            }
+        }
+        if (busyRaw && !busyStillExempt(busySecs, AUTOPORT_BUSY_MAX_SECS)) {
+            busy = false
+        }
         // 0.39.41：**活干完了就不许判停滞**。全部步骤都有结论（通过或跳过）之后，
         // 落档/轨迹/帧数都不再变化是正常的——旧逻辑照样攒满 20 次快照就喊
         // 「AI 连续 20 次轮询落档没有变化，建议点「停止」后让它总结」，
@@ -5118,6 +5303,7 @@ public class AutoPortStatusCommand <: CommandHandler {
         o.put("total", JsonInt(Int64(MIGRATE_STEPS.size)))
         o.put("percent", JsonInt(done * 100 / Int64(MIGRATE_STEPS.size)))
         o.put("stalled", JsonBool(stalled))
+        o.put("busySecs", JsonInt(busySecs))
         o.put("verdict", JsonString(autoportVerdict(rows, allConcluded || !active, stalled)))
         o.put("escalation", JsonString(escalationLineFor(stalled, false, minutes, allConcluded)))
         o.put("rows", arr)
@@ -5785,6 +5971,11 @@ public func build(): AppSpec {
         app.register("t2h:build", BuildCommand())
         app.register("t2h:hap", HapCommand())
         app.register("t2h:sign", SignCommand())
+        // 后台登录（0.39.82）：界面要给出可点链接，而不是让人从聊天里抄 URL
+        app.register("t2h:sign_login", SignLoginCommand())
+        app.register("t2h:sign_login_status", SignLoginStatusCommand())
+        // 界面里的链接统一走系统浏览器（0.39.82）：WebView 的 target=_blank 不保证生效
+        app.register("t2h:open_url", OpenUrlCommand())
         app.register("t2h:deploy", DeployCommand())
         app.register("t2h:verify", VerifyCommand())
         app.register("t2h:resume", ResumeCommand())

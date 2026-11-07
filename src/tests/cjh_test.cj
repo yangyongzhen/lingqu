@@ -73,15 +73,39 @@ public func testKnownBinPath(): Unit {
     let env = "D:\\a\\cjh.exe"
     let inst = "C:\\Users\\u\\AppData\\Local\\lingqu\\cjh\\cjh.exe"
     // LINGQU_CJH 优先（用户显式指定就是说"我要这份"）
-    @Assert(knownBinPath(env, true, inst, true), env)
-    // env 不可读 → 退到安装目录（单文件产物里就是内嵌释放的那份）
-    @Assert(knownBinPath(env, false, inst, true), inst)
+    @Assert(knownBinPath("", false, env, true, inst, true), env)
+    // env 不可读 → 退到安装目录（这次是我们自己解析拉起的：owned=true）
+    @Assert(knownBinPath("", true, env, false, inst, true), inst)
     // 两条都不可读 → 空串（界面据实显示"来源未知"，不编造路径）
-    @Assert(knownBinPath(env, false, inst, false), "")
+    @Assert(knownBinPath("", true, env, false, inst, false), "")
     // 空串当来源 → 等同没有
-    @Assert(knownBinPath("", true, "", true), "")
+    @Assert(knownBinPath("", true, "", true, "", true), "")
     // 只有安装目录（env 为空）也要能报出来
-    @Assert(knownBinPath("", false, inst, true), inst)
+    @Assert(knownBinPath("", true, "", false, inst, true), inst)
+    // **复用别人的实例**（owned=false）时，盘上的安装目录副本与在跑的进程无关 → 报未知
+    @Assert(knownBinPath("", false, "", false, inst, true), "")
+}
+
+/**
+ * 0.39.84：本应用亲手拉起的那份**最权威**。
+ *
+ * 实测起因：安装目录留着一个内容不符的旧副本（会被 `cjhBinPathResolve` 跳过、绝不执行），
+ * 真正在跑的是 `vendor/` 那份；旧实现按"哪条路径可读"回投，界面于是报出那个没在跑的旧副本
+ * ——「报的和跑的不一致」。
+ */
+@Test
+public func testKnownBinPathPrefersLaunchedBin(): Unit {
+    let env = "D:\\a\\cjh.exe"
+    let inst = "C:\\Users\\u\\AppData\\Local\\lingqu\\cjh\\cjh.exe"
+    let used = "E:\\work\\lingqu\\vendor\\cjh\\win-x64\\cjh.exe"
+    // 自己拉起且记下来了 → 压过 env / 安装目录（哪怕它们都可读）
+    @Assert(knownBinPath(used, true, env, true, inst, true), used)
+    // 没记下（老路径还没拉起过）→ 退回老口径
+    @Assert(knownBinPath("", true, env, true, inst, true), env)
+    // 复用的是别人的实例（owned=false）→ 那个 used 不是"当前这份"，不许采信
+    @Assert(knownBinPath(used, false, env, true, inst, true), env)
+    // 都没有 → 空串
+    @Assert(knownBinPath("", true, "", false, "", false), "")
 }
 
 /* ---------- 单文件产物的内嵌释放（PE 资源） ---------- */
@@ -130,4 +154,29 @@ public func testCjhHealthyRecentlyWindow(): Unit {
     // 窗口是正的（常量被改成 0 或负数就等于关闭这条宽容，属于语义破坏）
     @Assert(HEALTH_GRACE_MS > 0, true)
     @Assert(HEALTH_GRACE_MS >= 10000, true)
+}
+/**
+ * 0.39.82：拉起前的三态决策。
+ *
+ * 用户实测事故（2026-11-07）：迁移跑到一半，界面报「引擎还没起来」，应用自己又拉起一只，
+ * 机器上留下 3 只 `cjh.exe` 同时监听 8765。根因是判据只有 Bool——**「端口空着」与
+ * 「端口有人听但不响应」都返回 false**，调用方于是都当成"没有引擎，拉起一只"。
+ * 而引擎忙着跑长回合时 `/api/health` 本来就会超时（用户随后看到"过了会儿又连上了"，
+ * 说明引擎全程没退出）。判据必须是三态：有人在听就**绝对不许**再拉起。
+ *
+ * 比对用字符串视图 `spawnDecisionName`（仓内枚举一律以 `match` 比，见 cjh_host.cj）。
+ */
+@Test
+public func testSpawnDecisionThreeStates(): Unit {
+    // 主路径：端口空着（拒连）→ 允许拉起
+    @Assert(spawnDecisionName(spawnDecisionOf(false, false)), "spawn")
+    // 主路径：有人听且健康 → 复用
+    @Assert(spawnDecisionName(spawnDecisionOf(true, true)), "reuse")
+    // 错误路径（本次事故）：有人听但 health 不通（引擎在忙）→ occupied，不许拉起第二只
+    @Assert(spawnDecisionName(spawnDecisionOf(true, false)), "occupied")
+    // 边界：端口"有人在听"时，healthy 的取值都不得导致 spawn（钉住"有人听就不许再拉起"）
+    @Assert(spawnDecisionName(spawnDecisionOf(true, true)) != "spawn", true)
+    @Assert(spawnDecisionName(spawnDecisionOf(true, false)) != "spawn", true)
+    // 边界：端口空着时 healthy 无意义（没人在听就不存在"健康"），仍必须是 spawn
+    @Assert(spawnDecisionName(spawnDecisionOf(false, true)), "spawn")
 }

@@ -2,6 +2,7 @@ package lingqu.tests
 
 import std.collection.*
 import std.fs.*
+import lingqu.*
 import lingqu.port.*
 
 /*
@@ -33,19 +34,20 @@ public func testRevertPairsCoverAllAppliedFiles(): Unit {
         if (p.backupFile == BAK_CARGO) {
             cargoRel = p.relTarget
         }
-        if (p.backupFile == BAK_TOOLCHAIN && p.relTarget == "src-tauri/rust-toolchain.toml") {
+        // 0.39.81：不再写死 `src-tauri/`，改用布局标记（REL_SRC / REL_PROJECT）
+        if (p.backupFile == BAK_TOOLCHAIN && p.relTarget == REL_SRC + "rust-toolchain.toml") {
             sawToolchain = true
         }
-        if (p.backupFile == BAK_CARGO_CONFIG && p.relTarget == "src-tauri/.cargo/config.toml") {
+        if (p.backupFile == BAK_CARGO_CONFIG && p.relTarget == REL_SRC + ".cargo/config.toml") {
             sawConfig = true
         }
-        if (p.backupFile == BAK_LIBRS && p.relTarget == "src-tauri/src/lib.rs") {
+        if (p.backupFile == BAK_LIBRS && p.relTarget == REL_SRC + "src/lib.rs") {
             sawLib = true
         }
-        if (p.backupFile == BAK_INDEX && p.relTarget == "index.html") {
+        if (p.backupFile == BAK_INDEX && p.relTarget == REL_PROJECT + "index.html") {
             sawIndex = true
         }
-        if (p.backupFile == BAK_HVIGORFILE && p.relTarget == "src-tauri/gen/ohos/entry/hvigorfile.ts") {
+        if (p.backupFile == BAK_HVIGORFILE && p.relTarget == REL_SRC + "gen/ohos/entry/hvigorfile.ts") {
             sawHvigor = true
         }
     }
@@ -56,15 +58,112 @@ public func testRevertPairsCoverAllAppliedFiles(): Unit {
     @Assert(sawLib, true)
     @Assert(sawIndex, true)
     @Assert(sawHvigor, true)
+    // 回滚表里**不许**再出现写死的 src-tauri 前缀（扁平工程会一个都匹配不上）
+    for (p in pairs) {
+        @Assert(p.relTarget.startsWith("src-tauri/"), false)
+    }
+}
+
+@Test
+public func testResolveRevertTargetFollowsLayout(): Unit {
+    // 传统布局：src 目录是 `<工程>/src-tauri`，配置都在它下面
+    let trad = "/w/habit-tree"
+    let tradSrc = "/w/habit-tree/src-tauri"
+    @Assert(resolveRevertTarget(REL_SRC + "rust-toolchain.toml", trad, tradSrc, "${tradSrc}/Cargo.toml"),
+        "/w/habit-tree/src-tauri/rust-toolchain.toml")
+    @Assert(resolveRevertTarget(REL_PROJECT + "index.html", trad, tradSrc, "${tradSrc}/Cargo.toml"),
+        "/w/habit-tree/index.html")
+    @Assert(resolveRevertTarget("", trad, tradSrc, "${tradSrc}/Cargo.toml"), "/w/habit-tree/src-tauri/Cargo.toml")
+    // 扁平布局（rust-music-2）：src 目录就是工程根 —— 修复前这里会拼成 `<工程>/src-tauri/...` 而永远 miss
+    let flat = "C:/work/rust-music-2"
+    @Assert(resolveRevertTarget(REL_SRC + "rust-toolchain.toml", flat, flat, "${flat}/Cargo.toml"),
+        "C:/work/rust-music-2/rust-toolchain.toml")
+    @Assert(resolveRevertTarget(REL_SRC + ".cargo/config.toml", flat, flat, "${flat}/Cargo.toml"),
+        "C:/work/rust-music-2/.cargo/config.toml")
+    @Assert(resolveRevertTarget(REL_SRC + "gen/ohos/entry/hvigorfile.ts", flat, flat, "${flat}/Cargo.toml"),
+        "C:/work/rust-music-2/gen/ohos/entry/hvigorfile.ts")
+    // 工程里没有 Cargo.toml（srcDir 为空）：不给路径，让命令层记 skipped，别猜
+    @Assert(resolveRevertTarget(REL_SRC + "rust-toolchain.toml", flat, "", ""), "")
+}
+
+@Test
+public func testPortBackupDirIsAbsoluteAndFollowsProject(): Unit {
+    // 修复前：revert 用 CWD 相对的 `.lingqu/port/<工程>`，apply 写 `<工程>/.lingqu/port/<工程>`
+    // → CWD 不是工程目录时回滚永远"没有备份"。两侧必须同源（同一条构造）。
+    // 注意：`portBackupDirOf` 走 lqDirOf → hostPath，Windows 上得到的是反斜杠，断言前先归一化。
+    let proj = "C:/work/rust-music-2"
+    let dir = portBackupDirOf(proj, "rust-music-2").replace("\\", "/")
+    @Assert(dir, "C:/work/rust-music-2/.lingqu/port/rust-music-2")
+    // 与相对形态同源（改名/迁移时两边一起改）
+    @Assert(dir.endsWith(backupRelDirOf("rust-music-2")), true)
+    // 空工程路径时退回 `.lingqu/port/<工程>`（lqDirOf 的既有语义），不崩
+    @Assert(portBackupDirOf("", "p").replace("\\", "/").endsWith(".lingqu/port/p"), true)
+}
+
+@Test
+public func testDecisionsJsonWithPortRunKeepsItems(): Unit {
+    // 复现的窟窿（§4-58）：只有"记过人工决策"才生成 decisions.json，
+    // 于是"跑过 port 没有"没有落档证据。现在 port 写入 portRun 块，items 必须原样保留。
+    let existing = "{\"schema\":\"lingqu/decisions/v1\",\"items\":[{\"rule\":\"R2-PORT-001\",\"decision\":\"accepted\"}]}"
+    var outs = ArrayList<String>()
+    outs.add("R2-PORT-002 applied")
+    outs.add("R2-PORT-008 guide | 未设 NATIVE_OHOS_SDK")
+    let text = decisionsJsonWithPortRun(existing, "rust-music-2", true, 3, 2, 1, 1762400000000, outs)
+    // 人工决策不许被覆盖
+    @Assert(text.contains("\"R2-PORT-001\""), true)
+    @Assert(text.contains("accepted"), true)
+    // 本轮摘要确实落了
+    @Assert(text.contains("\"portRun\""), true)
+    @Assert(portRunAtOf(text), 1762400000000)
+    @Assert(text.contains("rust-music-2"), true)
+    @Assert(text.contains("R2-PORT-008 guide"), true)
+
+    // 坏文件（不是 JSON）时不许抛：items 按空表起，portRun 照写
+    let broken = decisionsJsonWithPortRun("{不是 JSON", "p", false, 0, 0, 1, 42, outs)
+    @Assert(portRunAtOf(broken), 42)
+    // 二次写入要合并上一次的 items（port 重跑不许把人工决策抹掉）
+    let second = decisionsJsonWithPortRun(text, "rust-music-2", false, 1, 1, 0, 1762400001000, outs)
+    @Assert(second.contains("R2-PORT-001"), true)
+    @Assert(portRunAtOf(second), 1762400001000)
+    // 空文件 / 没有 portRun：-1（"没跑过"与"跑过但读不出时刻"要能分开）
+    @Assert(portRunAtOf(""), -1)
+    @Assert(portRunAtOf("{\"items\":[]}"), -1)
+    @Assert(portRunAtOf("{坏"), -1)
+}
+
+@Test
+public func testBackupFileNeverOverwritesOriginal(): Unit {
+    // 0.39.79 实测：二次 apply 把"已迁移的文件"又备份了一遍，revert 于是"回滚成迁移态"
+    let dir = ".lingqu/tmp-test-bak"
+    try {
+        if (!exists(Path(dir))) {
+            Directory.create(Path(dir))
+        }
+    } catch (e: Exception) {
+        return // 目录不可写则跳过，不造假
+    }
+    let src = "${dir}/Cargo.toml"
+    let dst = "${dir}/Cargo.toml.bak"
+    File.writeTo(src, "原始内容".toArray())
+    backupFile(src, dst)
+    @Assert(String.fromUtf8(File.readFrom(dst)), "原始内容")
+    // 模拟二次 apply：源文件已被迁移改写
+    File.writeTo(src, "迁移后内容".toArray())
+    backupFile(src, dst)
+    @Assert(String.fromUtf8(File.readFrom(dst)), "原始内容")
+    // 源文件不存在时不该凭空造备份
+    let ghost = "${dir}/ghost.bak"
+    backupFile("${dir}/not-exist.toml", ghost)
+    @Assert(exists(Path(ghost)), false)
 }
 
 @Test
 public func testBackupPathsAreDistinctFromLegacy(): Unit {
     // 新路径与旧路径不能撞在一起，否则旧备份会被当成新备份写回错文件
     let name = "habit-tree"
-    @Assert(backupDirOf(name), ".lingqu/port/habit-tree")
+    @Assert(backupRelDirOf(name), ".lingqu/port/habit-tree")
     @Assert(legacyCargoBakOf(name), ".lingqu/port/habit-tree-Cargo.toml.bak")
-    @Assert(backupDirOf(name) != legacyCargoBakOf(name), true)
+    @Assert(backupRelDirOf(name) != legacyCargoBakOf(name), true)
 }
 
 // ===== 修 2：tauri 钉版规则不得丢用户的键、不得改坏多行 features =====

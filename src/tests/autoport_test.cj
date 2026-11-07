@@ -368,3 +368,99 @@ public func testStallWindowIsLongerThanOneLlmTurn(): Unit {
     // 0.39.7 把阈值设成 6（≈5.4s），端到端实跑反复误报。
     @Assert(AUTOPORT_STALL_POLLS >= 15, true)
 }
+
+@Test
+public func testBusyExemptHasUpperBound(): Unit {
+    // 「正在跑工具」的豁免必须有上限：工具挂死后 busy 不能永久压住停滞判定
+    // （2026-11-07 实测：引擎的 find / 把工具调用挂住 565s+，界面只剩"执行中"）
+    @Assert(busyStillExempt(0, AUTOPORT_BUSY_MAX_SECS), true)
+    @Assert(busyStillExempt(AUTOPORT_BUSY_MAX_SECS - 1, AUTOPORT_BUSY_MAX_SECS), true)
+    @Assert(busyStillExempt(AUTOPORT_BUSY_MAX_SECS, AUTOPORT_BUSY_MAX_SECS), false)
+    @Assert(busyStillExempt(565, AUTOPORT_BUSY_MAX_SECS), false)  // 挂死现场的实际读数
+    // 上限 <= 0 = 不设限：显式关掉这道闸时不能反过来一直判停滞
+    @Assert(busyStillExempt(99999, 0), true)
+}
+
+@Test
+public func testNoteBusyMeasuresSecondsSinceToolStart(): Unit {
+    let st = AutoPortState()
+    // 首次见到 busy：只是记下起点
+    @Assert(st.noteBusy(1000), 0)
+    // 同一时刻再问：仍是 0，且起点不被刷新（否则永远算不出年龄）
+    @Assert(st.noteBusy(1000), 0)
+    // 5.6 秒后：向下取整到 5 秒
+    @Assert(st.noteBusy(6600), 5)
+    // 工具结束 → 计时清零，下一条工具重新起算
+    st.clearBusy()
+    @Assert(st.noteBusy(7000), 0)
+    @Assert(st.noteBusy(9000), 2)
+    // 新一轮迁移不该继承上一轮的计时
+    st.reset("/p", "p", 120, 40)
+    @Assert(st.noteBusy(12000), 0)
+}
+
+@Test
+public func testDirectiveForbidsFullDiskSearch(): Unit {
+    // 2026-11-07 事故：agent 为找 gen/ohos 跑 `find /` 全盘扫描，把工具调用挂死 565s+
+    let inp = AutoPortInput()
+    inp.project = "demo"
+    inp.projectDir = "C:/work/demo"
+    inp.scope = "all"
+    let d = buildAutoPortDirective(inp)
+    @Assert(d.contains("禁止全盘搜索"), true)
+    @Assert(d.contains("find /"), true)
+    // 必须同时给出"正确找法"，否则纪律只是一句禁令
+    @Assert(d.contains("<工程>/gen/ohos"), true)
+    @Assert(d.contains("<工程>/src-tauri/gen/ohos"), true)
+    @Assert(d.contains("如实报告缺脚手架"), true)
+}
+
+@Test
+public func testDirectiveTellsAgentHowToSignAndLogin(): Unit {
+    // 2026-11-07 实测：任务书只写了 `sign --path .`，没写 CLI 早就有的 `--login` / `--auto`，
+    // agent 于是自己开浏览器登录 AGC 网页（拿不到 tempToken、不注册设备），白花一次人工介入。
+    let inp = AutoPortInput()
+    inp.project = "demo"
+    inp.projectDir = "C:/work/demo"
+    inp.cliPath = "C:/lingqu/lingqu-cli.exe"
+    inp.scope = "all"
+    inp.device = true
+    let d = buildAutoPortDirective(inp)
+    // ① 两条真实存在的入口都要给到，且带可复制的绝对路径
+    @Assert(d.contains("C:/lingqu/lingqu-cli.exe sign   --login"), true)
+    @Assert(d.contains("C:/lingqu/lingqu-cli.exe sign   --auto --path ."), true)
+    // ② 顺序写死：体检 → 登录 → 自动签发 → 重跑 hap
+    @Assert(d.contains("## 签名与登录"), true)
+    @Assert(d.contains("device-ids"), true)
+    // ③ 明确「登录只能人做」，并且**禁止它自己开浏览器假扮**
+    @Assert(d.contains("必须人在浏览器里授权一次"), true)
+    @Assert(d.contains("不要自己 `start` / `rundll32` / `open`"), true)
+    @Assert(d.contains("tempToken"), true)
+    // ④ 要人介入时该说清的三件事（少一件人就得猜）
+    @Assert(d.contains("为什么必须登录"), true)
+    @Assert(d.contains("本机 UDID"), true)
+    // ⑤ 报错对照：四种典型必须都在，别让 agent 拿 9568322 去瞎改代码
+    @Assert(d.contains("9568320"), true)
+    @Assert(d.contains("9568322"), true)
+    @Assert(d.contains("00303074"), true)
+    @Assert(d.contains("00303242"), true)
+    // ⑥ 底线：不许伪造签名 / 改包名蹭别人 profile
+    @Assert(d.contains("不许伪造签名"), true)
+    @Assert(d.contains("不许改 `bundleName`"), true)
+}
+
+@Test
+public func testSignScopeDirectiveAlsoCarriesLoginPath(): Unit {
+    // 半自动「只做签名」这一步时同样要给出登录与自动签发，
+    // 否则"点签名这一步"反而比全自动知道得更少（同一知识不能只在一条分支里）
+    let inp = AutoPortInput()
+    inp.project = "demo"
+    inp.projectDir = "C:/work/demo"
+    inp.scope = "sign"
+    let d = buildAutoPortDirective(inp)
+    @Assert(d.contains("sign --login"), true)
+    @Assert(d.contains("sign --auto --path ."), true)
+    @Assert(d.contains("不要自己开浏览器登录 AGC 网页"), true)
+    // 半自动仍要"做完就停"
+    @Assert(d.contains("做完停下"), true)
+}

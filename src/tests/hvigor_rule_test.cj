@@ -94,7 +94,7 @@ public func testRevertPairsCoverHvigorfile(): Unit {
     for (p in revertPairs()) {
         if (p.backupFile == BAK_HVIGORFILE) {
             found = true
-            @Assert(p.relTarget, "src-tauri/gen/ohos/entry/hvigorfile.ts")
+            @Assert(p.relTarget, REL_SRC + "gen/ohos/entry/hvigorfile.ts")
         }
     }
     @Assert(found, true)

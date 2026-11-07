@@ -30,6 +30,109 @@ import stdx.net.http.*
  */
 
 /** 一次登录的结果 */
+/**
+ * 后台登录的可见状态（0.39.82）。
+ *
+ * 用户实测原话：「且没有提示让我访问网页登录呀」。根因不是没做登录，而是**登录被塞在
+ * 一条阻塞命令里**（`t2h:sign --login` 最长 5 分钟，§4-68 明令长任务不许占着 IPC），
+ * 页面既拿不到"正在等你登录"，也拿不到那条登录 URL——人只能看见 cjh 的聊天文字。
+ *
+ * 现在把"正在登录 / 登录页地址 / 结果"放进共享状态：命令立刻返回，
+ * 界面轮询 `signLoginStatusJson()` 拿到 URL 后给一个可点链接。
+ */
+public class SignLoginState {
+    public var running: Bool = false
+    public var done: Bool = false
+    public var url: String = ""
+    public var port: Int64 = 0
+    public var error: String = ""
+    public var userName: String = ""
+    public var startedAt: Int64 = 0
+}
+
+let gSignLoginLock = Mutex()
+var gSignLoginState = SignLoginState()
+
+/** 登录页地址一算出来就公布（在 `agcLogin` 里回调），界面据此上屏可点链接 */
+func publishSignLoginUrl(url: String, port: Int64): Unit {
+    synchronized(gSignLoginLock) {
+        gSignLoginState.url = url
+        gSignLoginState.port = port
+        gSignLoginState.running = true
+    }
+}
+
+/**
+ * 起一次**后台**登录（0.39.82）：立刻返回，不占 IPC。
+ * 已经在登录就不重复起（否则会起第二个回调服务，用户点两次就两个页面在等）。
+ */
+public func startSignLogin(openBrowser: Bool): JsonObject {
+    let o = JsonObject()
+    var already = false
+    var curUrl = ""
+    var curPort: Int64 = 0
+    synchronized(gSignLoginLock) {
+        if (gSignLoginState.running) {
+            already = true
+            curUrl = gSignLoginState.url
+            curPort = gSignLoginState.port
+        }
+    }
+    if (already) {
+        o.put("ok", JsonBool(true))
+        o.put("already", JsonBool(true))
+        o.put("url", JsonString(curUrl))
+        o.put("port", JsonInt(curPort))
+        return o
+    }
+    synchronized(gSignLoginLock) {
+        gSignLoginState = SignLoginState()
+        gSignLoginState.running = true
+        gSignLoginState.startedAt = DateTime.now().toUnixTimeStamp().toMilliseconds()
+    }
+    spawn { => runSignLoginBlocking(openBrowser) }
+    o.put("ok", JsonBool(true))
+    o.put("started", JsonBool(true))
+    return o
+}
+
+func runSignLoginBlocking(openBrowser: Bool): Unit {
+    var res: Option<AgcLoginOutcome> = None
+    try {
+        res = Some(agcLogin(300, openBrowser))
+    } catch (e: Exception) {
+        synchronized(gSignLoginLock) {
+            gSignLoginState.running = false
+            gSignLoginState.done = true
+            gSignLoginState.error = "登录异常：${e}"
+        }
+        return
+    }
+    let r = res.getOrThrow()
+    synchronized(gSignLoginLock) {
+        gSignLoginState.running = false
+        gSignLoginState.done = true
+        gSignLoginState.userName = r.userName
+        gSignLoginState.port = r.port
+        gSignLoginState.error = r.error
+    }
+}
+
+/** 界面轮询用：只读共享状态，不联网、不阻塞 */
+public func signLoginStatusJson(): JsonObject {
+    let o = JsonObject()
+    synchronized(gSignLoginLock) {
+        o.put("running", JsonBool(gSignLoginState.running))
+        o.put("done", JsonBool(gSignLoginState.done))
+        o.put("url", JsonString(gSignLoginState.url))
+        o.put("port", JsonInt(gSignLoginState.port))
+        o.put("error", JsonString(gSignLoginState.error))
+        o.put("userName", JsonString(gSignLoginState.userName))
+        o.put("startedAt", JsonInt(gSignLoginState.startedAt))
+    }
+    return o
+}
+
 public class AgcLoginOutcome {
     public var ok: Bool = false
     public var error: String = ""
@@ -385,6 +488,7 @@ public func agcLogin(timeoutSec: Int64, openBrowser: Bool): AgcLoginOutcome {
     }
     let url = oauthLoginUrl(port, expectCode)
     state.loginUrl = url
+    publishSignLoginUrl(url, port)
     println("")
     println("──────────────────────────────────────────────")
     println("  灵渠 · 鸿蒙自动签名：请在浏览器完成一次登录")

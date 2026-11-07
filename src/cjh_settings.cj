@@ -276,6 +276,61 @@ public func ensureCjhIterationBudget(home: String, target: Int64): String {
     }
 }
 
+/**
+ * 轮次预算**落地结果**的处置分类（0.39.82）——返回的是可读的字符串视图
+ * （`applied` / `already` / `needs-restart` / `failed`），单测与日志共用同一个口径。
+ *
+ * 现场（2026-11-07）：整应用迁移跑到 **62/40** 停住，用户看到的是"做一半停了"。
+ * 查下来 `ensureCjhIterationBudget` 返回的是 `file:…（需重启 cjh 生效）`——
+ * 新值写进了 `~/.cjh/settings.json`，但**正在跑的那个引擎内存里还是 40**；
+ * 当时机器上还有 3 只引擎同占 8765（重复拉起的老问题），live POST 落到的未必是
+ * "正在跑回合"的那一只。于是"抬升预算"看起来做了、实际没生效，直到中途被截断。
+ *
+ * 判据只有一条：**引擎此刻认不认这个预算**。`file:` 一律等于没生效。
+ */
+public func iterBudgetStateOf(result: String): String {
+    let r = result.trimAscii()
+    if (r.startsWith("already:")) {
+        return "already"
+    }
+    if (r.startsWith("live:") || r.startsWith("restart-ok:")) {
+        return "applied"
+    }
+    if (r.startsWith("file:")) {
+        return "needs-restart"
+    }
+    return "failed"
+}
+
+/**
+ * 开跑前把轮次预算**真正按到引擎上**（0.39.82）。
+ *
+ * 与 `ensureCjhIterationBudget` 的差别：那条只负责"把值写进去"，**不管引擎认不认**。
+ * 这里补上自愈：需要重启才生效的，就在**开跑前**重启（代价是一次冷启，实测 ~0.5s），
+ * 而不是等它跑到中途被 40 轮截断——那时候 agent 的上下文与几十次工具调用全白费。
+ *
+ * 纪律（D-003）：**不是自己拉起的引擎不抢不杀**，只如实回投"需要人工重启"。
+ */
+public func enforceIterBudgetBeforeRun(home: String, target: Int64): String {
+    let first = ensureCjhIterationBudget(home, target)
+    let st = iterBudgetStateOf(first)
+    if (st == "applied" || st == "already" || st == "failed") {
+        return first
+    }
+    // 走到这里 = 只写了文件：引擎内存里还是旧值
+    if (!gCjhOwned) {
+        let cur = maxIterationsOf(cjhApiCall("GET", "/api/settings", ""))
+        return "external-needs-restart:${cur}<${target}（引擎不是本应用拉起的，按 D-003 不抢不杀：需人工重启它才生效）"
+    }
+    let rs = cjhRestartOwned()
+    let _ = rs
+    let after = maxIterationsOf(cjhApiCall("GET", "/api/settings", ""))
+    if (after >= target) {
+        return "restart-ok:${after}"
+    }
+    return "restart-failed:${after}<${target}"
+}
+
 // ============================================================
 // 接入协议（0.39.62）：openai 兼容 / anthropic
 // ============================================================

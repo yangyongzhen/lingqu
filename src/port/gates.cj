@@ -291,3 +291,136 @@ public func hapSignHint(logText: String): String {
     }
     return ""
 }
+
+// ===== 第 8 道：鸿蒙产物闸（0.39.81）=====
+//
+// 挡的是"编译成功、但不是移植产物"这类**最危险的假绿**：
+// 工程只有 bin target（Cargo.toml 里没有 `[lib] crate-type = ["cdylib"]`）时，
+// cargo 编出来的是 `target/<target>/release/<工程名>` **可执行文件**，不是 `lib<name>.so`；
+// 而 HAP 里要的、`t2h:hap` 装配的、真机加载的都是 `.so`。
+//
+// 旧版只判 exitCode 与 errorCount，于是把 rust-music-2 编出来的 **11,084,368 字节 exe**
+// 当成移植产物报了通过（0.39.79 实测），后续 hap 才在"找不到 lib*.so"处一脸茫然。
+// 闸门要说的正是这句话：**编译过了，但移植产物没有**。
+
+/** 从一行 `key = "value"` 里取值（`[lib]`/`[package]` 的 `name` 用）；取不到给空串 */
+public func tomlValueOfLine(line: String, key: String): String {
+    let t = line.trimAscii()
+    if (!t.startsWith(key)) {
+        return ""
+    }
+    var rest = t[key.size..].trimAscii()
+    if (!rest.startsWith("=")) {
+        return ""
+    }
+    rest = rest[1..].trimAscii()
+    if (rest.startsWith("\"") || rest.startsWith("'")) {
+        let q = rest[0..1]
+        let body = rest[1..]
+        match (body.indexOf(q)) {
+            case Some(e) => return body[0..e]
+            case None => return ""
+        }
+    }
+    // 无引号：整行剩余部分即值——数组 `crate-type = ["cdylib", "rlib"]` 里的逗号与空格是内容，
+    // 按空白/逗号切只会拿到 `["cdylib",` 这种半截值（0.39.81 单测抓到）。只剥行尾注释。
+    match (rest.indexOf("#")) {
+        case Some(i) => return rest[0..i].trimAscii()
+        case None => return rest.trimAscii()
+    }
+}
+
+/**
+ * 鸿蒙侧期望的库文件名（纯函数）：`[lib] name` 优先，否则 `[package] name`（`-` 换 `_`）。
+ *
+ * cdylib 产物名由 cargo 的 **lib target name** 决定：`lib<name>.so`，
+ * 与 `[package] name` 不同（`rust-music` 的包名带连字符，库名是 `rust_music`）。
+ */
+public func expectedLibNameOf(cargoToml: String, fallback: String): String {
+    let text = cargoToml.replace("\r\n", "\n")
+    var pkg = ""
+    var lib = ""
+    var section = ""
+    for (raw in text.split("\n", -1)) {
+        let line = raw.trimAscii()
+        if (line.size == 0 || line.startsWith("#")) {
+            continue
+        }
+        if (line.startsWith("[")) {
+            section = line
+            continue
+        }
+        if (section.startsWith("[lib]")) {
+            if (lib == "") {
+                lib = tomlValueOfLine(line, "name")
+            }
+            continue
+        }
+        if (section.startsWith("[package]") && pkg == "") {
+            pkg = tomlValueOfLine(line, "name")
+        }
+    }
+    var name = ""
+    if (lib != "") {
+        name = lib
+    } else if (pkg != "") {
+        name = pkg.replace("-", "_")
+    } else {
+        name = fallback.replace("-", "_")
+    }
+    if (name == "") {
+        name = "app"
+    }
+    return "lib${name}.so"
+}
+
+/** Cargo.toml 是否声明了 cdylib 产物（`[lib] crate-type` 里含 cdylib，支持跨行数组） */
+public func hasCdylibCrateType(cargoToml: String): Bool {
+    let text = cargoToml.replace("\r\n", "\n")
+    var section = ""
+    for (raw in text.split("\n", -1)) {
+        let line = raw.trimAscii()
+        if (line.size == 0 || line.startsWith("#")) {
+            continue
+        }
+        if (line.startsWith("[")) {
+            section = line
+            continue
+        }
+        if (!section.startsWith("[lib]")) {
+            continue
+        }
+        if (line.contains("cdylib")) {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * 鸿蒙产物闸：编译成功就必须看到 `lib<name>.so`。
+ *
+ * 编译本身没过时**不重复报**（那是编译闸/回归闸的事，两条失败其实是同一件事）。
+ */
+public func checkOhosArtifactGate(exitCode: Int64, errorCount: Int64, expectedSo: String,
+    actualSo: String, hasCdylib: Bool): GateReport {
+    let rep = GateReport()
+    if (exitCode != 0 || errorCount > 0) {
+        return rep
+    }
+    if (actualSo != "") {
+        return rep
+    }
+    let expect = if (expectedSo != "") {
+        expectedSo
+    } else {
+        "lib*.so"
+    }
+    var msg = "鸿蒙产物闸：编译成功但没产出 ${expect}——没有 .so 就装不进 HAP，不能算移植成功"
+    if (!hasCdylib) {
+        msg += "；工程的 Cargo.toml 里没有 `[lib] crate-type = [\"cdylib\"]`，cargo 只编出了可执行文件："
+        msg += "先把它改成库产物（补 `[lib]` 段 + 让 tauri 以 lib 形式链接）再谈移植"
+    }
+    rep.fail(msg)
+    return rep
+}

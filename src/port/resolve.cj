@@ -201,6 +201,38 @@ public func dialogCssContent(): String {
 }
 
 /**
+ * 纯函数：port 阶段"前端目录"落在哪。
+ *
+ * 0.39.79 实测事故（rust-music-2 全流程）：经典布局里 `Cargo.toml` 在
+ * `<工程>/src-tauri/`，所以前端目录 = `srcTauriDir/..`（= 工程根）是对的；
+ * 但这个工程是**扁平布局**（`Cargo.toml` 就在工程根），`srcTauriDir/..` 于是
+ * 指到了**工程外**的 `C:\Users\yang\lingqu-workspaces\`。后果有两个，都是静默的：
+ *   ① `R2-PORT-014` 在父目录里撞见**另一个样本**遗留的 `lingqu-dialog.js`
+ *      → 判「已存在——跳过」，本工程从此没有对话框模块；
+ *   ② `R2-PORT-012` 的 before 证据里出现 `juCang/lingqu-dialog.js:4` ——
+ *      跨工程证据污染，看落档的人会以为改的是别的工程。
+ *
+ * 判据：只有 `srcTauriDir == projPath`（扁平布局）才改口径，优先用
+ * `tauri.conf.json` 的 `frontendDist`（rust-music-2 是 `ui`）；经典布局原样返回，
+ * 不动已验证过的样本行为。
+ */
+public func frontendDirOf(projPath: String, srcTauriDir: String, frontendDist: String): String {
+    if (srcTauriDir != projPath) {
+        return "${srcTauriDir}/.."
+    }
+    var dist = frontendDist
+    if (dist.startsWith("./")) {
+        dist = dist[2..]
+    }
+    // 只接相对路径：绝对路径 / 带盘符的写法原样返回工程根，绝不拼到工程外
+    let isAbsolute = dist.startsWith("/") || dist.contains(":") || dist.startsWith("..")
+    if (dist != "" && !isAbsolute) {
+        return "${projPath}/${dist}"
+    }
+    return projPath
+}
+
+/**
  * R2-PORT-014：对话框资源生成（两个文件落盘，资源存在则跳过）。
  * 只生成模块，调用点替换归 012 guide。
  */

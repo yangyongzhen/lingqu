@@ -907,6 +907,7 @@ body.ai-hidden .ai-show{display:block}
           <button class="btn primary" id="btnHap" title="跑 hvigor assembleHap 并做死资源校验">装配 HAP</button>
           <button class="btn" id="btnSign" title="查本机 UDID + 工程签名配置 + ~/.ohos/config 材料，判定能不能直装">签名体检</button>
           <button class="btn" id="btnSignApply" title="工程没配签名时，从用同一套材料的已有工程把 signingConfigs 抄进 build-profile.json5（自动备份）">写回签名配置</button>
+          <button class="btn" id="btnSignLogin" title="后台起一次 OAuth 回环登录（只绑 127.0.0.1）：命令立刻返回，登录页会在这里给成可点链接">华为账号登录</button>
         </div>
         <div class="card" style="margin-bottom:12px;padding:10px 14px" id="buildCard">
           <div class="legend" style="margin:0 0 6px">
@@ -946,6 +947,8 @@ body.ai-hidden .ai-show{display:block}
             <span>本机候选材料：<b id="signCand">—</b></span>
           </div>
           <div class="signmode" id="signNote">「签名体检」不需要华为账号、不联网：读 `hdc shell bm get --udid` + 工程 build-profile.json5 + `~/.ohos/config` 里的 .p7b，判定装得上还是会被 9568322 拒，并告诉你当前是 debug 还是 release 态。</div>
+          <!-- 0.39.82（用户实测「没有提示让我访问网页登录呀」）：登录状态与**可点链接**必须在这里给出来 -->
+          <div class="signmode" id="signLoginNote" style="display:none"></div>
           <div class="signsteps" id="signSwitch"></div>
         </div>
         <div class="card">
@@ -2867,8 +2870,13 @@ withBridge(function(tauri){
     else if (unknown) { st.innerHTML = '<i class="dot warn"></i><span id="aiStateTxt">状态未知</span>'; }
     else { st.innerHTML = '<i class="dot err"></i><span id="aiStateTxt">缺失</span>'; }
 
-    $('setState').textContent = (unknown ? '状态未知' : (stateNames[s.state] || '未知')) + (s.owned ? '（本应用托管）' : '');
-    $('setState').className = 'bv ' + (running ? 'good' : (unknown ? 'warn' : 'bad'));
+    // 0.39.82：端口有监听却读不到健康（引擎正忙长回合）时，**不许只写"运行中"就完事**——
+    // 用户会以为一切正常，或者（更糟）照旧去点「拉起」，再叠一只实例。这里显式写清"在忙/不响应"。
+    var busyNote = (s.portBusy === true) ? '（端口有监听但不响应，按「在忙」处理，不会再拉起第二只）' : '';
+    $('setState').textContent = (unknown ? '状态未知' : (stateNames[s.state] || '未知'))
+      + (s.owned ? '（本应用托管）' : '') + busyNote;
+    $('setState').title = s.note || '';
+    $('setState').className = 'bv ' + (running ? ((s.portBusy === true) ? 'warn' : 'good') : (unknown ? 'warn' : 'bad'));
     var apiUrlShown = s.apiUrl || ('http://127.0.0.1:' + (s.port || 8765));
     $('setEndpoint').textContent = running ? (apiUrlShown + '　' + (s.wsUrl || '')) : (s.binPath || s.vendorDir || '（未就绪）');
 
@@ -3344,6 +3352,9 @@ withBridge(function(tauri){
    * 这里把停的原因判定出来上屏，并且**只要最后一条工具结果是错误，就把首行贴出来**——
    * 现场那次真因就是 `t2h:hap` 的 `Invalid utf8 byte sequence`，界面上却一个字都没有。
    */
+  // 0.39.82：预算用完后最多自动续跑几次。**必须有上限**——
+  // 无限续跑等于把"做一半停"换成"永远不停"，token 与轮次都会失控。
+  var AUTO_CONTINUE_MAX = 3;
   function noteTurnEnded(s, finishReason){
     s = s || {};
     var rounds = (typeof s.rounds === 'number') ? s.rounds : -1;
@@ -3357,6 +3368,18 @@ withBridge(function(tauri){
     var lastErr = String(CJ.lastToolErr || '');
     var errName = String(CJ.lastToolErrName || '');
     var tail = (lastErr ? ('\n最后一条工具报错' + (errName ? ('（' + errName + '）') : '') + '：' + lastErr.slice(0, 200)) : '');
+    // 0.39.82（用户实测「且没有提示让我访问网页登录呀」）：最后一条工具报错里出现"登录"，
+    // 说明这一轮是卡在**人**这一步了——必须主动把入口递过去，而不是把 cjh 的输出当聊天文字摆着。
+    // 登录本身跑在后台（命令立刻返回），URL 由签名那屏渲染成可点链接。
+    var needLogin = (lastErr.indexOf('登录') >= 0) || (lastErr.toLowerCase().indexOf('login') >= 0);
+    if (needLogin) {
+      window.__needLogin = { tool: errName, at: Date.now() };
+      addSystemNote('这一步需要在浏览器里登录华为账号（DevEco / AGP）：已经替你起好了登录，'
+        + '「交叉编译 → 签名」那一屏会给出可点链接——这是本轮唯一需要你动手的事。');
+      try {
+        if (typeof window.__startSignLogin === 'function') { window.__startSignLogin(true); }
+      } catch (e) { /* 起登录失败不阻塞主流程，链接仍可由用户点按钮获取 */ }
+    }
     // ⚠ 0.39.63（用户实测，发 "hello"）：这一轮**根本不是迁移**，屏幕上却出现一张红卡
     //   「为什么停：模型自己结束了这一轮…迁移还没完成」。根因是判据只看了 `AIP.finished`：
     //   普通问答时 finished=false、active=false，于是"还没迁完"这个结论被无条件套了上去。
@@ -3384,6 +3407,34 @@ withBridge(function(tauri){
         + (lastErr ? '' : '（没有工具报错——那就是轮次/模型侧的原因，不是命令失败）');
       window.__turnEnd = { reason: reasons.join('；'), lastErr: lastErr.slice(0, 200), tool: errName };
       addError(msg, 'turn_budget');
+
+      // 0.39.82（用户实测「回合 62/40 又做一半停了，体验很不好」）：预算用完**不该是终点**。
+      // 迁移监管态还在跑、也没被判停滞时，自动接着干；但有上限 `AUTO_CONTINUE_MAX`——
+      // 否则"续跑→又用完→再续跑"会无限烧轮次与 token。到上限就明确交回人判断。
+      var budgetHit = reasons.length > 0 && String(reasons[0]).indexOf('轮次预算') === 0;
+      if (budgetHit && aip && aip.active === true && aip.stalled !== true) {
+        aip.autoContinues = (aip.autoContinues || 0) + 1;
+        aip.lastAutoContinueAt = Date.now();
+        window.__autoContinue = { rounds: rounds, budget: budget, count: aip.autoContinues };
+        if (aip.autoContinues <= AUTO_CONTINUE_MAX) {
+          addSystemNote('轮次预算用完了，但迁移还没做完——自动接着跑（第 ' + aip.autoContinues
+            + ' 次续跑，最多 ' + AUTO_CONTINUE_MAX + ' 次）。');
+          setTimeout(function(){
+            try {
+              // 走桥而不是直接引用：本文件里存在"同一 `<script>` 两个作用域"的历史坑（§4-107），
+              // 外层直接引用内层符号只会落 `window.onerror`，调用方与 promise 都看不到。
+              if (typeof window.__continueAiPort === 'function') { window.__continueAiPort(); }
+              else { addSystemNote('自动续跑不可用（续跑入口未挂上），请手动点「继续」。'); }
+            } catch (e) {
+              addSystemNote('自动续跑失败：' + (e && e.message ? e.message : e));
+            }
+          }, 1200);
+        } else {
+          addSystemNote('已自动续跑 ' + AUTO_CONTINUE_MAX + ' 次仍未做完，交回你判断：'
+            + '可点「继续」接着跑，或把设置里的 max_iterations 调大后再跑（预算用完不等于失败）。');
+        }
+      }
+      reportUi('turn-budget-' + (aip && aip.autoContinues ? aip.autoContinues : 0));
     }
   }
 
@@ -4189,6 +4240,9 @@ withBridge(function(tauri){
         AIP.active = true;
         if ($('btnMigrateStop')) { $('btnMigrateStop').disabled = false; }
         aiPortNote('AI 已接手（任务书 ' + AIP.directiveChars + ' 字，' + autoPortScopeLabel(scope) + '）。' + prepText);
+        // 0.39.82：开跑前把设置重读一次。后端可能刚为"预算落地"重启过引擎，
+        // 页面若还拿着旧的 max_iterations（40），回合结束时就会把 120 的预算误报成 40。
+        loadSettings();
         startAiPolling();
         reportUi('autoport-started');
       }, 400);
@@ -4209,6 +4263,8 @@ withBridge(function(tauri){
     startAiPolling();
     reportUi('autoport-continue');
   }
+  // 0.39.82：回合结束时的自动续跑从这里进来（桥，见 noteTurnEnded 的注释）
+  window.__continueAiPort = continueAiPort;
 
   if ($('btnAiPort')) { $('btnAiPort').onclick = startAiPort; }
 
@@ -6255,6 +6311,111 @@ withBridge(function(tauri){
     runSign(($('buildPath').value || '').trim(), true);
   });
 
+  /* ===== ⑤-2 华为账号登录（0.39.82）=====
+   * 用户实测原话：「且没有提示让我访问网页登录呀」。
+   * 根因不是没做登录，而是登录被塞在一条**阻塞**命令里（`t2h:sign --login` 最长 5 分钟），
+   * 页面既拿不到"正在等你登录"、也拿不到那条登录 URL —— 人只能看见 cjh 的聊天文字，
+   * 而"从哪里点、点哪条链接"没人告诉他。现在：命令立刻返回 + 状态轮询 + 可点链接。
+   * 纪律：**链接必须给成 <a>**（§4-80 的同类：让用户自己抄 URL 容易抄错，也不该让他猜）。
+   */
+  var SIGNLOGIN = { timer: null, url: '', running: false, done: false, error: '', userName: '', polls: 0 };
+
+  function renderSignLogin(){
+    var n = $('signLoginNote');
+    if (!n) { return; }
+    if (SIGNLOGIN.running) {
+      n.style.display = 'block';
+      n.innerHTML = '<b>正在等你登录华为账号…</b>（浏览器已尝试打开登录页）'
+        + (SIGNLOGIN.url
+            ? '<br><button class="btn sm primary" id="btnOpenLogin">在浏览器打开登录页</button>'
+              + ' <a href="' + esc(SIGNLOGIN.url) + '" data-login="1" class="mono small"'
+              + ' style="word-break:break-all">' + esc(SIGNLOGIN.url) + '</a>'
+            : '<br><span class="small muted">（正在准备登录页…）</span>')
+        + '<br><span class="small muted">最长等 5 分钟；这一步会把你当前的鸿蒙设备注册进 profile，'
+        + '之后「装配 HAP → 真机部署」才能过（否则 9568320 no signature file / 9568322 签名不受信）。</span>';
+      // 链接**必须真的能打开**：WebView 里 target=_blank 不保证唤起系统浏览器，
+      // 所以点击一律走 t2h:open_url（后端用 rundll32/xdg-open 按 argv 传参，不经 shell）
+      var btn = $('btnOpenLogin');
+      if (btn) { btn.onclick = function(){ openLoginUrl(SIGNLOGIN.url); }; }
+      var a = n.querySelector('a[data-login]');
+      if (a) { a.onclick = function(ev){ if (ev && ev.preventDefault) { ev.preventDefault(); } openLoginUrl(SIGNLOGIN.url); }; }
+    } else if (SIGNLOGIN.done && SIGNLOGIN.error) {
+      n.style.display = 'block';
+      n.textContent = '登录没完成：' + SIGNLOGIN.error + '（可以再点一次「华为账号登录」）';
+    } else if (SIGNLOGIN.done) {
+      n.style.display = 'block';
+      n.textContent = '已登录' + (SIGNLOGIN.userName ? ('：' + SIGNLOGIN.userName) : '')
+        + '（接着可以「签名体检」或「装配 HAP」）';
+    } else {
+      n.style.display = 'none';
+    }
+    reportUi('sign-login-' + (SIGNLOGIN.running ? 'running' : (SIGNLOGIN.done ? 'done' : 'idle')));
+  }
+
+  /** 打开登录页：走系统浏览器，不依赖 WebView 的新窗口能力 */
+  function openLoginUrl(url){
+    var u = String(url || '');
+    if (!u) { return; }
+    invoke('t2h:open_url', { url: u }).then(function(r){
+      r = r || {};
+      if (r.ok !== true) {
+        SIGNLOGIN.error = '打开浏览器失败：' + (r.error || '（原因未知）')
+          + '；可手动复制这条链接：' + u;
+        renderSignLogin();
+      } else {
+        reportUi('sign-login-open-browser');
+      }
+    }).catch(function(e){
+      SIGNLOGIN.error = '打开浏览器失败：' + (e && e.message ? e.message : e) + '；可手动复制：' + u;
+      renderSignLogin();
+    });
+  }
+
+  function stopSignLoginPoll(){
+    if (SIGNLOGIN.timer) { clearInterval(SIGNLOGIN.timer); SIGNLOGIN.timer = null; }
+  }
+
+  function pollSignLogin(){
+    invoke('t2h:sign_login_status', {}).then(function(s){
+      s = s || {};
+      SIGNLOGIN.running = s.running === true;
+      SIGNLOGIN.done = s.done === true;
+      SIGNLOGIN.url = String(s.url || '');
+      SIGNLOGIN.error = String(s.error || '');
+      SIGNLOGIN.userName = String(s.userName || '');
+      SIGNLOGIN.polls += 1;
+      renderSignLogin();
+      if (!SIGNLOGIN.running) { stopSignLoginPoll(); }
+    }).catch(function(e){
+      SIGNLOGIN.error = '状态查询失败：' + (e && e.message ? e.message : e);
+      renderSignLogin();
+      stopSignLoginPoll();
+    });
+  }
+
+  function startSignLogin(openBrowser){
+    SIGNLOGIN.done = false; SIGNLOGIN.error = ''; SIGNLOGIN.userName = ''; SIGNLOGIN.polls = 0;
+    invoke('t2h:sign_login', { noBrowser: (openBrowser === false) }).then(function(r){
+      r = r || {};
+      if (r.ok !== true) {
+        SIGNLOGIN.error = String(r.error || '启动登录失败');
+        renderSignLogin();
+        return;
+      }
+      SIGNLOGIN.running = true;
+      SIGNLOGIN.url = String(r.url || '');
+      renderSignLogin();
+      stopSignLoginPoll();
+      SIGNLOGIN.timer = setInterval(pollSignLogin, 1000);
+    }).catch(function(e){
+      SIGNLOGIN.error = (e && e.message ? e.message : String(e));
+      renderSignLogin();
+    });
+  }
+  // 自动触发（回合结束发现"要登录"时）从桥上进来，见 noteTurnEnded 的注释（§4-107 的作用域坑）
+  window.__startSignLogin = startSignLogin;
+  if ($('btnSignLogin')) { $('btnSignLogin').onclick = function(){ startSignLogin(true); }; }
+
   $('btnVerifyAssets').addEventListener('click', function(){    var p = ($('buildPath').value || '').trim();
     if (!p) { $('buildNote').style.color = 'var(--err)'; $('buildNote').textContent = '请先填 Tauri 工程路径（或置 LINGQU_BUILD_PATH）。'; return; }
     runBuild(p, true);
@@ -6386,6 +6547,8 @@ withBridge(function(tauri){
     $('btnVerify').disabled = true;
     invoke('t2h:verify', { path: path || '', screenshot: true }).then(function(r){
       renderVerify(r || {});
+      // 落档变了：⑦ 屏那一代报告随即作废，下次进屏会自动按新落档重出（0.39.85，§4-133）
+      REPORT_AUTO.key = '';
       logLine((r && r.ok) ? 'ok' : 'err', '真机验证：可用率=' + ((r && typeof r.ratePercent === 'number') ? (r.ratePercent + '%') : '—')
         + ' 通过=' + ((r && r.pass) || 0) + ' 失败=' + ((r && r.fail) || 0) + ' 限制=' + ((r && r.limit) || 0)
         + ' 未验证=' + ((r && r.unknown) || 0));
@@ -6550,12 +6713,25 @@ withBridge(function(tauri){
    * 按钮的区别只是把哪一份的路径高亮出来（不假装"只导出一种格式"）。 */
   var REPORT = { ok: false, project: '', did: [], undone: [], need: [], stats: {},
                  paths: {}, conclusion: '', artifacts: [], error: '',
-                 risk: { level: '', label: '', summary: '', hi: 0, items: [] } };
+                 risk: { level: '', label: '', summary: '', hi: 0, items: [] },
+                 // 0.39.85：报告是"生成那一刻的快照"。记下生成时间与自动重出次数，
+                 // 才说得清"屏幕上这个数字是哪一代落档算出来的"（§4-133）。
+                 generatedAt: '', autoCount: 0 };
 
   function reportPathValue(){
     var p = ($('reportPath') && $('reportPath').value ? $('reportPath').value : '').trim();
     if (p) { return p; }
     return resumePathValue();
+  }
+
+  /** 报告面板这一代是不是已经落后于 ⑥ 屏的最新落档（0.39.85）。
+   *  只比"可用率"这条最要命的口径：两边都有值且不等 = 旧快照。
+   *  任一没值（-1）时判 false —— "还不知道"不等于"已过期"（与 §4-63 的 hasXxx 位同款口径）。 */
+  function reportStaleNow(){
+    if (!REPORT.ok) { return false; }
+    var a = (REPORT.stats && typeof REPORT.stats.verifyRate === 'number') ? REPORT.stats.verifyRate : -1;
+    var b = (typeof VERIFY.rate === 'number') ? VERIFY.rate : -1;
+    return (a >= 0 && b >= 0 && a !== b);
   }
 
   function reportListInto(el, lines){
@@ -6580,6 +6756,9 @@ withBridge(function(tauri){
       stats: st,
       paths: { md: String(r.md || ''), html: String(r.html || ''), json: String(r.json || '') },
       conclusion: String(r.conclusion || ''),
+      // 生成时间来自 t2h:report 的回投（后端早就给了，以前没存）；autoCount 要跨多次渲染累计
+      generatedAt: String(r.generatedAt || ''),
+      autoCount: (typeof REPORT.autoCount === 'number') ? REPORT.autoCount : 0,
       artifacts: (r.artifacts && r.artifacts.length) ? r.artifacts : [],
       error: String(r.error || ''),
       // 风险分级（0.39.47）：字段名与 t2h:report 的返回一一对应（riskLevel/riskItems…）
@@ -6630,10 +6809,17 @@ withBridge(function(tauri){
         rkBody.appendChild(tr);
       });
     }
-    $('rpTime').textContent = r.generatedAt ? ('生成于 ' + String(r.generatedAt)) : '—';
+    $('rpTime').textContent = (r.generatedAt ? ('生成于 ' + String(r.generatedAt)) : '—')
+      + (REPORT.autoCount ? ('　进屏自动重出 ' + REPORT.autoCount + ' 次') : '');
     if (REPORT.error) {
       $('rpNote').style.color = 'var(--err)';
       $('rpNote').textContent = '出报告失败：' + REPORT.error;
+    } else if (reportStaleNow()) {
+      // 旧快照必须自己说出来：屏幕上写着 66%、⑥ 屏落档已是 100% 时，
+      // 用户没有任何线索判断哪个才作数（0.39.85 实测踩到，§4-133）
+      $('rpNote').style.color = 'var(--warn)';
+      $('rpNote').textContent = '这份报告是旧快照：它按 ' + REPORT.stats.verifyRate
+        + '% 算的，而 ⑥ 屏最新落档是 ' + VERIFY.rate + '%。点「生成迁移报告」按最新落档重出。';
     } else {
       $('rpNote').style.color = '';
       $('rpNote').textContent = REPORT.conclusion
@@ -6691,6 +6877,23 @@ withBridge(function(tauri){
   $('btnReportMd').addEventListener('click', function(){ runReport('md'); });
   $('btnReportJson').addEventListener('click', function(){ runReport('json'); });
   $('btnReportHtml').addEventListener('click', function(){ runReport('html'); });
+
+  /* 进 ⑦ 屏的自动重出（0.39.85）
+   * 判据只有一条：这一代报告还对不对得上最新落档。key 收「工程路径 + ⑥ 屏当前可用率」，
+   * 所以「换了工程」与「同一工程又验证过一次」都会触发一次重出，反复切屏则不会重复写盘。
+   * 为什么必须自动：报告是**快照**，落档会变；以前只有点按钮/AI 收尾才渲染，
+   * 于是 ⑥ 屏把可用率从 66% 重跑到 100% 之后，⑦ 屏能一直挂着 66%（§4-133）。 */
+  var REPORT_AUTO = { key: '' };
+  function autoReportOnEnter(){
+    var p = reportPathValue();
+    if (!p) { return; }                    // 没工程路径不写盘：否则会落出 .lingqu/report/unknown.*
+    var v = (typeof VERIFY.rate === 'number') ? VERIFY.rate : -1;
+    var key = String(p) + '|' + v;
+    if (REPORT_AUTO.key === key) { return; }
+    REPORT_AUTO.key = key;
+    REPORT.autoCount = (REPORT.autoCount || 0) + 1;
+    runReport('');
+  }
 
   /* ===== T7-3 5 样本矩阵 =====
    * 并排看才谈得上"评测"：单个工程的报告说明这个迁得怎样，矩阵说明工具本身怎样。
@@ -6834,7 +7037,11 @@ withBridge(function(tauri){
   window.__onScreen = function(name){
     // ① 项目/环境：进屏就按落档刷新「最近项目」（0.39.49，原来那张表是写死的）
     if (name === 'env' && typeof window.__loadRecentProjects === 'function') { window.__loadRecentProjects(); }
-    if (name !== 'report' || BATCH_AUTO.done) { return; }
+    if (name !== 'report') { return; }
+    // 0.39.85：进 ⑦ 屏先问一句"屏幕上这一代报告还算不算数"——
+    // 没出过 / ⑥ 屏又验证过一次（可用率变了）/ 换了工程 → 自动按落档重出（纯读盘、秒级）
+    try { autoReportOnEnter(); } catch (e) { /* 自动重出失败不影响手动按钮 */ }
+    if (BATCH_AUTO.done) { return; }
     BATCH_AUTO.done = 1;
     if (!$('batchSamples') || $('batchSamples').value) { return; }
     runBatch();
@@ -6984,6 +7191,14 @@ withBridge(function(tauri){
       modelItems: 0,
       modelError: window.__modelErr || '',
       wsState: CJ.up ? 'connected' : (CJ.connecting ? 'connecting' : 'closed'),
+      // 轮次预算用完后的自动续跑次数（0.39.82）：0 = 没触发过。
+      // 用户报"62/40 又做一半停了"时，先看这一项就知道有没有走到续跑、续了几次。
+      autoContinue: (window.__autoContinue && window.__autoContinue.count) ? window.__autoContinue.count : 0,
+      // 登录入口的可见证据（0.39.82）：用户报"没有提示让我访问网页登录"，
+      // 这项说清"卡片在不在、链接有没有、点没点过系统浏览器"。
+      signLoginState: (typeof SIGNLOGIN !== 'undefined')
+        ? (SIGNLOGIN.running ? 'running' : (SIGNLOGIN.done ? 'done' : 'idle')) : 'absent',
+      signLoginUrl: (typeof SIGNLOGIN !== 'undefined') ? String(SIGNLOGIN.url || '') : '',
       // 连接失败的原话（0.39.65）：以前只有 connected/closed 两态，连不上时界面与报告都拿不到原因，
       // 只能看着"未连接"干瞪眼（用户实测：网页能开 8765、软件说未连接）
       wsErr: String(CJ.wsErr || ''),
@@ -7456,6 +7671,11 @@ withBridge(function(tauri){
       reportRows: (function(){
         return document.querySelectorAll("#rpDid div, #rpUndone div, #rpNeed div").length;
       })(),
+      // 报告与落档同代（0.39.85）：reportStale=屏幕上这一代已落后于 ⑥ 屏最新落档（必须 false）；
+      // reportGeneratedAt=这一代是按什么时候的落档出的（空 = 没出过）；reportAutoCount=进屏自动重出了几次
+      reportStale: reportStaleNow(),
+      reportGeneratedAt: REPORT.generatedAt || '',
+      reportAutoCount: (typeof REPORT.autoCount === 'number') ? REPORT.autoCount : 0,
       // 风险分级（0.39.47）：总体级别 / 标签 / 明细条数 / 高风险条数 / 汇总句（界面到底显示了什么）
       reportRisk: REPORT.risk.level || '',
       reportRiskLabel: REPORT.risk.label || '',
@@ -7752,6 +7972,19 @@ withBridge(function(tauri){
       setTimeout(function(){ runReport(''); }, 1600);
       setTimeout(function(){ reportUi('risk-generated'); }, 4200);
       setTimeout(function(){ reportUi('risk-after'); }, 7000);
+      return;
+    }
+    // 报告与落档同代自检（LINGQU_UI_PROBE=reportstale，0.39.85，§4-133）：
+    // ① 进 ⑦ 屏 → 自动按落档重出（**不点按钮**）→ 回投：reportAutoCount ≥ 1、
+    //    reportGeneratedAt 非空、reportStale = false（屏幕上这一代与落档同代）。
+    // ② 把「⑥ 屏可用率」临时改成落档不可能给的值 7 → reportStale 必须变 true（过期判定真的会亮）。
+    // ③ 还原 → reportStale 回到 false。测的是判定逻辑，不往落档里塞假数。
+    if (mode === 'reportstale') {
+      var keepRate = null;
+      setTimeout(function(){ switchScreen('report'); }, 1100);
+      setTimeout(function(){ reportUi('reportstale-auto'); }, 4200);
+      setTimeout(function(){ keepRate = VERIFY.rate; VERIFY.rate = 7; reportUi('reportstale-forced'); }, 5200);
+      setTimeout(function(){ VERIFY.rate = (keepRate === null ? -1 : keepRate); reportUi('reportstale-restored'); }, 6400);
       return;
     }
     // 出站帧体检自检（LINGQU_UI_PROBE=wssend，0.39.35）：分档发大帧，看 cjh 在多大时开始

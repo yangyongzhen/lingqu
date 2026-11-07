@@ -1,6 +1,7 @@
 package lingqu
 
 import std.collection.*
+import std.time.*
 
 /*
  * AI 自动迁移（0.37.0）——**这是本项目的正题**，0.36.0 的「一键迁移」只是它的兜底通道。
@@ -35,6 +36,39 @@ public let AUTOPORT_MAX_MINUTES: Int64 = 40
  * 20 次 ≈ 18 秒：仍能抓住"真绕圈"，但不会在正常停顿上叫停。
  */
 public let AUTOPORT_STALL_POLLS: Int64 = 20
+
+/**
+ * 「正在跑一个工具」的豁免上限（秒）。
+ *
+ * `agentTraceBusy()` 的豁免本意是别把分钟级交叉编译误判成绕圈，但它**原先没有时间上限**：
+ * 工具一旦挂死，`busy` 永远为真 ⇒ 停滞判定被永久清空 ⇒ 界面只剩「执行中 565s」，
+ * 既不报停滞也不给建议。2026-11-07 实测正是这一幕：引擎的 `find /` 把工具调用挂住 565s+，
+ * `trace.jsonl` 停在 `tool` 那条记录之后再无 `tool_done`，监管屏一直在"干活"里空转，
+ * 用户只能自己去任务管理器里发现一个 605s CPU 的 `find.exe`。
+ *
+ * 300 秒的取法：正常人会等一个长编译，但不会指望单条工具跑满五分钟还不留痕。
+ * 超限之后只是**恢复**停滞判定（还要再攒满 [AUTOPORT_STALL_POLLS] 次不变才报），
+ * 不会立刻喊停——所以宁可设得宽一些。
+ */
+public let AUTOPORT_BUSY_MAX_SECS: Int64 = 300
+
+/**
+ * 单个工具调用的"豁免"是否仍然成立（纯函数）。
+ *
+ * 超上限即失效：之后按普通快照参与停滞判定，并在状态里带上 `busySecs`，
+ * 让人看到"这个工具已经 X 秒没回音"而不是一片沉默。
+ */
+public func busyStillExempt(busySecs: Int64, limitSecs: Int64): Bool {
+    if (limitSecs <= 0) {
+        return true
+    }
+    return busySecs < limitSecs
+}
+
+/** 当前毫秒时钟（busy 计时用；本文件已依赖 std.time，main.cj 不必再引一遍） */
+public func nowMsOf(): Int64 {
+    return DateTime.now().toUnixTimeStamp().toMilliseconds()
+}
 
 /** 一次 AI 自动迁移的输入（命令层填，纯函数只读） */
 public class AutoPortInput {
@@ -137,9 +171,13 @@ public func autoPortScopeGoal(scope: String): String {
             "- **做完停下**，报告 HAP 大小与闸结果。"
     }
     if (scope == "sign") {
-        return "- 跑 `sign --path .` 体检，读 `mode`（debug/release）与 UDID 绑定情况；\n" +
+        return "- 跑 `sign --path .` 体检，读 `mode`（debug/release）、材料、profile 里有没有本机 UDID；\n" +
+            "- 材料不全/UDID 没绑定：`sign --login`（**要人在浏览器授权一次**）→ `sign --auto --path .`" +
+            "（注册设备→申请证书→申请 profile→写回 `build-profile.json5`，原文件会备份）；\n" +
             "- 需要写回 signingConfigs 时先说明理由再 `--apply`（会备份原文件）；\n" +
-            "- **别把 release 态装不上真机当成 bug 去修**；\n" +
+            "- `--login` 你替不了：**不要自己开浏览器登录 AGC 网页**，" +
+            "那样拿不到本机回调的 tempToken、也不注册设备，白花一次人工介入；\n" +
+            "- **别把 release 态装不上真机当成 bug 去修**（release profile 不含 device-ids，直装必被 9568322 拒，正常）；\n" +
             "- **做完停下**，给出上架前还差什么。"
     }
     if (scope == "deploy" || scope == "verify") {
@@ -182,7 +220,9 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
             inp.cliPath + " port   --path . --apply   # 规则改造（会改源码，逐文件留 .bak，可回滚）\n" +
             inp.cliPath + " build  --path .     # 交叉编译（--verifyOnly 只比前端指纹）\n" +
             inp.cliPath + " hap    --path .     # 装配 HAP\n" +
-            inp.cliPath + " sign   --path .     # 签名体检（--apply 写回 signingConfigs）\n" +
+            inp.cliPath + " sign   --path .     # 签名体检（mode / 材料 / profile 有没有本机 UDID）\n" +
+            inp.cliPath + " sign   --login      # AGC 登录（浏览器授权一次，必须人配合）\n" +
+            inp.cliPath + " sign   --auto --path .  # 自动签发：注册设备→证书→profile→写回 build-profile\n" +
             inp.cliPath + " deploy --path .     # 真机装启 + hilog\n" +
             inp.cliPath + " verify --path .     # 采证 + 功能清单 + 可用率\n" +
             inp.cliPath + " report --path .     # 三段式报告\n```\n"
@@ -238,8 +278,18 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "- **平台限制 ≠ 失败**：鸿蒙没有的能力登记为限制，不算 bug，更不许写\"已修复\"；\n"
     d += "- **未验证 ≠ 通过**：没证据的项写 unknown；\n"
     d += "- 改代码前先 `git status` 看看工作区；**别动与迁移无关的文件**；\n"
-    d += "- 真机装不上先看 `.lingqu/sign/<工程>.json` 的签名态：release 态装不上（9568322）是正常的，别去修；\n"
-    d += "- 不确定就先用 `git stash` 或用我们 `.lingqu` 里的备份兜底，再重试。\n\n"
+    d += "- 真机装不上先看 `.lingqu/sign/<工程>.json` 的签名态与 `## 签名与登录` 那节的对照表：" +
+        "release 态装不上是正常的（profile 不含 device-ids），UDID 没绑定则要人登录一次；\n"
+    d += "- 不确定就先用 `git stash` 或用我们 `.lingqu` 里的备份兜底，再重试；\n"
+    // 2026-11-07 实测事故：agent 为找 `gen/ohos` 跑了 `find / -maxdepth 6 -type d -name ohos
+    // -path "*gen*"` 全盘扫描，把整轮工具调用挂死 565s+（孤儿 find 累计 CPU 605s），
+    // 迁移就此停住。脚手架位置是**确定的**，没有就是没有——不许拿全盘搜索去碰运气。
+    d += "- **禁止全盘搜索**（`find /`、`dir /s C:\\`、`Get-ChildItem -Recurse` 扫盘符根都算）：\n"
+    d += "  命令一律在**本工程目录内**执行（工作目录就是工程根，用相对路径或 `.` 即可）；\n"
+    d += "  要找脚手架只有两处：`<工程>/gen/ohos` 与 `<工程>/src-tauri/gen/ohos`；"
+    d += "两处都没有就**如实报告缺脚手架**（并写明生成命令），不要满盘搜、不要换个盘再搜；\n"
+    d += "- 单条命令要能自己结束：别写会长时间挂住的扫描/交互式命令；"
+    d += "估算超过 2 分钟的命令先说明理由再跑。\n\n"
 
     d += "## 交叉编译的硬前置（缺了必然失败）\n"
     d += "- 交叉编译依赖工程里的 `src-tauri/.cargo/config.toml` 两段：\n"
@@ -252,6 +302,34 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "`t2h:port` 的 R2-PORT-008 在缺段时会给出要追加的片段。\n"
     d += "- 回滚改造时别只回滚 `Cargo.toml`：`.cargo/config.toml` 与 `rust-toolchain.toml` 是交叉编译的地基，"
     d += "把它们回滚掉等于把 build 打回失败态。\n\n"
+
+    // 2026-11-07 实测：任务书**只写了 `sign --path .`**，没写 CLI 早就有的 `--login` / `--auto`，
+    // agent 于是在签名这一步自己开浏览器登录 AGC 网页——拿不到本机回调的 tempToken、也不注册设备，
+    // 白花一次人工介入，签名照样没过。凡"工具明明有能力、任务书没写"的缺口，都按这个补法：
+    // **把两条路和判据写死**，并明确哪一步只能人做、人做之前要先说清什么。
+    d += "## 签名与登录（真机装不上，绝大多数卡在这一步）\n"
+    d += "华为设备**只信任华为签发、且 profile 的 device-ids 含本机 UDID 的证书**。"
+    d += "所以「有 signed.hap」≠「能装」，判据是这三样对不对得上：`mode` / 材料 / profile 里的 UDID。\n"
+    d += "顺序固定，别跳步：\n"
+    d += "1. `sign --path .` —— 体检：读 `mode`（debug/release）、材料是否齐全、profile 里有没有本机 UDID；\n"
+    d += "2. `sign --login` —— AGC 登录：**必须人在浏览器里授权一次**，回调到本机后才有 token；\n"
+    d += "3. `sign --auto --path .` —— 自动签发：注册设备 → 申请调试证书 → 申请 profile → " +
+        "按 DevEco 命名落盘 → 写回 `build-profile.json5`（原文件先备份）；\n"
+    d += "4. 再重跑 `hap --path .` → `deploy --path .`。\n"
+    d += "**第 2 步你替不了，也不许假扮**：不要自己 `start` / `rundll32` / `open` 去打开 AGC 网页登录——" +
+        "那样拿不到本机回调的 tempToken，也不会把设备注册进 profile，等于白花一次人工介入。\n"
+    d += "要人登录时，用 `lingqu-decision` 块一次性说清三件事：**为什么必须登录 / 点哪里" +
+        "（应用界面的「华为账号登录」按钮，或 `sign --login`）/ 本机 UDID 是多少**；说完停下等人，别绕圈。\n"
+    d += "报错对照（先对号，别乱改代码）：\n"
+    d += "- `9568320 no signature file` → 压根没签上，走上面第 2、3 步；\n"
+    d += "- `9568322 signature verification failed due to not trusted app source` → 两种：" +
+        "**release profile 不含 device-ids（正常，别修）**；或 debug 材料里没有本机 UDID（用 `--auto` 注册设备）；\n"
+    d += "- `00303074 … bundleName … does not match` → 包名与 profile 不一致：**新包名只能去 DevEco 自动签名一次**" +
+        "（计一次人工介入）；**不许改 `bundleName` 去蹭别人签发的 profile**；\n"
+    d += "- `00303242` / `GCM tag mismatch` → `.p12` 口令解不开（材料多半是拷来的），用 `sign --newKeys` 重生成材料；\n"
+    d += "- `9568332 install sign info inconsistent` → 同包名装过另一套签名，先 `bm uninstall -n <包名>` 再装。\n"
+    d += "**底线**：不许伪造签名、不许改包名套别人的 profile——宁可如实报「签名未完成、等人登录」，" +
+        "也不要交一个装不上的 HAP 说成迁完了。\n\n"
 
     d += "## 预算与收尾\n"
     d += "- 最多 ${budget} 轮工具调用、约 ${minutes} 分钟；到上限就收尾，别硬撑；\n"
@@ -443,8 +521,33 @@ public class AutoPortState {
     public var minutes: Int64 = AUTOPORT_MAX_MINUTES
     public var polls: Int64 = 0
     public var history: ArrayList<String> = ArrayList<String>()
+    /** 「正在跑工具」的起始时刻（毫秒；0 = 当前没有在跑工具）——给 busy 豁免算年龄 */
+    public var busyStartMs: Int64 = 0
 
     public init() {}
+
+    /**
+     * 记一次「正在跑工具」，返回它已经持续了多少秒（第一次调用返回 0）。
+     *
+     * 时间由状态自己记，不去解析轨迹里的 `ts`：那是页面写的 ISO 字符串，
+     * 解析它等于把停滞判定绑死在另一种格式上；这里只需要"多久没回音"。
+     */
+    public func noteBusy(nowMs: Int64): Int64 {
+        if (busyStartMs <= 0) {
+            busyStartMs = nowMs
+            return 0
+        }
+        let ms = nowMs - busyStartMs
+        if (ms <= 0) {
+            return 0
+        }
+        return ms / 1000
+    }
+
+    /** 工具已结束 / 本轮不再 busy：清掉计时 */
+    public func clearBusy(): Unit {
+        busyStartMs = 0
+    }
 
     /** 压入一次快照签名，只保留最后 [AUTOPORT_STALL_POLLS] 条 */
     public func pushSig(sig: String): Unit {
@@ -474,6 +577,7 @@ public class AutoPortState {
         minutes = minutesNow
         polls = 0
         history = ArrayList<String>()
+        busyStartMs = 0
     }
 
     public func stop(): Unit {

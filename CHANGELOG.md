@@ -5,6 +5,310 @@
 
 ---
 
+## [0.39.85] - 2026-11-07
+
+**主题**：**"报告写着 66%，落档写着 100%"**。用户看着 ⑦ 迁移报告问「核心功能可用率
+（A4 ≥80%）怎么还是 66%」。核账：`.lingqu/verify/rust-music-2.json` 与
+`.lingqu/report/rust-music-2.json` **都是 21:19 生成、都是 100%**（3/3 通过）。
+真值没错，错的是**界面那一代快照**——⑦ 屏的报告只在「点生成迁移报告」或「AI 迁移收尾」时
+渲染一次，⑥ 屏把验证从 66%（18:19，`launch` 判 fail）重跑到 100% 之后，没人叫它重出。
+可观测证据就在 `.lingqu/ui-report.json` 里自相矛盾：`verifyRate: 100` 与 `reportRate: 66` 并排。
+
+### Changed
+- 进 ⑦ 屏先校正报告新鲜度（`autoReportOnEnter`）：key 收「工程路径 + ⑥ 屏当前可用率」，
+  没出过 / 又验证过一次 / 换了工程 → **自动按落档重出**（纯读盘、秒级），反复切屏不重复写盘。
+  ⑥ 屏 `t2h:verify` 成功后把报告标脏（`REPORT_AUTO.key=''`），下次进屏即重出。
+- 面板头像：`rpTime` 除了「生成于 …」再显示「进屏自动重出 N 次」；报告与落档不同代时
+  `rpNote` 直接说清「这份报告是旧快照：它按 66% 算的，而 ⑥ 屏最新落档是 100%」。
+
+### Added
+- `ui_report` 新增 `reportStale` / `reportGeneratedAt` / `reportAutoCount`（前端 `reportUi` 与
+  `UiReportCommand` 白名单**两处一起加**，§4-60）——"报告与落档同代"从此可断言。
+- 自检 `LINGQU_UI_PROBE=reportstale`：进屏自动重出 → `reportAutoCount ≥ 1`、`reportGeneratedAt`
+  非空、`reportStale=false`；再把「⑥ 屏可用率」临时改成落档不可能给的值 7 → `reportStale` 必须
+  变 `true`；还原后回到 `false`（测判定逻辑，不往落档里塞假数）。
+
+---
+
+## [0.39.84] - 2026-11-07
+
+**主题**：**"修好了，应用却还在跑旧引擎"**。用户追问「修复的 cjh 替换 vendor 下的没」——
+一核对：`vendor/cjh/win-x64/cjh.exe` 仍是上游 1.6.12 官方版（SHA256 `2cb384f0…`），
+超时杀树那笔（PR #12 / 分支 `fix/bash-timeout-kill-process-group` @ `9a4f6d5`）只活在本机
+cjh 仓的构建产物里。也就是说 **应用一直在跑没有修复的引擎**：`find / -maxdepth …` 这类命令
+超时后仍挂在孤儿管道上，界面停在「执行中」不动。
+
+### Changed
+- `vendor/cjh/win-x64/cjh.exe` 换成 `9a4f6d5` 的本地构建（13,769,216 B，SHA256 `7dda9caf…`）；
+  4 个随行 DLL 不动（与 1.6.5 逐字节相同）。
+- `src/cjh_host.cj` 的 `CJH_VENDOR_FILES` 常量与 `vendor/cjh/SHA256SUMS` **同步新值**——
+  两处必须一起改，否则 `cjhVendorVerified` 判不过、引擎直接不启用（§2.3「验不过绝不执行」）。
+
+### Fixed
+- `t2h:cjh_status` 的 `binPath` **谎报**（换引擎时顺手抓到的）：安装目录里留着**内容不符的旧副本**
+  （`cjhBinPathResolve` 会跳过它、绝不执行）时，旧实现按"哪条路径可读"回投，界面报出的是那个
+  **没在跑**的旧副本。现在优先回投**本应用实际拉起的**那个二进制（新增 `gCjhBinUsed`，配合
+  `gCjhOwned`），复用的是别人的实例时不采信它。实测现场：界面说
+  `AppData\Local\lingqu\cjh\cjh.exe`（11-02 旧货 `07f5427a…`），进程实际是
+  `vendor\cjh\win-x64\cjh.exe`（`7dda9caf…`）。新增单测 `testKnownBinPathPrefersLaunchedBin`。
+
+### 证据
+- 修复特征串：新二进制含 `sessionPgFile`(2 处) 与 `/tmp/cjh-sess-`(1 处)，官方版两者皆 **0**。
+- `./vendor/cjh/win-x64/cjh.exe --version` → `cjh v1.6.12`：**版本号没变，光看版本区分不出来**。
+- 逐文件 SHA256 与 `SHA256SUMS` 五项全 OK（`cjh.exe` = `7dda9caf…`）。
+
+### 构建口径（下次换二进制别再撞）
+- cjh 的 `cjpm.toml` 只声明了 Linux 的 `[target.x86_64-unknown-linux-gnu.bin-dependencies]`；
+  `scripts/winbuild.sh` 追加的键是 `x86_64-pc-windows-gnu`，而 cjpm 报「该 target 等价于本地
+  target `x86_64-w64-mingw32`」走原生编译 ⇒ 追加段不被采信，报一串
+  `imports package 'stdx.encoding.json' … not added as a dependency`。
+  要**根包 + `libs/*` 五个子包**都补 `[target.x86_64-w64-mingw32.bin-dependencies]`，
+  且 toml 里的路径必须写 **Windows 形式**（`D:/…`）——cjpm 是原生程序，不认 MSYS 的 `/d/…`。
+- 本机 `x86_64-w64-mingw32-strip` 是调 `llvm-strip` 的壳而 llvm-strip 缺失 ⇒ 改用
+  `objcopy.exe --strip-all` 裁剪（38,822,400 → 13,769,216 B）。
+
+### 未验证
+- 超时杀树的**实际效果**本轮未复验（行为验证在 cjh 仓侧；本仓只保证「发出去的是含修复的二进制」）。
+- Linux 侧 `vendor/cjh/linux-x64/cjh` 未动，仍是官方版 ⇒ 两平台随包引擎**进一步分叉**（如实记）。
+
+---
+
+## [0.39.83] - 2026-11-07
+
+**主题**：**"工具明明有能力，任务书没写"**。用户实测后一句点破：cjh 拿到任务书却不知道
+该走登录/签名这条路，最后**自己拉了个外部浏览器**让用户登录 AGC 网页——可那条路拿不到
+本机回调的 `tempToken`、也不会把设备注册进 profile，签名照样过不了，纯白花一次人工介入。
+
+查证结果：`lingqu-cli sign --login` 与 `sign --auto` **本来就存在**（`src/cli.cj` 的帮助里
+写得很清楚，`--auto` 一条命令跑完 设备→证书→profile→写回），但 `buildAutoPortDirective`
+的工具箱只写了 `sign --path .`，半自动「只做签名」那一步更是只有一句"体检 + 写回"。
+**能力在手、说明书没给** = agent 只能瞎摸。
+
+### Fixed
+
+- **任务书补「签名与登录」整节**（`buildAutoPortDirective`）：顺序写死
+  `sign --path .`（体检）→ `sign --login`（人授权一次）→ `sign --auto --path .`（注册设备/证书/profile/写回）
+  → 重跑 `hap`；并写明「有 signed.hap ≠ 能装」，判据是 `mode` / 材料 / profile 里的 `device-ids`。
+- **明确禁止 agent 自己开浏览器登录**：`start` / `rundll32` / `open` 一律不许，理由写清
+  （拿不到本机回调 `tempToken`、不注册设备，白花一次人工介入）；要人登录时必须用
+  `lingqu-decision` 块一次说清 **为什么必须登录 / 点哪里 / 本机 UDID 是多少**。
+- **报错对照表进任务书**：`9568320`（没签上）/ `9568322`（**release profile 不含 device-ids 属正常**，
+  或 debug 材料缺本机 UDID）/ `00303074`（包名与 profile 不一致）/ `00303242`·`GCM tag mismatch`
+  （`.p12` 口令解不开 → `--newKeys`）/ `9568332`（同包名装过另一套签名 → 先 `bm uninstall`）。
+- **纪律那条改口径**：原文「release 态装不上（9568322）是正常的，别去修」会把「缺本机 UDID」
+  一起当成正常放过；现在两种成因分开写，并在同处指向新的对照表节。
+- **半自动 `scope=sign` 同步补齐**：同一份签名知识不许只在全流程分支里（否则"只点签名这一步"
+  反而比全自动知道得更少）。
+
+### Added
+
+- 单测 `testDirectiveTellsAgentHowToSignAndLogin` / `testSignScopeDirectiveAlsoCarriesLoginPath`：
+  钉住两条入口带绝对路径出现、顺序小节存在、禁止自己开浏览器、四种报错号、以及「不许伪造签名 /
+  不许改 `bundleName` 蹭别人 profile」的底线（**TOTAL 429 → 431**）。
+
+### Verify
+
+- ① 业务包 `cjpm build` **零警告**；③ `cj-tauri check` 通过（`com.lingqu.migrator@0.39.83`）。
+- ② `cjpm test` **TOTAL 431 / PASSED 431 / FAILED 0 / ERROR 0**（+2 例）。
+  注：测试构建另报 **4 条** `possibly confusing line terminator`，出自**既有测试文件**
+  （`src/tests/cli_test.cj:113`、`src/tests/build_test.cj:138`，字符串里带 `\n- ` 触发），
+  与本轮改动无关，写在文本里以免被当成"零警告"假象。
+- ⑤ `cli/` 的 `cjpm build`：**零警告 / exit 0**（不经门禁脚本、直接构建，避开 `kill_own_main_exe`
+  对正在实测界面的结束动作）。首次构建曾报 **9 条**同类警告——全部是本轮新写的任务书文本
+  把 `+` 写在行首所致（§4 老坑），已改成运算符收在行尾。
+- ④ `targets/desktop` 构建**未跑**：产物 `main.exe` 正被用户实测占用，构建会撞
+  `Permission denied`（§4-6），门禁脚本还会主动结束它。留到实测结束后补。
+
+---
+
+
+
+**主题**：**"做一半停"和"没人告诉你该点哪里"**。用户实测整应用迁移跑到 **回合 62/40** 就停住，
+界面只写"回合结束"；同一次还问了"没有提示让我访问网页登录呀"。查下来三件事各自独立：
+
+1. **62/40 是假象**：预算抬升函数返回的是 `file:…（需重启 cjh 生效）`——值写进了
+   `~/.cjh/settings.json`，但**正在跑回合的引擎内存里还是默认 40**，于是"抬到 120"等于没做。
+2. **引擎被重复拉起**：`/api/health` 在引擎忙时超时 → 被判成"引擎没了" → 又拉起一只；
+   Windows 允许重复绑定同一端口，第二只静默"就绪"，现场留下 **3 只 `cjh.exe` 同占 8765**，
+   WS 还挂在上一轮的孤儿上。这解释了"过了会儿又自己连上了"（引擎全程没退出）。
+3. **登录入口不存在**：登录被塞在一条阻塞命令里（最长 5 分钟），页面拿不到"正在等你登录"、
+   也拿不到那条 URL，人只能从 cjh 的聊天文字里猜该点哪里。
+
+### Added
+
+- **轮次预算开跑前自愈**（`iterBudgetStateOf` / `enforceIterBudgetBeforeRun`）：把
+  `live:` / `already:` / `restart-ok:` 判为**真生效**，`file:` 一律等于没生效；需要重启才生效的，
+  在**开跑前**重启自己拉起的引擎（~0.5s），而不是等跑到中途被 40 轮截断。非本应用拉起的引擎
+  按 D-003 不抢不杀，只回投"需人工重启"。
+- **预算用完自动续跑**（页面 `AUTO_CONTINUE_MAX = 3`）：回合因预算结束时，若迁移监管态仍在跑
+  且未判停滞，自动接着干并上屏说明次数；到上限就明确交回人判断（不无限烧轮次）。
+- **`t2h:sign_login` / `t2h:sign_login_status`**：后台登录（命令立刻返回，不占 IPC），
+  登录页 URL 通过状态回投；签名屏把链接给成**可点按钮**。
+- **`t2h:open_url`**：界面里的链接统一走系统浏览器（`rundll32` / `xdg-open` 按 argv 传参），
+  不依赖 WebView 的 `target=_blank`（那种"点了没反应"比没有链接更糟）。
+- `ui_report` 新增 `autoContinue` / `signLoginState` / `signLoginUrl`（白名单同步，
+  见 §4-60：两处不一起加等于字段不存在）。
+
+### Changed
+
+- **拉起前判据从 Bool 改成三态**（`spawnDecisionOf` → `Spawn` / `Reuse` / `Occupied`）：
+  「端口空着」与「有人听但不响应」不再都算"没有引擎"。`Occupied` 时**绝不拉起第二只**，
+  只有用户显式点「重启引擎」且引擎是本应用拉起的，才真重启。
+- `ensureCjhWeb` / `cjhDeployAndStart` 整段加互斥锁 `gCjhSpawnLock`：探活→判断→拉起是
+  读-判断-写，两路同时进来必然各拉一只（实测日志里两条一模一样的"就绪"）。
+- `cjh_status` 不再把"有监听但读不到"谎报成 `ready`：如实回 `running + portBusy + 原因`，
+  设置页显示「端口有监听但不响应，按在忙处理」。
+- 探死要把原因写进 `.lingqu/cjh-start.log`（`gLastHealthErr`），别再靠进程表倒推。
+
+### Fixed
+
+- 回合结束时若最后一条工具报错里出现"登录"，**主动起登录并提示入口**（不再只把输出摆着）。
+
+### Known limitations
+
+- **六闸全绿**：`build-biz / test / check / js-syntax / build-app / build-cli` 六项 PASS，
+  `TOTAL=429 / FAILED=0 / ERROR=0`，三处 `warning: 0`。第 ④ 闸补跑时按 §4-92 只结束了
+  本仓的 `main.exe`，引擎（`cjh.exe`）未被误杀。
+- 登录成功后的 profile/UDID 注册仍依赖华为账号的一次真实登录，未在自动化里伪造。
+- 自动续跑 / 登录卡片 / `t2h:open_url` 目前只有编译与语法闸的保证，**还没有 UI 探针证据**；
+  `ui_report` 已加 `autoContinue / signLoginState / signLoginUrl` 三项白名单字段，
+  但要页面跑起来才有值（接手第一件事：起应用看这三项）。
+
+
+
+**主题**：**"跑成功了"和"东西真出来了"是两回事**。rust-music-2 交叉编译 `exitCode=0 / errorCount=0`
+被报成通过，可产出的是一份 11 MB 的 **exe**——工程只有 bin target，没有 `cdylib`，HAP 里要的
+`lib<name>.so` 压根没生成。同一轮把回滚链路的三个静默失效一起修了：二次 apply 覆盖原始备份、
+备份目录相对/绝对不一致（CWD 不是工程目录就永远"没有备份"）、回滚表写死 `src-tauri/`（扁平工程
+一个文件都对不上）。三处都是"工具说没备份/没改动，其实是我们读错了地方"。
+
+### Added
+
+- **鸿蒙产物闸**（`checkOhosArtifactGate`）：编译成功但**没有预期的 `lib<name>.so`** 时判失败，
+  并按「有没有 `cdylib` 声明」给出不同提示——没有声明就是移植没做完，不是编译参数问题。
+  期望产物名由 `expectedLibNameOf`（认 `[lib] name` → 包名 → 工程名）解析，
+  `hasCdylibCrateType` 判声明（注释里的 `cdylib` 不算数）。build 结果新增 `expectedSo` 字段。
+- **`t2h:port` 落 `decisions.json`**（`decisionsJsonWithPortRun`）：以前只有"记过一条人工决策"
+  才会生成它，"这个工程跑过 port 没有"在断点板与 agent 上下文里无从判断（§4-58 的窟窿）。
+  现在每次跑完都写 `portRun` 块（apply/applied/auto/human/at/outcomes），`items` 原样保留。
+- `portRunAtOf`：从 decisions.json 读"跑过的时刻"（没跑过 → -1）。
+
+### Changed
+
+- **`backupDirOf` 换成两侧共用的绝对路径**（`portBackupDirOf(projectDir, safeName)`）：
+  apply 写 `<工程>/.lingqu/port/<工程>`，revert 也要读同一处——以前 revert 用 CWD 相对路径，
+  只要 CWD 不是该工程目录，回滚就永远报"没有备份"（§4-33 同族）。
+- **回滚表改用布局标记**（`REL_SRC` / `REL_PROJECT` + `resolveRevertTarget`）：不再写死
+  `src-tauri/`。传统工程解析到 `<工程>/src-tauri/...`，扁平工程（`src-tauri` 就是工程根）
+  解析到 `<工程>/...`；解析不出的（工程里没有 Cargo.toml）返回空串 → 计入 `skipped`，不猜路径。
+  单 bin 工程的 `lib.rs` 兜底也从写死 `src-tauri/src/main.rs` 改成按布局取 `src/main.rs`。
+
+### Fixed
+
+- **build 假绿**：单 bin 工程交叉编译成功即报通过，实际没有 `.so`，装不进 HAP。
+- **二次 `--apply` 覆盖原始备份**：备份写盘改为"已存在就不写"（与 `backupFile` 同一语义），
+  否则备份里存的是迁移态，revert 只会"回滚"成迁移态——回滚能力静默失效。
+- **回滚永远 miss**：备份目录相对/绝对不一致（见 Changed）。
+- **扁平工程回滚一个文件都对不上**：回滚表硬编码 `src-tauri/`（见 Changed）。
+
+### Verified
+
+- 单测 **427 例全过**（新增 `src/tests/ohos_artifact_test.cj` 4 例 + 回滚/落档 3 例）。
+- 实路复验（样本副本 `.lingqu/tmp-verify/rm2`，扁平布局）：
+  `port --apply` → 备份 + `decisions.json`（`portRun.applied=2`）落地；**二次 apply 后两份备份
+  sha256 不变**；`revert` → `restored=2 removed=2 skipped=[]`，`src/lib.rs` 与备份 sha256 一致，
+  `backup` 字段是绝对路径。
+- 未验：`config.toml` / `index.html` / `hvigorfile.ts` 三类回滚（样本里没有这几条规则的落盘），
+  以及 Linux/macOS 侧同族路径行为。
+
+---
+
+## [0.39.80] - 2026-11-07
+
+**主题**：**agent 卡死一半是我们自己的监管失灵**。rust-music-2 回归时引擎把工具调用挂住 565s+，
+灵渠这边既没报停滞、也没给建议——因为「正在跑工具」的豁免**没有时间上限**，
+一个挂死的工具可以把停滞判定永久按住。同一轮把上游 cjh 的根因也修了（超时收尾只杀得掉
+启动器，孤儿握着管道让 `p.wait` 永挂），并把「禁全盘搜索」写进任务书纪律。
+
+### Added
+
+- `AUTOPORT_BUSY_MAX_SECS = 300` + 纯函数 `busyStillExempt(busySecs, limitSecs)`：
+  「正在跑工具」的豁免有上限，超限即恢复停滞判定；`AutoPortState.noteBusy/clearBusy`
+  记工具年龄，`t2h:autoport_status` 回投 `busySecs` 作证据（`src/autoport.cj`、`src/main.cj`）。
+- 任务书纪律新增「**禁止全盘搜索**」：命令只在本工程目录内；脚手架只有 `<工程>/gen/ohos`
+  与 `<工程>/src-tauri/gen/ohos` 两处，都没有就如实报告缺脚手架；预估 >2 分钟的命令先说明理由。
+
+### Fixed
+
+- **监管屏对挂死工具永久沉默**（2026-11-07 实测）：`agentTraceBusy()` 没有时间上限，
+  工具一挂死 `busy` 永远为真 ⇒ `clearHistory()` 一路清空 ⇒ 界面只剩「执行中 565s」，
+  既不报停滞也不给建议，用户只能自己去任务管理器发现一个 605s CPU 的 `find.exe`。
+- 任务书此前没禁止全盘搜索，agent 为找 `gen/ohos` 跑 `find / -maxdepth 6 …`，
+  正是把工具调用挂死的直接触发点。
+
+### Changed
+
+- 上游 cjh 同步修复（已提 MR #12）：`killSession()` 改为**按进程组**收尾——
+  会话启动让 bash 把 `$$` 写进 `/tmp/cjh-sess-<启动器pid>.pid`，超时时
+  `kill -9 -$(cat …)` 连子命令一起收，`taskkill /T` 退为兜底。
+  实测 `find / … | head -10` + `timeout 5`：**6.08 s 返回**（旧实现 644s+ 不返回），无残留 `find.exe`。
+
+### Verified
+
+- 业务包 `cjpm build` **零警告**；`cjpm test` **TOTAL: 418 / FAILED: 0 / ERROR: 0**
+  （新增 `testBusyExemptHasUpperBound`、`testNoteBusyMeasuresSecondsSinceToolStart`、
+  `testDirectiveForbidsFullDiskSearch`）。
+- cjh 侧：`build warning: 0`、新增 Windows 用例两条 PASSED、`find.exe` 无残留。
+- 未验证：`busySecs` 在真实挂死场景下的端到端读数（需再复现一次 5 分钟以上的工具挂死）。
+
+---
+
+**主题**：**拿 rust-music-2（扁平布局的真实 Tauri 工程）跑一遍全流程，前 4 步连撞三处真 bug** ——
+每一处都**不是**工程的问题，是工具把 Windows 路径 / 目录层级 / OHOS crate 的环境要求想当然了。
+三处修完，`build` 从「连 manifest 都读不进去」走到 **`ok=true / exitCode=0 / errorCount=0`**。
+
+### Fixed
+
+- **R2-PORT-008 把 Windows 路径原样拼进 TOML 双引号串 → 生成的 `.cargo/config.toml` 是非法 TOML**：
+  - **现象**：`t2h:build` 报 `failed to parse manifest at Cargo.toml` +
+    `could not parse TOML configuration in …\.cargo\config.toml`、
+    `missing escaped value, expected 'b', 'e', 'f', 'n', 'r', '\\', '"', 'x', 'u', 'U'`，`exit=101`；
+  - **根因**：`NATIVE_OHOS_SDK` 是 Windows 形态（`D:\oh\…\native`）时，模板直接
+    `linker = "${sdk}/llvm/bin/clang"` ⇒ `\o` 不是 TOML 合法转义。**凡是带反斜杠的 NDK 路径必死**；
+  - **处置**：新增纯函数 `tomlSafePath()`（`\`→`/`，cargo 在 Windows 同样认正斜杠），
+    `cargoConfigToml` / `cargoEnvOnlyToml` 都过它；单测断言"生成内容里一个反斜杠都不剩"。
+- **`frontend` 目录按经典布局写死 `srcTauriDir/..`，扁平工程会跑出工程外**：
+  - **现象**：`R2-PORT-014` 报「已存在——跳过」（本工程 `ui/` 里根本没有对话框模块），
+    `R2-PORT-012` 的 before 证据里出现 `juCang/lingqu-dialog.js:4` —— **上一个样本的文件**；
+  - **根因**：扁平布局（`Cargo.toml` 就在工程根）时 `srcTauriDir/..` = **工程父目录**
+    `C:\Users\yang\lingqu-workspaces\`，那里躺着 juCang 遗留的 `lingqu-dialog.js`；
+  - **处置**：新增纯函数 `frontendDirOf(projPath, srcTauriDir, frontendDist)` —— 只有
+    扁平布局改口径（优先 `tauri.conf.json` 的 `frontendDist`，本例 `ui`），经典布局原样返回，
+    不动已验证过的样本；**拒绝**绝对/`..` 越界的 frontendDist；
+  - **连带**：`t2h:revert` 删这两个资源的路径必须与写入侧同源（改为同一函数 + 兼容历史
+    `<工程>/` 残留位置），否则回滚永远删不到（§4-33 同族）。
+- **`ohos-arkui-sys` 等 OHOS crate 的 build.rs `expect` `OHOS_NDK_HOME` → build 当场 panic**：
+  - **现象**：`thread 'main' panicked: OHOS_NDK_HOME not set`，`exit=101`；
+  - **根因**：生成的 `[env]` 段只补了 `CC_/AR_/CFLAGS_`（cc-rs 口径），没有 OHOS 自己的约定变量；
+  - **处置**：`[env]` 段补 `OHOS_NDK_HOME`（cargo 的 `[env]` 对 build script 生效 ⇒ 工程自足）；
+    `t2h:build` 执行前再兜一层（`NATIVE_OHOS_SDK` 存在且没设就注入），并把兜底值回投
+    `result.ndkHome` 当证据 —— 救"已迁移但没重跑 port"的老工程。
+
+### Changed
+
+- `t2h:build` 的返回值新增 `ndkHome`（**两处一起加**：命令层 `o.put` + 落档），空串 = 环境里本来就有。
+
+### Known（本轮实测暴露、尚未处置）
+
+- **`build` 绿了但没有 `.so`**：rust-music-2 只有 `src/main.rs`（bin target），编出来是
+  11 MB 可执行文件 `rust-music`，而 OHOS 需要 `lib<模块>.so`（cdylib）。`build` 判据只看
+  `exitCode==0`，**不校验产物形态** —— 属"绿了也装不上"的假绿，已记入待办。
+- **`t2h:hap` 前置于本机不可满足**：工程无 `gen/ohos` 脚手架，工具提示
+  `先用 cargo tauri ohos init --ci 生成`，而本机**没装 tauri-cli**；且无 `com.example.rustmusic`
+  的签名材料、真机 `hdc list targets -v` 仍 **Unauthorized** ⇒ hap/deploy/verify 三步本轮未能验证。
+
+---
+
 ## [0.39.78] - 2026-11-07
 
 **主题**：**内置 cjh「起得慢」不是引擎慢** —— 实测引擎自身 fork→`/api/health`=200 只要 **85 ms**，
