@@ -19,13 +19,13 @@
 | `run.bat` | 把本目录加入 PATH 后启动（省得你手工配 PATH） |
 | `assets/` | 界面与能力清单（`ui/index.html`、`capabilities/default.json`）——**必需** |
 | `*.dll`（根目录） | 仓颉运行时 + `libcjtbridge`（C 桥）+ `libstdx.encoding.json` + `WebView2Loader` |
-| `vendor/cjh/win-x64/` | 内置 AI 引擎 cjh 1.6.1（`cjh.exe --version` 已验证可跑）；**`vendor/cjh/SHA256SUMS` 也在包里**——少了它引擎不会被拉起（自校验不过就不执行），右栏 AI 面板会显示"可拉起"但起不来 |
+| `vendor/cjh/win-x64/` | 内置 AI 引擎 cjh 1.6.12（`cjh.exe --version` 已验证可跑）；**`vendor/cjh/SHA256SUMS` 也在包里**——少了它引擎不会被拉起（自校验不过就不执行），右栏 AI 面板会显示"可拉起"但起不来 |
 | `scripts/` | `test.bat` / `test.sh` 等门禁脚本（可选，自测用） |
 
 ## AI 面板怎么启用
 
 右栏 AI 不是打开就有，第一次要**拉一次引擎**：`Ctrl+,` 打开设置 → 点「部署 / 拉起引擎」。
-它会先校验 `vendor/cjh/` 四个文件的 SHA256，再拉起 `cjh --bind 127.0.0.1`（默认 8765），
+它会先校验 `vendor/cjh/` 五个文件的 SHA256，再拉起 `cjh --bind 127.0.0.1`（默认 8765），
 就绪判据只有一条：`GET /api/health` 返回 200。之后模型与密钥也在同一面板里配。
 
 ## 能干什么（都要 Windows 上装了对应外部工具）

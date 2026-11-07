@@ -5,6 +5,40 @@
 
 ---
 
+## [0.39.75] - 2026-11-07
+
+**主题**：**随包引擎升级 cjh 1.6.5 → 1.6.12**（vendor 两平台 + SHA256 校验链 + 灌包脚本）。
+
+### Changed
+
+- **`vendor/cjh/linux-x64/cjh`** 替换为 cjh v1.6.12 官方产物
+  （`cjh` 仓 `dist/cjh-v1.6.12-linux-x64.tar.gz`，18,485,672 bytes，
+  SHA256 `028992be…2dfbf`）；`--version` → `cjh v1.6.12`
+- **`vendor/cjh/win-x64/`** 五件套同步 `dist/cjh-v1.6.12-windows-x64-selfcontained.zip`：
+  `cjh.exe` 13,754,880 bytes（SHA256 `2cb384f0…23cb7`）；**4 个随行 DLL 与 1.6.5 逐字节相同**
+  （`libboundscheck` / `libcangjie-runtime` / `libssl-3-x64` / `libcrypto-3-x64` 未变，故只有 exe 需要换）
+- **`src/cjh_host.cj`**：`CJH_VENDOR_FILES` 的 `cjh.exe` 常量与 `CJH_LINUX_SHA` 同步到 1.6.12；
+  校验注释按实际形态写成「5 个文件」
+- **`tools/vendor-cjh.sh`** 修两处陈旧处：① Windows 清单补 `libboundscheck.dll`（1.6.5 起是五件套，
+  脚本仍按四件套检查，会灌出缺文件的自校验不过目录）；② `--source` 支持直接喂 cjh 官方归档
+  （`.zip` / `.tar.gz`）并自动把归档里的 `cjh-windows-x64.exe` / `cjh-linux-x64` 改名成
+  `cjh.exe` / `cjh`——此前必须先手工解包改名
+- 文档同步：`vendor/cjh/README.md`（版本表 v1.6.1 → v1.6.12、文件表补第 4 个 DLL 与大小、
+  升级命令改成喂官方归档）、`packaging/README-run.md`（引擎 1.6.12、校验文件数五个）
+- 版本号三处一致 0.39.75
+
+### 验证
+
+- 常量与盘上二进制逐条比对：`win-x64/cjh.exe` 与 `linux-x64/cjh` 的 SHA256 与源码常量**逐字相同**
+  （DLL 未变，四条常量照旧成立）
+- **实跑**：`vendor/cjh/linux-x64/cjh --version` → `cjh v1.6.12`；
+  `cjh web --port 8771 --bind 127.0.0.1` → `GET /api/health` 200，
+  `{"status":"ok","version":"1.6.12","web_port":8771}`
+- 六项门禁见本轮 `docs/进度记录.md`；**win-x64 仍是「换好了未在 Windows 实机跑过」**
+  （本机只有 Linux，实机验证待 Windows 会话补，`cjh.exe --version` 属纯 exe 执行，风险低但未取证）
+
+---
+
 ## [0.39.74] - 2026-11-05
 
 **主题**：「用户级认知层」方案落档（飞轮 §8 阶段 4）——不登录、不贡献，飞轮照样转。

@@ -560,8 +560,8 @@ func cjhBinName(): String {
  */
 @When[os == "Windows"]
 let CJH_VENDOR_FILES: Array<(String, String)> = [
-    // cjh v1.6.5（selfcontained 五件套：exe + 4 DLL；libboundscheck.dll 是本版新增随行件）
-    ("cjh.exe", "07f5427a64874d0efcf26463d142d1bbe31c7b34fd50e8a289987de16bf5012b"),
+    // cjh v1.6.12（selfcontained 五件套：exe + 4 DLL；本版 4 个 DLL 与 1.6.5 逐字节相同，只有 exe 变）
+    ("cjh.exe", "2cb384f0cde35ab558c0dea6e4f07d4cc859e594c03da57e7d3d17da13b23cb7"),
     ("libcangjie-runtime.dll", "03f4d59a13c7fc1d71523bdd42a05587657105aff14c8288adfdd8fbe5bea089"),
     ("libboundscheck.dll", "07b33dd3de22489b442cc32f0fe8ddfc80b753443b17fb2053133b2e7ffb6c78"),
     ("libssl-3-x64.dll", "bbaf8a8c37b4cfdd7fe5feee9ff1d0072078f430bb5ef2b3da38a600f4039b03"),
@@ -581,7 +581,7 @@ func sha256FileHex(p: String): String {
 }
 
 /**
- * 校验仓内 vendor 目录：4 个文件齐全且 SHA256 与入库常量逐字一致。
+ * 校验仓内 vendor 目录：5 个文件齐全且 SHA256 与入库常量逐字一致。
  *
  * 为什么要校验而不是直接用：这份二进制是「能跑 shell、能读写工作区」的 agent 引擎，
  * 来路不明的同名文件不该被静默执行。校验失败只留一行 stderr 并回 false，
@@ -608,7 +608,7 @@ public func cjhVendorVerified(dir: String): Bool {
 
 /** Linux 版随包二进制的 SHA256：单文件、静态链接，没有随行 DLL（与 Windows 形态不同） */
 @When[os != "Windows"]
-let CJH_LINUX_SHA: String = "2821d90f0285c77aeab51234f23c1539af18479410d302f05e3d5af7e9a7ab31"
+let CJH_LINUX_SHA: String = "028992bebc92e9bf9e92d063fdc20e1b21ae385f3cda4bbe507e0ff8c832dfbf"
 
 @When[os != "Windows"]
 public func cjhVendorVerified(dir: String): Bool {
