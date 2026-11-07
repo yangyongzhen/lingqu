@@ -4047,6 +4047,8 @@ withBridge(function(tauri){
       stopMigratePolling();
       try { CJ.abortSource = 'stop-button'; CJ.abortAt = Date.now(); wsSend({ type: 'abort' }); } catch (e) {}
       AIP.active = false;
+      // 停止之后按钮要能再点（0.39.86：否则"停了就再也起不来"）
+      if ($('btnAiPort')) { $('btnAiPort').disabled = false; }
       if ($('migrateNote')) { $('migrateNote').textContent = '已请求停止。'; }
       reportUi('autoport-stop');
     };
@@ -4084,6 +4086,16 @@ withBridge(function(tauri){
     AIP.concluded = (typeof st.concludedCount === 'number') ? st.concludedCount : 0;
     AIP.verdict = String(st.verdict || '');
     renderMigrate(st);
+    // 0.39.87：AI 自己把某步跑出结论时，对应屏要跟着**回读落档**。
+    // 否则就是用户报的那个分裂现场：AI 说「扫描已完成」，① 迁移画像的可迁移度还是空的。
+    try { syncStepsFromRows(st.rows, st.path || st.project || ''); } catch (e) {}
+    // 「🤖 开始 AI 自动迁移」的可点性（0.39.86）：**监管态不活跃就该能再点**。
+    // 原来只有"启动失败/invoke 异常"两处恢复，成功接手后按钮永久 disabled ——
+    // 用户实测「换了个新工程还是点不动」的头号成因就是它（换工程那条由
+    // resetProjectRunState 兜住，这里补的是"同一工程里跑完/停了也该能再点"）。
+    if ($('btnAiPort') && (st.finished === true || st.active === false)) {
+      $('btnAiPort').disabled = false;
+    }
     if ($('btnAiPortContinue')) {
       $('btnAiPortContinue').style.display = (AIP.active || String(st.verdict || '').indexOf('通过') >= 0) ? 'none' : 'inline-block';
     }
@@ -5301,6 +5313,7 @@ withBridge(function(tauri){
     var total = (typeof s.total === 'number') ? s.total : 0;
     $('scoreTotal').textContent = String(total);
     $('scoreRing').style.setProperty('--v', total);
+    window.__scanScore = total;   // 0.39.87：回投 ui_report.scanScore（"AI 跑完扫描后别还是空的"的判据）
     $('scoreNote').textContent = s.partial
       ? '已扫描维度：' + (s.scannedDims || 'runtime,api')
       : '五维全扫描';
@@ -7034,9 +7047,220 @@ withBridge(function(tauri){
   // 进 ⑦ 迁移报告 就自动生成一次矩阵（纯读盘、秒级）：成果应当"进得去就看得见"，
   // 而不是让人先猜"要不要点某个按钮"。只自动跑一次，之后仍可手动刷新。
   var BATCH_AUTO = { done: 0 };
+  /* ===== 换工程必须清掉上一轮的运行态（0.39.86）=====
+   * 用户实测原话：「在上次完成移植的基础上重新选了个新项目，但 AI 自动迁移还是上次执行完的状态，
+   * 不能点」——两条根因叠在一起：
+   *   ① `#btnAiPort` 只在「启动失败 / invoke 异常」分支恢复可用，**一旦 AI 接手就再没有一处把它置回
+   *      false**，于是整个进程生命周期内它都是死的（换工程、换会话、重开设置页都救不回来）；
+   *   ② `setCurrentProject()` 只换路径回显 + 顶栏胶囊 + 左栏徽标，**运行态一个字没清**：进度条、
+   *      时间轴、结果卡、AI 过程消息，以及 ⑤⑥⑦ 三屏的数据面板全都挂着上一个工程的数字。
+   * 口径（与 §4-94 同族）：这些面板是「**这一轮、在这个工程上**观测到的结果」，换了工程就等于
+   *   「这里还没跑过」——宁可不显示，也不许把上个工程的数字摆在新工程名下（假值比空白更坏）。
+   * 边界两条：
+   *   · **只清界面，不动落档**——旧落档要不要归档重跑由人点「↻ 从头重跑」决定；
+   *   · 切换时 AI 监管态**真的还在跑**的话，不许悄悄当它没发生过：面板照样按新工程重置，
+   *     但提示里要写清「上一个工程那次迁移没被停止」，「停止」也留着给人按。
+   */
+
+  // 面板占位快照：初始化那一刻 DOM 里的样子就是「还没跑过」的正确文案，重置时原样还原。
+  // 手抄一份占位文案 = 多一份漂移源（改 HTML 忘了改这里，就会出现"重置后显示一句谁都没写过的话"）。
+  var PANEL_RESET_IDS = [
+    'migLogN',
+    'buildExit', 'buildErrors', 'buildWarns', 'buildSo', 'buildGate', 'buildAsset', 'buildAssetNote',
+    'buildNote', 'buildDiags',
+    'hapBuilt', 'hapSize', 'hapSigned', 'hapArm64', 'hapRawfile', 'hapGate', 'hapNote', 'hapOhosDirNote',
+    'signMode', 'signCanInstall', 'signReleaseReady', 'signUdid', 'signConfig', 'signFiles',
+    'signType', 'signDevice', 'signCand', 'signNote', 'signLoginNote', 'signSwitch',
+    'depDevice', 'depInstall', 'depStart', 'depHilog', 'depHap', 'depNote',
+    'verRate', 'verPass', 'verLimit', 'verUnknown', 'verShots', 'verNote', 'verList',
+    'rpProject', 'rpSteps', 'rpHuman', 'rpRate', 'rpDid', 'rpDidN', 'rpUndone', 'rpUndoneN',
+    'rpNeed', 'rpNeedN', 'rpRiskSum', 'rpRiskRows', 'rpNote', 'rpTime', 'rpPaths', 'rpArtifacts',
+    'stBuildV', 'stAssetV', 'stHapV', 'stSignV', 'stInstallV', 'artSo', 'artHap', 'artDev'
+  ];
+  var PANEL_SNAPSHOT = (function(){
+    var m = {};
+    for (var i = 0; i < PANEL_RESET_IDS.length; i++) {
+      var id = PANEL_RESET_IDS[i];
+      var el = document.getElementById(id);
+      if (!el) { continue; }
+      m[id] = { html: el.innerHTML, color: el.style.color || '', display: el.style.display || '' };
+    }
+    return m;
+  })();
+  function restorePanelSnapshot(){
+    for (var i = 0; i < PANEL_RESET_IDS.length; i++) {
+      var id = PANEL_RESET_IDS[i];
+      var s = PANEL_SNAPSHOT[id];
+      var el = document.getElementById(id);
+      if (!s || !el) { continue; }
+      el.innerHTML = s.html;
+      el.style.color = s.color;
+      el.style.display = s.display;   // signLoginNote 之类默认隐藏的面板要回到隐藏
+    }
+  }
+
+  // 换工程证据（回投 ui_report / 探针：`projSwitches` / `projResets` / `projResetActive`）
+  window.__projRun = window.__projRun || { switches: 0, resets: 0, lastFrom: '', lastTo: '', activeAtSwitch: 0 };
+
+  /**
+   * 把「上一轮在这个工程上跑出来的界面状态」清干净。由外层 `setCurrentProject()` 经
+   * `window.__onProjectSwitch` 调用（外层拿不到内层符号，见 §4-107）。
+   * @param prev 切换前的工程路径（仅用于提示与证据）
+   * @param next 切换后的工程路径
+   */
+  function resetProjectRunState(prev, next){
+    var wasActive = (AIP.active === true);
+    window.__projRun.resets += 1;
+    window.__projRun.lastFrom = String(prev || '');
+    window.__projRun.lastTo = String(next || '');
+    if (wasActive) { window.__projRun.activeAtSwitch += 1; }
+
+    STEP_SEEN = {};   // 换工程＝换一批落档，"这一步回读过了"的记忆必须一起清
+    STEP_FILL = { n: 0, last: '', err: '' };
+
+    // ① 停掉两条轮询。不停的话 3 秒后就把**新工程**的落档画进来（看着像"它自己开始了"），
+    //    或者继续挂着旧结论——两种都是在拿别人的数据显示在新工程名下。
+    if (AIP.timer) { clearInterval(AIP.timer); AIP.timer = null; }
+    stopMigratePolling();
+
+    // ② 监管态内存清零。`AIP.active` 必须归零：`noteTurnEnded` 拿它判"这一轮是不是迁移"
+    //    （0.39.63 那课：不清它，普通问答也会被套上"迁移还没完成"的红卡）。
+    AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0,
+            cliPath: '', started: 0, finished: false, autoReported: false };
+    MIG.running = false; MIG.done = false; MIG.percent = 0; MIG.verdict = ''; MIG.deviceInRecord = false;
+    MIG_WAS_RUNNING = false;
+    window.__autoReport = null;
+    window.__turnEnd = null;
+
+    // ③ 迁移屏：进度条 / 时间轴 / 结果卡 / AI 过程消息全部回到"没跑过"
+    if ($('migrateBar')) { $('migrateBar').style.width = '0%'; }
+    renderMigrate({ rows: [] });
+    if ($('migratePct')) { $('migratePct').textContent = '—'; $('migratePct').title = ''; }
+    if ($('migrateResultCard')) { $('migrateResultCard').style.display = 'none'; }
+    if ($('migrateResult')) { $('migrateResult').innerHTML = ''; }
+    if ($('migrateFiles')) { $('migrateFiles').innerHTML = ''; }
+    if ($('migrateVerdictShort')) { $('migrateVerdictShort').textContent = ''; }
+    if (typeof migAiReset === 'function') { migAiReset(); }
+
+    // ④ 按钮：**用户报的「不能点」就这一条**——换工程即恢复可点。
+    //    「停止」只在监管态真在跑时留着（别让人以为有活可停）。
+    if ($('btnAiPort')) { $('btnAiPort').disabled = false; }
+    if ($('btnMigrateStart')) { $('btnMigrateStart').disabled = false; }
+    if ($('btnMigrateStop')) { $('btnMigrateStop').disabled = !wasActive; }
+    if ($('btnAiPortReset')) { $('btnAiPortReset').disabled = false; }
+    if ($('btnAiPortContinue')) { $('btnAiPortContinue').style.display = 'none'; }
+
+    if ($('migrateNote')) {
+      $('migrateNote').style.color = wasActive ? 'var(--warn)' : '';
+      $('migrateNote').textContent = wasActive
+        ? ('已切到新工程（' + (basenameOf(next) || next) + '），这里的进度已按新工程重置；'
+           + '但上一个工程（' + (basenameOf(prev) || prev) + '）那次 AI 迁移**没有被停止**，'
+           + '它可能还在那边继续干活。要它停就点「停止」。')
+        : ('换了工程（' + (basenameOf(next) || next) + '）：这里还没跑过。'
+           + '填好路径点「🤖 开始 AI 自动迁移」；要沿用旧落档就点「↻ 从头重跑」把旧档归档。');
+    }
+
+    // ⑤ ⑤⑥⑦ 三屏的数据面板与流水线/产物卡：同属"上一次在这个工程上跑出来的"。
+    //    状态对象清成**空对象**（不是初始形状）：`renderPipeline` 判 `dp.ok === false` 会报
+    //    「安装失败」——把"没跑过"渲染成"失败"是另一种谎报（§4-63 同族）。
+    BUILD = {};
+    HAP = {};
+    SIGN = {};
+    DEPLOY = {};
+    VERIFY = { ok: false, rate: -1, pass: 0, total: 0, limit: 0, unknown: 0, shots: 0, md: '', error: '' };
+    REPORT = { ok: false, project: '', did: [], undone: [], need: [], stats: {},
+               paths: { md: '', html: '', json: '' }, conclusion: '', generatedAt: '',
+               autoCount: 0, artifacts: [], error: '',
+               risk: { level: '', label: '', summary: '', hi: 0, items: [] } };
+    restorePanelSnapshot();
+    try { renderPipeline(); renderArtifacts(); } catch (e) { /* 面板重绘失败不影响主流程 */ }
+    // 左栏徽标按新工程重读落档（外层 setCurrentProject 也会刷，这里保证"内层改状态"后立刻一致）
+    if (typeof window.__railBridge === 'function' && String(next || '').length > 0) {
+      try { window.__railBridge(String(next)); } catch (e) {}
+    }
+    reportUi('project-switch-reset');
+    return true;
+  }
+  // 外层 `setCurrentProject()` 经此桥调用（§4-107：外层不许直接引用内层符号）
+  window.__onProjectSwitch = resetProjectRunState;
+
+  /* ===== 按落档回填面板（0.39.87）=====
+   * 用户报障原话：「执行 AI 自动迁移后会自动执行左侧的迁移画像和依赖扫描等操作，但各个项里面的内容
+   * 没有更新，看到的可迁移度等仍是空的」。根因：① 迁移画像 / ② 依赖扫描两屏只认**人点按钮**
+   * （`btnScan` / `btnDeps`），AI 通过 `lingqu-cli scan|deps` 把落档写得整整齐齐，界面却没人去读——
+   * 于是"AI 说跑完了"与"屏上什么都没有"同时成立，最容易被当成"AI 根本没干活"。
+   * 处置：后端 `action:"load"`（纯读盘、不重跑）→ 进屏自动回填 + AI 轮询里该步刚有结论时回填。
+   * 口径：显示的是**落档里的数**，不是现场重算的另一份（§0.1「落档说了算」）——
+   *       重算会得到"现在这一刻的数"，用户拿它去对 `.lingqu/scan/<工程>.json` 就会对不上。
+   */
+  var STEP_FILL = { n: 0, last: '', err: '' };
+  var STEP_SEEN = {};   // 「工程|步骤 → 上次看到跑了没」，只在 ran 由假变真时回读一次
+
+  function pathOfStepScreen(step){
+    var inp = (step === 'scan') ? $('scanPath') : $('depsPath');
+    var p = (inp && inp.value) ? String(inp.value).trim() : '';
+    if (p) { return p; }
+    try { return String(projectPathValue() || '').trim(); } catch (e) { return ''; }
+  }
+
+  /**
+   * 按落档回填 ① 迁移画像 / ② 依赖扫描。
+   * @param step 'scan' | 'deps'
+   * @param why  触发原因（'enter' 进屏 / 'ai' AI 刚跑完），只用于提示措辞与证据
+   */
+  function fillStepFromRecord(step, why){
+    var p = pathOfStepScreen(step);
+    if (!p) { return false; }
+    var isScan = (step === 'scan');
+    var cmd = isScan ? 't2h:scan' : 't2h:deps';
+    var render = isScan ? renderScan : renderDeps;
+    var noteEl = isScan ? $('scanNote') : $('depsNote');
+    invoke(cmd, { path: p, action: 'load' }).then(function(r){
+      if (r && r.ok === true) {
+        render(r);
+        STEP_FILL.n += 1;
+        STEP_FILL.last = step + '@' + (why || '');
+        if (noteEl) {
+          noteEl.textContent = '已按落档回读：' + String(r.out || '')
+            + (why === 'ai' ? '（AI 刚跑完这一步）' : '（进屏按落档回填，不是重新扫描）');
+        }
+        reportUi('step-fill:' + step);
+        return;
+      }
+      // 没落档：**不清屏、也不写"扫描失败"**（把"没跑过"渲染成"失败"是另一种谎报，§4-63 同族），
+      // 只在提示里如实说，并把原因留着（失败原因不进返回值 = 等于没有，§4-26 同族）。
+      STEP_FILL.err = (r && r.error) ? String(r.error) : '回读落档失败';
+      if (noteEl) { noteEl.textContent = '还没跑过——' + STEP_FILL.err; }
+    }).catch(function(e){ STEP_FILL.err = String((e && e.message) ? e.message : e); });
+    return true;
+  }
+
+  /** AI 迁移轮询里发现"某步刚有结论"→ 立刻回读那一屏（否则 AI 干完了、屏上还是空的） */
+  function syncStepsFromRows(rows, projPath){
+    if (!rows || !rows.length) { return; }
+    var base = normPathKey(String(projPath || pathOfStepScreen('scan') || ''));
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      var step = String(r.step || '');
+      if (!step) { continue; }
+      var key = base + '|' + step;
+      // `ran` 是"这一步有没有跑过"的位（migrate.cj 的 MigrateRow.ran）：
+      // 没跑过与跑了没过是两个不同的位，只有"由假变真"才值得回读（§4-63）。
+      var ranNow = (r.ran === true);
+      var was = (STEP_SEEN[key] === true);
+      STEP_SEEN[key] = ranNow;
+      if (!ranNow || was) { continue; }
+      if (step === 'scan' || step === 'deps') { fillStepFromRecord(step, 'ai'); }
+    }
+  }
+
   window.__onScreen = function(name){
     // ① 项目/环境：进屏就按落档刷新「最近项目」（0.39.49，原来那张表是写死的）
     if (name === 'env' && typeof window.__loadRecentProjects === 'function') { window.__loadRecentProjects(); }
+    // 0.39.87：① 迁移画像 / ② 依赖扫描 **进屏就按落档回填**——AI 自己跑过的那一步
+    // 不该在屏上空着（用户报障：「可迁移度等仍是空的」）。纯读盘，不重跑扫描。
+    if (name === 'profile') { try { fillStepFromRecord('scan', 'enter'); } catch (e) {} }
+    if (name === 'deps') { try { fillStepFromRecord('deps', 'enter'); } catch (e) {} }
     if (name !== 'report') { return; }
     // 0.39.85：进 ⑦ 屏先问一句"屏幕上这一代报告还算不算数"——
     // 没出过 / ⑥ 屏又验证过一次（可用率变了）/ 换了工程 → 自动按落档重出（纯读盘、秒级）
@@ -7356,6 +7580,22 @@ withBridge(function(tauri){
       aiPortVerdict: AIP.verdict || '',
       aiPortDirective: (typeof AIP.directiveChars === 'number') ? AIP.directiveChars : 0,
       aiPortCli: AIP.cliPath || '',
+      // 换工程清理（0.39.86）：用户实测「换了个新工程，AI 自动迁移还是上次执行完的状态、不能点」。
+      // 断言口径：projSwitches>0（真的换过）∧ projResets=projSwitches（每次都清过）∧ aiPortBtn=1（恢复可点）。
+      // projResetActive>0 表示"换工程时上一轮监管态还在跑"——那时按钮/面板照样清，但停止键必须留着。
+      projSwitches: (window.__projRun && typeof window.__projRun.switches === 'number') ? window.__projRun.switches : 0,
+      projResets: (window.__projRun && typeof window.__projRun.resets === 'number') ? window.__projRun.resets : 0,
+      projResetActive: (window.__projRun && typeof window.__projRun.activeAtSwitch === 'number') ? window.__projRun.activeAtSwitch : 0,
+      // 「🤖 开始 AI 自动迁移」此刻能不能点（0=silent 死按钮，1=可点）——只有它才是"点不动"的直接证据
+      aiPortBtn: (function(){ var b = document.getElementById('btnAiPort'); return (b && b.disabled !== true) ? 1 : 0; })(),
+      uiErrors: (function(){
+        var a = window.__uiErrors;
+        return (a && a.length) ? String(a.slice(-3).join(' | ')).slice(0, 200) : '';
+      })(),
+      // 换工程清理自检（LINGQU_UI_PROBE=projswitch）的结论：1=通过，0=没跑或不通过；失败原因见 note
+      projSwitchOk: (window.__projSwitch && window.__projSwitch.ok === true) ? 1 : 0,
+      projSwitchNote: (window.__projSwitch && window.__projSwitch.fail)
+        ? String(window.__projSwitch.fail).slice(0, 220) : '',
       // 行为轨迹行数（0.39.0：AI 对工程做了什么，落 <工程>/.lingqu/agent/trace.jsonl）
       agentTraceLines: (typeof AIP.traceLines === 'number') ? AIP.traceLines : 0,
       // WS 发送可观测（0.37.0 的教训：发送失败以前是静默的，会把"没发出去"误判成"cjh 没回"）
@@ -7502,6 +7742,14 @@ withBridge(function(tauri){
       scanBaseline: (window.__scan && window.__scan.baseline) || '',
       scanKind: SCAN.kind,
       scanRows: window.__scanRows || 0,
+      // 0.39.87：AI 跑完扫描/依赖后界面回读落档的证据。
+      // 断言口径：stepFillN>0 ∧ stepFillLast 含 'scan' 或 'deps' ∧ scanRows>0（① 屏不再是空的）。
+      // ① 屏的可迁移度总分（renderScan 里记在 window.__scanScore），用来断言"AI 跑完扫描后别再是空的"
+      scanScore: (typeof window.__scanScore === 'number') ? window.__scanScore : -1,
+      depsRows: (window.__deps && typeof window.__deps.rows === 'number') ? window.__deps.rows : 0,
+      stepFillN: STEP_FILL.n,
+      stepFillLast: String(STEP_FILL.last || ''),
+      stepFillErr: String(STEP_FILL.err || '').slice(0, 160),
       scanBlockers: window.__scanBlockers || 0,
       depsTotal: (window.__deps && window.__deps.total) || 0,
       depsPatch: (window.__deps && window.__deps.patch) || 0,
@@ -8103,6 +8351,53 @@ withBridge(function(tauri){
     // `pickRestoreProject(saved, recent)`，这里表驱动断言四种输入 + 两种垃圾输入，
     // 断言完顺手把当前工程写一次 localStorage —— 好让**下一次正常启动**能证明
     // `projRestored=saved` 这条真实路径（纯函数正确 ≠ 启动真的用上了它）。
+    if (mode === 'projswitch') {
+      // 换工程清理自检（0.39.86，用户实测「换了个新工程，AI 自动迁移还是上次执行完的状态、不能点」）。
+      // 两段：① 伪造"上一轮跑完的现场"（按钮禁用 + 面板有值 + 监管态 finished）→ 换工程 →
+      //       断言按钮恢复可点、进度/面板回到"没跑过"、监管态归零、「停止」置灰；
+      //       ② 伪造"监管态还活着"（active=true）→ 换工程 → 面板照样清，但「停止」必须留着、
+      //       提示必须说清"上一个工程那次没被停止"（不许悄悄当它没发生过）。
+      var pa = 'E:/tmp/lingqu-probe-pa', pb = 'E:/tmp/lingqu-probe-pb';
+      setTimeout(function(){
+        var fails = [];
+        setCurrentProject(pa);
+        var r0 = (window.__projRun && window.__projRun.resets) || 0;
+        // ① 伪造跑完的现场
+        if ($('btnAiPort')) { $('btnAiPort').disabled = true; }
+        if ($('hapBuilt')) { $('hapBuilt').textContent = '成功'; }
+        if ($('verRate')) { $('verRate').innerHTML = '100<small>%</small>'; }
+        if ($('migratePct')) { $('migratePct').textContent = '100%　真机已连接'; }
+        AIP.active = false; AIP.finished = true;
+        var before = { btn: ($('btnAiPort') && $('btnAiPort').disabled === true) ? 1 : 0,
+                       hap: $('hapBuilt') ? $('hapBuilt').textContent : '' };
+        setCurrentProject(pb);
+        var r1 = (window.__projRun && window.__projRun.resets) || 0;
+        if (before.btn !== 1) { fails.push('前置：按钮本应是禁用的（探针没伪造成功）'); }
+        if (before.hap !== '成功') { fails.push('前置：HAP 面板本应写着上次的值'); }
+        if (r1 !== r0 + 1) { fails.push('重置没被调用（resets ' + r0 + '→' + r1 + '）'); }
+        if ($('btnAiPort') && $('btnAiPort').disabled === true) { fails.push('换工程后按钮仍不可点'); }
+        if (AIP.active === true || AIP.finished === true) { fails.push('监管态没归零（active/finished 仍为真）'); }
+        if ($('hapBuilt') && $('hapBuilt').textContent !== '—') { fails.push('HAP 面板没回到占位（' + $('hapBuilt').textContent + '）'); }
+        if ($('migratePct') && $('migratePct').textContent !== '—') { fails.push('进度百分比没清（' + $('migratePct').textContent + '）'); }
+        if ($('verRate') && String($('verRate').textContent).indexOf('100') >= 0) { fails.push('可用率面板没清（' + $('verRate').textContent + '）'); }
+        if ($('btnMigrateStop') && $('btnMigrateStop').disabled !== true) { fails.push('没有在跑时「停止」应置灰'); }
+        if ($('migrateNote') && String($('migrateNote').textContent).indexOf('换了工程') < 0) {
+          fails.push('提示没说明换了工程（' + String($('migrateNote').textContent).slice(0, 40) + '）');
+        }
+        // ② 伪造"监管态还活着"
+        AIP.active = true;
+        setCurrentProject(pa);
+        if (AIP.active === true) { fails.push('② 换工程后监管态没归零'); }
+        if ($('btnMigrateStop') && $('btnMigrateStop').disabled === true) { fails.push('② 上一轮还在跑时「停止」不该置灰'); }
+        if ($('migrateNote') && String($('migrateNote').textContent).indexOf('没有被停止') < 0) {
+          fails.push('② 提示没说清"上一个工程那次没被停止"');
+        }
+        window.__projSwitch = { ok: fails.length === 0, fail: fails.join(' | '),
+                                resets: r1, activeAtSwitch: (window.__projRun && window.__projRun.activeAtSwitch) || 0 };
+        reportUi('projswitch-probe');
+      }, 1200);
+      return;
+    }
     if (mode === 'store') {
       // 存储自检（0.39.44）：写一个键 → 刷新页面 → 读回。用来判定"本应用里 localStorage
       // 到底能不能跨刷新持久化"（写两次启动都没生效，怀疑自定义 scheme 下不可用）。
@@ -8551,10 +8846,30 @@ function setCurrentProject(p){
     reportUi('project-url-guard');
     return;
   }
+  var prev = String((PROJECT && PROJECT.path) || '');
+  // 「真换了工程」才重置。判据用 normPathKey：同一工程会被写成 `E:\x`（后端回投）与 `E:/x`
+  // （输入框/记住的），直接 `===` 会判成两个工程，于是"重复设为同一工程"也会把面板清掉（§4-95 同族）。
+  var changed = (normPathKey(prev) !== normPathKey(v));
   PROJECT.path = v;
   if (PROJECT.path) { rememberProject(PROJECT.path); }
   var top = $('projPath');
   if (top) { top.value = PROJECT.path; }
+  if (changed) {
+    // 逐步覆盖态（✎ 单独指定别的工程）**跟着旧工程名走会指向错误目录**，一并清掉。
+    PATH_OVERRIDE = {};
+    if (window.__projRun) { window.__projRun.switches += 1; }
+    // 上一轮在这个工程上的运行态（AI 迁移按钮 / 进度 / 结果卡 / ⑤⑥⑦ 数据面板）必须清干净，
+    // 否则新工程名下挂着旧工程的数字，且「🤖 开始 AI 自动迁移」会一直是死的（0.39.86 用户实测）。
+    // 走桥不直接调：内层符号在这里拿不到（§4-107）。
+    if (typeof window.__onProjectSwitch === 'function') {
+      try { window.__onProjectSwitch(prev, v); }
+      catch (e) { window.__uiErrors = (window.__uiErrors || []); window.__uiErrors.push('projSwitch: ' + (e && e.message ? e.message : e)); }
+    } else {
+      // 桥没挂上就**别装作清过了**：留证据，别让下一轮的"为什么还是旧状态"无从查起。
+      window.__uiErrors = (window.__uiErrors || []);
+      window.__uiErrors.push('projSwitch: 桥未就绪（window.__onProjectSwitch 缺失）');
+    }
+  }
   syncProjectEchoes();
   renderTopProj();   // 顶栏胶囊跟着换（0.39.28：原来它写死成 habit-tree）
   refreshRailBadges();   // 左栏步骤徽标跟着工程走（0.39.41：原来是写死的「待接入」）

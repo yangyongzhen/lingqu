@@ -386,6 +386,100 @@ func startLifecycleWaiter(app: TauriApp): Unit {
  * 口径见 `docs/P2-scan-口径草案.md`：一项 = 迁移单元；未知是禁用值。
  * 结果同时落 `.lingqu/scan/<工程名>.json`（证据留档，报告从这里派生）。
  */
+/**
+ * 只读回读**扫描**落档（0.39.87）：`t2h:scan {action:"load"}` 走这里。
+ *
+ * 为什么要它：AI 自动迁移时 cjh 会自己跑 `lingqu-cli scan`，落档写得整整齐齐，可界面上的
+ * 「可迁移度 / 覆盖率 / 五类清单」**仍旧是空的**——那些面板原先只在人点「开始扫描」时才渲染
+ * （用户实测原话：「会自动执行左侧的迁移画像和依赖扫描等操作，但各个项里面的内容没有更新」）。
+ * 为什么不干脆重跑一遍扫描：那样页面显示的是"现在重算的数"，可能是与落档不同的另一份，
+ * 正好撞上本项目最怕的那类谎报（§0.1「落档说了算」）。**读盘回投，页面看到的就是落档。**
+ */
+func scanRecordResponse(path: String): JsonObject {
+    var res = JsonObject()
+    var nm = projectNameOf(path)
+    if (nm.size == 0) {
+        nm = "project"
+    }
+    nm = sanitizeFileName(nm)
+    let outFile = lqPathOf(path, "scan/${nm}.json")
+    res.put("project", JsonString(nm))
+    res.put("out", JsonString(outFile))
+    if (!exists(Path(outFile))) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("还没有扫描落档（${outFile}）：先点「开始扫描」，或让 agent 跑 " +
+            "lingqu-cli scan --path <工程>"))
+        return res
+    }
+    var root = JsonValue.fromStr("{}")
+    try {
+        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("读扫描落档失败：${e}"))
+        return res
+    }
+    res.put("ok", JsonBool(true))
+    res.put("loaded", JsonBool(true))
+    res.put("scan", root)
+    // metrics / score 落档里就自带（`lingqu/scan/v1` 自包含这两段），原样透传，
+    // 前端两处取值（res.metrics 与 res.scan.metrics 兜底）才不会打架。
+    var obj = JsonObject()
+    match (root.kind()) {
+        case JsonKind.JsObject => obj = root.asObject()
+        case _ => ()
+    }
+    match (obj.get("metrics")) {
+        case Some(v) => res.put("metrics", v)
+        case None => ()
+    }
+    match (obj.get("score")) {
+        case Some(v) => res.put("score", v)
+        case None => ()
+    }
+    return res
+}
+
+/**
+ * 只读回读**依赖矩阵**落档（0.39.87）：`t2h:deps {action:"load"}` 走这里。
+ * 与 `scanRecordResponse` 同因同理——AI 跑完依赖扫描，② 屏的矩阵不该还是空的。
+ */
+func depsRecordResponse(path: String): JsonObject {
+    var res = JsonObject()
+    var nm = projectNameOf(path)
+    if (nm.size == 0) {
+        nm = "project"
+    }
+    nm = sanitizeFileName(nm)
+    let outFile = lqPathOf(path, "deps/${nm}.json")
+    res.put("project", JsonString(nm))
+    res.put("out", JsonString(outFile))
+    if (!exists(Path(outFile))) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("还没有依赖矩阵落档（${outFile}）：先点「扫描依赖」，或让 agent 跑 " +
+            "lingqu-cli deps --path <工程>"))
+        return res
+    }
+    var root = JsonValue.fromStr("{}")
+    try {
+        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("读依赖矩阵落档失败：${e}"))
+        return res
+    }
+    res.put("ok", JsonBool(true))
+    res.put("loaded", JsonBool(true))
+    // error 留空：落档内部自带 outError，页面按 `r.error || deps.outError` 兜底
+    res.put("error", JsonString(""))
+    res.put("deps", root)
+    return res
+}
+
 public class ScanCommand <: CommandHandler {
     public init() {}
 
@@ -431,6 +525,12 @@ public class ScanCommand <: CommandHandler {
             res.put("ok", JsonBool(false))
             res.put("error", JsonString(badPath))
             return res
+        }
+
+        // ---- action=load（0.39.87）：**只回读落档，不重跑扫描** ----
+        // 界面在"进 ① 屏"和"AI 刚把扫描这一步跑完"时走这条，页面看到的就是 agent 写下的那份。
+        if (argStr(args, "action", "") == "load") {
+            return scanRecordResponse(path)
         }
 
         // 工程名取路径末段（"/" 与 "\" 都认——Windows 路径只按 "/" 切会把整条路径当名字）
@@ -1511,6 +1611,11 @@ public class DepsCommand <: CommandHandler {
             return res
         }
 
+        // ---- action=load（0.39.87）：只回读依赖矩阵落档，不重跑 ----
+        if (argStr(args, "action", "") == "load") {
+            return depsRecordResponse(path)
+        }
+
         var name = projectNameOf(path)
         if (name.size == 0) {
             name = "project"
@@ -1734,6 +1839,16 @@ public class UiReportCommand <: CommandHandler {
         o.put("railFail", JsonString(argStr(args, "railFail", "")))
         o.put("aiPortDirective", JsonInt(argInt(args, "aiPortDirective", 0)))
         o.put("aiPortCli", JsonString(argStr(args, "aiPortCli", "")))
+        // 换工程清理（0.39.86）：用户实测「换了个新工程，AI 自动迁移还是上次执行完的状态、不能点」。
+        // 断言口径：projSwitches>0 且 projResets==projSwitches（每次切换都清过）且 aiPortBtn=1（按钮恢复可点）。
+        o.put("projSwitches", JsonInt(argInt(args, "projSwitches", 0)))
+        o.put("projResets", JsonInt(argInt(args, "projResets", 0)))
+        o.put("projResetActive", JsonInt(argInt(args, "projResetActive", 0)))
+        o.put("aiPortBtn", JsonInt(argInt(args, "aiPortBtn", 0)))
+        o.put("uiErrors", JsonString(argStr(args, "uiErrors", "")))
+        // 换工程清理自检（LINGQU_UI_PROBE=projswitch）：1=通过；失败原因在 note（0.39.86）
+        o.put("projSwitchOk", JsonInt(argInt(args, "projSwitchOk", 0)))
+        o.put("projSwitchNote", JsonString(argStr(args, "projSwitchNote", "")))
         // 行为轨迹行数（0.39.0）
         o.put("agentTraceLines", JsonInt(argInt(args, "agentTraceLines", 0)))
         // WS 发送可观测（0.37.0）：发送失败数 / 最后一次失败原因 / 收到的帧类型计数
@@ -1817,6 +1932,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("scanBaseline", JsonString(argStr(args, "scanBaseline", "")))
         o.put("scanKind", JsonString(argStr(args, "scanKind", "")))
         o.put("scanRows", JsonInt(argInt(args, "scanRows", 0)))
+        // 按落档回填的证据（0.39.87）：AI 跑完 scan/deps 后 ①② 屏应当不再空
+        o.put("scanScore", JsonInt(argInt(args, "scanScore", -1)))
+        o.put("depsRows", JsonInt(argInt(args, "depsRows", 0)))
+        o.put("stepFillN", JsonInt(argInt(args, "stepFillN", 0)))
+        o.put("stepFillLast", JsonString(argStr(args, "stepFillLast", "")))
+        o.put("stepFillErr", JsonString(argStr(args, "stepFillErr", "")))
         o.put("scanBlockers", JsonInt(argInt(args, "scanBlockers", 0)))
         // P3 依赖矩阵指标（t2h:deps 探针回投；depsTotal=0 且 depsOut 空表示未扫）
         o.put("depsTotal", JsonInt(argInt(args, "depsTotal", 0)))

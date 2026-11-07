@@ -5,7 +5,72 @@
 
 ---
 
-## [0.39.85] - 2026-11-07
+## [0.39.87] - 2026-11-07
+
+**主题**：**"AI 说跑完了，屏上还是空的"**。用户实测原话：「执行 AI 自动迁移后会自动执行左侧的
+迁移画像和依赖扫描等操作，但各个项里面的内容没有更新，看到的可迁移度等仍是空的」。
+根因：① 迁移画像 / ② 依赖扫描两屏**只认人点按钮**（`btnScan` / `btnDeps`）才渲染；AI 通过
+`lingqu-cli scan|deps` 把落档写得整整齐齐，界面却没人去读。于是"AI 说扫描已完成"与"可迁移度空白"
+同时成立——最容易被当成"AI 根本没干活"的那种分裂。
+
+### Added
+- `t2h:scan` / `t2h:deps` 新增 `action: "load"`：**纯读盘回投落档，不重跑扫描**
+  （`scanRecordResponse` / `depsRecordResponse`）。为什么不直接重跑：重跑得到的是"现在这一刻的数"，
+  用户拿它去对 `.lingqu/scan/<工程>.json` 就会对不上——本项目最怕的正是这类"屏幕与落档不同代"
+  （§0.1「落档说了算」）。落档不存在时 `ok=false` + `loaded=false` + 说明原因，**绝不把"没跑过"
+  渲染成"扫描失败"**（§4-63 同族）。
+- 进 ① / ② 屏自动按落档回填（`fillStepFromRecord`）。
+- AI 迁移轮询里检测「某步刚有结论」（`MigrateRow.ran` 由假变真）→ 立刻回读该屏
+  （`syncStepsFromRows`）；换工程时 `STEP_SEEN` / `STEP_FILL` 一并清空，避免旧记忆挡住新工程。
+- `ui_report` 新增 `scanScore` / `depsRows` / `stepFillN` / `stepFillLast` / `stepFillErr`
+  （前端 + `UiReportCommand` 白名单两处一起加，§4-60）。断言口径：`stepFillN>0 ∧ scanRows>0`。
+
+### Known gaps
+- **构建 / HAP / 装配 / 部署 / 验证** 五屏尚未提供同类 `action:"load"`：它们的落档形态各自不同，
+  且"回读"必须避免触发重编/重装。本轮只覆盖用户报障点名的 ① 迁移画像与 ② 依赖扫描。
+- 回读行为**未实机目测**：本轮验证到"编译通过 + 六道闸全绿 + 页面脚本语法通过"。
+
+---
+
+
+**主题**：**"换了个工程，上一轮的运行态还挂在那儿"**。用户实测原话：「在上次完成移植的基础上
+重新选了个新项目，但 AI 自动迁移还是上次执行完的状态，不能点」。
+两条根因叠在一起：① `#btnAiPort` **只在启动失败 / invoke 异常**两个分支恢复可用，一旦 AI 接手就
+再没有任何一处把它置回 `false` —— 整个进程生命周期内它都是死的；② `setCurrentProject()` 只换
+路径回显 + 顶栏胶囊 + 左栏徽标，**运行态一个字没清**：进度条、时间轴、结果卡、AI 过程消息，
+以及 ⑤⑥⑦ 三屏的数据面板全都还挂着上一个工程的数字。
+
+口径：这些面板是「**这一轮、在这个工程上**观测到的结果」，换了工程就等于「这里还没跑过」——
+宁可不显示，也不许把上个工程的数字摆在新工程名下（与 §4-94「不许拿示意值冒充数据」同族）。
+
+### Fixed
+- **换工程即清运行态**（`resetProjectRunState`，经 `window.__onProjectSwitch` 桥由外层
+  `setCurrentProject` 调用，§4-107）：停掉迁移/AI 两条轮询 → `AIP`/`MIG` 归零 → 进度条、时间轴、
+  结果卡、AI 过程消息回到"没跑过" → `#btnAiPort`/`#btnMigrateStart`/`#btnAiPortReset` 恢复可点、
+  `#btnMigrateStop` 只在监管态真在跑时留着 → `BUILD`/`HAP`/`SIGN`/`DEPLOY`/`VERIFY`/`REPORT`
+  清成空对象并由快照还原 ⑤⑥⑦ 面板占位 → 左栏徽标按新工程重读落档。
+- **判据用 `normPathKey`**：`E:\x` 与 `E:/x` 是同一个工程，直接 `===` 会把"重复设为同一工程"也当成
+  切换、把面板白白清掉（§4-95 同族）。
+- **逐步覆盖态（✎ 单独指定别的工程）一并清掉**：它跟着旧工程名走会指向错误目录。
+- **监管态还活着时不许悄悄当它没发生过**：切换时若 `AIP.active` 为真，面板照样按新工程重置，
+  但提示里明写「上一个工程那次迁移**没有被停止**」，「停止」保持可点。
+- **不再"停了/跑完了就再也起不来"**：`renderAiPort` 在 `finished===true || active===false` 时恢复
+  按钮；点「停止」时也恢复——这是"换工程"之外的同一条问题的另一半。
+
+### Added
+- `ui_report` 新增 `projSwitches` / `projResets` / `projResetActive` / `aiPortBtn` / `uiErrors`
+  （前端 `reportUi` 与 `UiReportCommand` 白名单**两处一起加**，§4-60）。
+  断言口径：`projSwitches>0 ∧ projResets==projSwitches ∧ aiPortBtn=1`。
+- 自检 `LINGQU_UI_PROBE=projswitch`：伪造"上一轮跑完的现场"（按钮禁用 + 面板有值 + 监管态 finished）
+  → 换工程 → 断言按钮恢复、`AIP` 归零、`hapBuilt`/`migratePct`/`verRate` 回到占位、「停止」置灰、
+  提示含「换了工程」；再伪造 `AIP.active=true` → 换工程 → 断言「停止」**不**置灰、提示含
+  「没有被停止」。结论回投 `projSwitchOk` / `projSwitchNote`。
+
+### Known gaps
+- `LINGQU_UI_PROBE=projswitch` 已写、**未在实机跑过**；本轮只验证到"页面脚本语法通过 + 门禁全绿"。
+
+---
+
 
 **主题**：**"报告写着 66%，落档写着 100%"**。用户看着 ⑦ 迁移报告问「核心功能可用率
 （A4 ≥80%）怎么还是 66%」。核账：`.lingqu/verify/rust-music-2.json` 与
