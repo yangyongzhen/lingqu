@@ -34,9 +34,13 @@
 
 ### 验证范围
 
-- ①②④⑤ + 3b 六项门禁全绿（build 0 warning / test TOTAL=486 全绿 / check / js-syntax / desktop / cli）。
-- 真实 note-gen-2 回读**尚未在界面上取证**：断言口径 `ui_report.reportLoaded=1` 且 `reportSource="record"`，
-  下次开窗进 ⑦ 屏时抓一次；本轮只在单测与命令层验证。
+- 六项门禁全绿（build 0 warning / test TOTAL=486 FAILED=0 ERROR=0 / check `com.lingqu.migrator@0.39.98` /
+  js-syntax / build-app 0 warning / build-cli 0 warning）。
+- **界面已取证**（`LINGQU_UI_PROBE=shots` 两轮遍历 8 屏，工程恢复为 note-gen-2，`.lingqu/ui-report.json`）：
+  第一轮进 ⑦ 屏按 0.39.85 自动重出 1 次（`reportSource=generated`，`reportAutoCount=1`）；
+  第二轮进 ⑦ 屏同一代不再重出、走回读 ⇒ **`reportLoaded=true` / `reportSource=record`**，
+  且 `reportRate=-1` 与落档 `stats.verifyRate=-1`（尚未验证）一致 —— 正是原来
+  `reportOk=false / reportRate=-1` 那处假象的反面。`reportGeneratedAt=2026-11-08T20:39:09`。
 
 ---
 
