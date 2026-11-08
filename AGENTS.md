@@ -2,7 +2,7 @@
 
 > 本文件是本项目的**开发契约**：人类开发者与 AI 助手共同遵守，由 agent 自动加载注入。
 > **改代码前先读 §1 门禁与 §2 架构契约。**
-> 适用版本：**0.39.94**（2026-11-08），与 `CHANGELOG.md` 同步维护。
+> 适用版本：**0.39.96**（2026-11-08），与 `CHANGELOG.md` 同步维护。
 > 当前进度见 `docs/进度记录.md`；**阶段任务与技术验收判据见 `docs/实施路线图.md`**；
 > 换机器/换会话先读 `docs/会话交接.md`；需求落地状态见 `docs/需求追踪.md`；决策与理由见 `docs/设计决策记录.md`。
 
@@ -299,6 +299,7 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 | 146 | 轮次预算「明明抬到了 120」，下一个回合还是 **41 轮**就断；一查 `~/.cjh/settings.json` 里仍是 `max_iterations: 40` | `POST /api/settings` 只改**引擎内存**；旧 `already` 判据只看 live 值 ⇒ 判定"已满足"、**不落文件** ⇒ 引擎一重启回落 40（`cjh.log` 里 `41 rounds` 实测 15 次）。处置：`iterBudgetSatisfiedOf(liveValue, fileValue, target)` —— **两处都达标才算满足**；live 达标时也照样把文件抬上去；文件没落成就在返回值里明写「重启会回落」，**不许报 already**。**判据：凡是"设置类"改动，验收看运行期实际读到的值 + 落盘值两处**，别信其中一处（§4-128 的同一族，这次是"被内存值骗"）（0.39.91） |
 | 147 | 一键迁移跑到签名这步**没弹出网页让登录 AGC**，用户只能看着"停了" | 两层夹击：① **agent 没跑 `sign --login` 就直接 `sign --auto`** —— 它拿到的只是"token 可能已失效，重跑 `sign --login`"这句 stdout，而**CLI 的登录链接只打到 stdout，人看不见**；② 应用侧"回合结束自动起登录"的判据**只看最后一条工具报错**（`CJ.lastToolErr`）——现场卡点在中间的 `sign --auto`，随后 `deploy` 也失败把它盖掉了 ⇒ 判定不触发、入口一次没递出去。处置：`CJ.needLoginSeen` **整回合留痕**（任何一条工具失败命中 `loginHintOf` 就记下，回合结束据此起登录并给可点按钮），`loginHintOf` 同时认中文「登录」与英文 `login` / `token 可能已失效` / `拉团队列表失败`。**两条判据**：① "需要人动手"的信号**不能存在"最后一条"里**——同一回合后面的失败会把它盖掉（§4-113 的同族升级版）；② 工具已经把能力（`sign --login`）做出来了，**文案却还写"去 DevEco 手点"** ⇒ agent 照着做就只能停在等人（§4-130 同族）。已把 `sign.cj` / `main.cj` 里 9 处 DevEco 指路改成 `lingqu-cli sign --login` + `sign --auto`（0.39.91） |
 | 148 | `sign --auto` 明明全套成功（新证书 + 含本机 UDID 的 profile + `signingConfigs` 写回、HAP 出 signed、真机装上并启动、verify 100%），报告却写「8 步完成 7/8（87%）」、`nextStep` 仍指 `sign`，断点板也当这一步没跑过 | **命令做成了、落档没写**：`t2h:sign` 的 `--auto` 分支从 3237 一路 `return res4`，**没有一处**写 `.lingqu/sign/<工程>.json`（只有"体检"路径写）⇒ 消费方读到的还是几小时前的旧档，"签名跑过了"这件事在证据里根本不存在；现场两个数字并排打架（`hap.signed=true` 与 `sign.mode` 未知）。**判据**：① 凡是有落档 schema 的步骤，**每一条出口都要落档**（成功/失败/体检/自动），别只在"人点的那条路"上写；② 看得到产物（有 signed HAP）**不等于**这一步被记录——真值只认落档（§0.1）。处置：`--auto` 出口补写 `lingqu/sign/v1`（`mode{mode,modeLabel,canInstallDevice}` + `by=auto` + `autoSign`，失败带 `error` 与 `nextStep` 指引），实测报告 `stepPercent` 87 → 100、`nextStep` 消失（0.39.92） |
+| 149 | 设置页环境体检把 `hdc 设备桥` 与 `llvm-mingw（Windows 链接前提）` 双双标「缺失」，用户当场反问「这些是不是准确？llvm-mingw 跟移植不相关吧，不相干的不需要展示」——可本机两者都装着（`hdc.exe` 在 `DEVECO_HOME` 那套 SDK 里；`x86_64-w64-mingw32-clang.exe` 在 `C:\tool\llvm-mingw-20260324-ucrt-x86_64\bin`，只在 PATH 上） | **体检自己拼了一份路径解析**，于是两根老坑一起复现：① `hdc` 用**裸 `DEVECO_SDK_HOME`** 拼候选，而该变量还指着已删除的旧 DevEco（§4-38 同族）——仓里明明有验过存在性的 `hdcPathOr()`；② `llvm-mingw` 只认一条写死路径，而**能不能用取决于 PATH 能不能按名字找到它**（cargo 是按名字找链接器的），发行目录名还带版本号。**三条判据**：① 体检的判定要问对问题——「构建时能不能跑到」而不是「某个目录里有没有文件」，能复用就复用已有解析（§4-33 单一构造点，别在体检里再拼一份）；② 路径类环境变量**验存在才采用**，过期值比没配更坏；③ 项要标明**影响哪一步**（`scope`：交叉编译 / HAP 装配 / 真机部署 / AI 面板 / 仅 Windows 主机），不适用当前宿主机的项**整项不出现**，否则「缺 N 项」把人吓去修不相关的东西。处置：`hdc`→`hdcPathOr()`、NDK→两路候选按 clang 判定、`llvm-mingw`→`llvmMingwClangCandidates()`（PATH 各段 + `%SystemDrive%\tool`/`%ProgramFiles%` 下的版本化目录）且非 Windows 不展示；`ui_report` 增 `envMissIds/envScopes` 供断言（0.39.95） |
 
 
 

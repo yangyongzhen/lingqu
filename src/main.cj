@@ -75,9 +75,24 @@ public func firstExisting(cands: Array<String>): String {
 
 /** 体检项：ok 由「找到与否」决定，缺了给一句「缺了就怎么办」 */
 func addCheck(arr: JsonArray, id: String, label: String, found: String, hint: String): Unit {
+    addCheckScoped(arr, id, label, "", found, hint)
+}
+
+/**
+ * 带「它影响哪一步」的体检项（0.39.95）。
+ *
+ * 起因是用户实测的一句诘问：「这些是不是准确？llvm-mingw 跟移植不相关吧，不相干的不需要展示」。
+ * 症状：面板把「宿主机构建前提」和「移植必需」混在同一排、缺失时都只写「缺失」，
+ * 于是看得出「处处阻塞」，却看不出「这项该不该管」——而两项其实在本机都装着，
+ * 报缺失本身就是**判定错**（hdc 走的是过期环境变量，llvm-mingw 只认一条写死路径）。
+ * 处置：① 判定改成「真的能跑到」（复用具名解析 / 看 PATH）；② 每项标出影响面（scope），
+ * 界面据此显示小字；③ 不适用当前宿主机的项**整项不出现**，不拿它污染「缺 N 项」。
+ */
+public func addCheckScoped(arr: JsonArray, id: String, label: String, scope: String, found: String, hint: String): Unit {
     var o = JsonObject()
     o.put("id", JsonString(id))
     o.put("label", JsonString(label))
+    o.put("scope", JsonString(scope))
     let ok = found.size > 0
     o.put("ok", JsonBool(ok))
     o.put("path", JsonString(found))
@@ -201,59 +216,67 @@ public class EnvCommand <: CommandHandler {
 
     public func handle(_: String, _: JsonObject, _: IpcContext): JsonValue {
         let home = envOr("USERPROFILE", "")
-        let ndk = envOr("NATIVE_OHOS_SDK", "")
-        let deveco = envOr("DEVECO_HOME", "")
-        let sdkRoot = envOr("DEVECO_SDK_HOME", "")
+        // 路径类环境变量**必须验存在**才采用，否则落到推导值（AGENTS §4-38）：
+        // 本机 DEVECO_SDK_HOME 仍指着已删除的旧 DevEco（`D:\Program Files\Huawei\DevEco Studio\sdk`），
+        // 直接拿来拼路径就必然判「hdc/NDK 缺失」，而它们其实都在 DEVECO_HOME 那套 SDK 里。
+        let deveco = devecoHomeOr()
+        let ndkEnv = envOr("NATIVE_OHOS_SDK", "").trimAscii()
 
         var arr = JsonArray()
 
-        addCheck(arr, "rustc", "Rust 工具链（rustc / cargo）",
+        addCheckScoped(arr, "rustc", "Rust 工具链（rustc / cargo）", "交叉编译",
             firstExisting([
                 joinPath(home, ".cargo\\bin\\rustc.exe"),
                 "C:\\Program Files\\Rust\\bin\\rustc.exe"
             ]),
             "装 rustup 后应在 %USERPROFILE%\\.cargo\\bin；迁移要靠它交叉编译 .so")
 
-        addCheck(arr, "llvm-mingw", "llvm-mingw（Windows 链接前提）",
-            firstExisting([
-                "C:\\tool\\llvm-mingw\\bin\\x86_64-w64-mingw32-clang.exe"
-            ]),
-            "gnullvm 工具链不自带 C 编译器；缺它会报 linker x86_64-w64-mingw32-clang not found")
-
-        var ndkClang = ""
-        if (ndk.size > 0) {
-            ndkClang = firstExisting([joinPath(ndk, "llvm\\bin\\clang.exe")])
+        // 只判「Windows 宿主」这一态：别的平台上 gnullvm 的 C 编译器前提根本不存在，
+        // 拿它报缺失就是拿不相干的项污染结论（用户实测指出过这一点）。
+        if (hostIsWindows()) {
+            addCheckScoped(arr, "llvm-mingw", "llvm-mingw（宿主 C 编译器）", "仅 Windows 主机构建",
+                firstExisting(llvmMingwClangCandidates()),
+                "gnullvm 通道不自带 C 编译器：凡依赖里有需要编译的 C 代码，缺它就会报 linker x86_64-w64-mingw32-clang not found。装好把它加进 PATH 即可")
         }
-        addCheck(arr, "ohos-ndk", "OHOS NDK（clang / sysroot）", ndkClang,
+
+        // NDK：环境变量与「DEVECO_HOME 那套 SDK」并列做候选，按**clang 文件**是否存在判定
+        var ndkCands = ArrayList<String>()
+        if (ndkEnv.size > 0) {
+            ndkCands.add(joinPath(ndkEnv, "llvm/bin/clang.exe"))
+        }
+        let devNdk = joinPath(joinPath(deveco, "sdk"), "default/openharmony/native")
+        ndkCands.add(joinPath(devNdk, "llvm/bin/clang.exe"))
+        addCheckScoped(arr, "ohos-ndk", "OHOS NDK（clang / sysroot）", "交叉编译",
+            firstExisting(ndkCands.toArray()),
             "设 NATIVE_OHOS_SDK 指向 SDK 的 native 目录（DevEco 下载 SDK 后就有）")
 
-        addCheck(arr, "deveco", "DevEco Studio",
+        addCheckScoped(arr, "deveco", "DevEco Studio", "HAP 装配",
             firstExisting([deveco]),
             "设 DEVECO_HOME 指向 DevEco Studio 安装目录（打包 HAP 需要 hvigor / ohpm）")
 
-        addCheck(arr, "hvigor", "hvigor 构建器",
+        addCheckScoped(arr, "hvigor", "hvigor 构建器", "HAP 装配",
             firstExisting([
                 joinPath(deveco, "tools\\hvigor\\bin\\hvigorw.bat"),
                 joinPath(deveco, "tools\\hvigor\\bin\\hvigorw")
             ]),
             "它随 DevEco 一起装；缺了说明 DEVECO_HOME 没指对")
 
-        addCheck(arr, "ohpm", "ohpm 包管理器",
+        addCheckScoped(arr, "ohpm", "ohpm 包管理器", "HAP 装配",
             firstExisting([
                 joinPath(deveco, "tools\\ohpm\\bin\\ohpm.bat"),
                 joinPath(deveco, "tools\\ohpm\\bin\\ohpm")
             ]),
             "它随 DevEco 一起装；HAP 装配前要装 oh 依赖")
 
-        addCheck(arr, "hdc", "hdc 设备桥",
-            firstExisting([
-                joinPath(sdkRoot, "HarmonyOS-NEXT-DB6\\openharmony\\toolchains\\hdc.exe"),
-                joinPath(sdkRoot, "default\\openharmony\\toolchains\\hdc.exe")
-            ]),
-            "它随 SDK 走；部署到鸿蒙 PC 真机靠它")
+        // hdc 复用 hdcPathOr()：环境变量→推导→常见安装路径都在里面验过（0.39.95）。
+        // 以前这里自己用裸 DEVECO_SDK_HOME 拼了一份，环境变量一过期就报「缺失」。
+        addCheckScoped(arr, "hdc", "hdc 设备桥", "真机部署",
+            hdcPathOr(),
+            "它随 SDK 走；部署到鸿蒙 PC 真机靠它。找不到时设 DEVECO_HOME / DEVECO_SDK_HOME 指向有效安装")
 
         // cjh 复用 cjh_host 的解析（env → 已部署 → 仓内 vendor，vendor 还要过 SHA256）
-        addCheck(arr, "cjh", "AI 引擎 cjh（内置）", cjhBinPath(),
+        addCheckScoped(arr, "cjh", "AI 引擎 cjh（内置）", "AI 面板",
+            cjhBinPath(),
             "把 cjh.exe 放到 vendor/cjh/win-x64/ 或用 LINGQU_CJH 指向它；缺了 AI 面板不可用（其余功能照常）")
 
         var res = JsonObject()
@@ -478,6 +501,173 @@ func depsRecordResponse(path: String): JsonObject {
     res.put("error", JsonString(""))
     res.put("deps", root)
     return res
+}
+
+/**
+ * 只读回读**构建**落档（0.39.88）：`t2h:build {action:"load"}` 走这里。
+ *
+ * 与 scan/deps 同因（§4-135 判据①）：⑤ 屏原先只在人点「交叉编译」时渲染，
+ * agent 用 `lingqu-cli build` 跑完之后，屏上仍是"还没跑交叉编译"——落档里
+ * `exitCode=0 / 产物 .so / 六道闸` 俱全，界面却一无所知。
+ * **纯读盘、不重跑**：重编一次是分钟级，而且显示的就成了"现在重算的那份"，
+ * 与落档不是同一份（§0.1「落档说了算」）。
+ */
+func buildRecordResponse(path: String): JsonObject {
+    var res = JsonObject()
+    var nm = projectNameOf(path)
+    if (nm.size == 0) {
+        nm = "project"
+    }
+    nm = sanitizeFileName(nm)
+    let outFile = lqPathOf(path, "build/${nm}.json")
+    res.put("project", JsonString(nm))
+    res.put("outJson", JsonString(outFile))
+    if (!exists(Path(outFile))) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("还没有构建落档（${outFile}）：先点「交叉编译」，或让 agent 跑 " +
+            "lingqu-cli build --path <工程>"))
+        return res
+    }
+    var root = JsonValue.fromStr("{}")
+    try {
+        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("读构建落档失败：${e}"))
+        return res
+    }
+    res.put("loaded", JsonBool(true))
+    return buildRecordOf(res, root)
+}
+
+/**
+ * 把 `lingqu/build/v1` 落档映射成 `t2h:build` 的返回体（纯函数，有单测）。
+ * 字段名对着落档 schema 抄（§4-57）：`errorCount` / `artifacts` / `gates` / `assetDiff` 同名透传，
+ * 落档里没有的只有 `ok`（由 exitCode 推）与 `error`（读完就没有错误）。
+ */
+func buildRecordOf(res: JsonObject, root: JsonValue): JsonObject {
+    var obj = JsonObject()
+    match (root.kind()) {
+        case JsonKind.JsObject => obj = root.asObject()
+        case _ => ()
+    }
+    let exitCode = argInt(obj, "exitCode", -1)
+    // 判据与命令本身一致：编译退出码 0 才算通过（产物闸的失败在 gates 里，页面自己会显示）
+    res.put("ok", JsonBool(exitCode == 0))
+    for (k in ["target", "diagnosis", "gates", "assetDiff", "soPath", "expectedSo", "distDir"]) {
+        match (obj.get(k)) {
+            case Some(v) => res.put(k, v)
+            case None => ()
+        }
+    }
+    for (k in ["exitCode", "errorCount", "warningCount", "baselineErrors", "stderrErrors"]) {
+        res.put(k, JsonInt(argInt(obj, k, -1)))
+    }
+    match (obj.get("artifacts")) {
+        case Some(v) => res.put("artifacts", v)
+        case None => res.put("artifacts", JsonArray())
+    }
+    match (obj.get("diags")) {
+        case Some(v) => res.put("diags", v)
+        case None => res.put("diags", JsonArray())
+    }
+    res.put("error", JsonString(""))
+    return res
+}
+
+/**
+ * 只读回读**验证**落档（0.39.88）：`t2h:verify {action:"load"}` 走这里。
+ * ⑥ 屏的可用率/清单/证据三块同理——agent 跑过 `lingqu-cli verify` 之后不该还显示"尚未验证"。
+ */
+func verifyRecordResponse(path: String): JsonObject {
+    var res = JsonObject()
+    var nm = projectNameOf(path)
+    if (nm.size == 0) {
+        nm = "project"
+    }
+    nm = sanitizeFileName(nm)
+    let outFile = lqPathOf(path, "verify/${nm}.json")
+    res.put("project", JsonString(nm))
+    res.put("outJson", JsonString(outFile))
+    if (!exists(Path(outFile))) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("还没有验证落档（${outFile}）：先点「采集证据并算可用率」，或让 agent 跑 " +
+            "lingqu-cli verify --path <工程>"))
+        return res
+    }
+    var root = JsonValue.fromStr("{}")
+    try {
+        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("读验证落档失败：${e}"))
+        return res
+    }
+    res.put("loaded", JsonBool(true))
+    return verifyRecordOf(res, root, countEvidenceShots(path), path, nm)
+}
+
+/**
+ * 把 `lingqu/verify/v1` 落档映射成 `t2h:verify` 的返回体（纯函数，有单测）。
+ * 统计在落档的 `stats` 段里（不是在顶层）：`total/pass/fail/limit/unknown/covered/notVerified/
+ * ratePercent/scope/scopeNote`，清单在 `items`。**按 schema 抄字段名**（§4-57 第 1 条）。
+ */
+func verifyRecordOf(res: JsonObject, root: JsonValue, shots: Int64, projPath: String, projName: String): JsonObject {
+    var obj = JsonObject()
+    match (root.kind()) {
+        case JsonKind.JsObject => obj = root.asObject()
+        case _ => ()
+    }
+    var stats = JsonObject()
+    match (obj.get("stats")) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsObject => stats = v.asObject()
+            case _ => ()
+        }
+        case None => ()
+    }
+    for (k in ["total", "pass", "fail", "limit", "unknown", "covered", "notVerified", "ratePercent", "featurePass"]) {
+        res.put(k, JsonInt(argInt(stats, k, -1)))
+    }
+    res.put("scope", JsonString(argStr(stats, "scope", "")))
+    res.put("scopeNote", JsonString(argStr(stats, "scopeNote", "")))
+    match (obj.get("items")) {
+        case Some(v) => res.put("items", v)
+        case None => res.put("items", JsonArray())
+    }
+    res.put("bundleName", JsonString(argStr(obj, "bundleName", "")))
+    res.put("serial", JsonString(argStr(obj, "serial", "")))
+    res.put("screenshots", JsonInt(shots))
+    // 证据/报告三件套按工程路径重新定位（落档只记了内容，没记自己的 md/html 路径）
+    res.put("md", JsonString(lqPathOf(projPath, "verify/${projName}.md")))
+    res.put("html", JsonString(lqPathOf(projPath, "verify/${projName}.html")))
+    res.put("evidenceLog", JsonString(lqPathOf(projPath, "evidence/verify.log")))
+    res.put("ok", JsonBool(true))
+    res.put("error", JsonString(""))
+    return res
+}
+
+/** 证据目录里的真机截图张数（`format png`；读不到就 0——不编数字，§4-63） */
+func countEvidenceShots(path: String): Int64 {
+    let dir = lqPathOf(path, "evidence")
+    if (!exists(Path(dir))) {
+        return 0
+    }
+    var n: Int64 = 0
+    try {
+        for (f in Directory.readFrom(Path(dir))) {
+            if (f.name.endsWith(".png")) {
+                n += 1
+            }
+        }
+    } catch (e: Exception) {
+        return n
+    }
+    return n
 }
 
 public class ScanCommand <: CommandHandler {
@@ -1940,6 +2130,13 @@ public class UiReportCommand <: CommandHandler {
         o.put("scanRows", JsonInt(argInt(args, "scanRows", 0)))
         // 按落档回填的证据（0.39.87）：AI 跑完 scan/deps 后 ①② 屏应当不再空
         o.put("scanScore", JsonInt(argInt(args, "scanScore", -1)))
+        // 工具链体检的证据（0.39.95）：回投「缺哪几项 / 每项影响哪一步」，
+        // 让"hdc / llvm-mingw 被误报缺失"这类问题能被 ui_report 直接断言出来
+        o.put("envTotal", JsonInt(argInt(args, "envTotal", -1)))
+        o.put("envOk", JsonInt(argInt(args, "envOk", -1)))
+        o.put("envMiss", JsonInt(argInt(args, "envMiss", -1)))
+        o.put("envMissIds", JsonString(argStr(args, "envMissIds", "")))
+        o.put("envScopes", JsonString(argStr(args, "envScopes", "")))
         o.put("depsRows", JsonInt(argInt(args, "depsRows", 0)))
         o.put("stepFillN", JsonInt(argInt(args, "stepFillN", 0)))
         o.put("stepFillLast", JsonString(argStr(args, "stepFillLast", "")))
@@ -2014,6 +2211,8 @@ public class UiReportCommand <: CommandHandler {
         o.put("verifyOk", JsonBool(argBool(args, "verifyOk", false)))
         o.put("verifyRate", JsonInt(argInt(args, "verifyRate", -1)))
         o.put("verifyPass", JsonInt(argInt(args, "verifyPass", 0)))
+        // 功能口径分子（0.39.88）：与 verifyCovered 配对，判「通过 7/3」那类混口径读数有没有修好
+        o.put("verifyFeaturePass", JsonInt(argInt(args, "verifyFeaturePass", -1)))
         o.put("verifyTotal", JsonInt(argInt(args, "verifyTotal", 0)))
         o.put("verifyLimit", JsonInt(argInt(args, "verifyLimit", 0)))
         o.put("verifyUnknown", JsonInt(argInt(args, "verifyUnknown", 0)))
@@ -2242,6 +2441,10 @@ public class BuildCommand <: CommandHandler {
             res.put("ok", JsonBool(false))
             res.put("error", JsonString("t2h:build 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
             return res
+        }
+        // ---- action=load（0.39.88）：只回读构建落档，不跑 cargo、也不要求 Cargo.toml 还在 ----
+        if (argStr(args, "action", "") == "load") {
+            return buildRecordResponse(path)
         }
         let tomlPath = cargoTomlPathOf(path)
         if (tomlPath == "") {
@@ -3804,6 +4007,16 @@ public class VerifyCommand <: CommandHandler {
         if (path.size > 0) {
             projName = sanitizeFileName(projectNameOf(path))
         }
+        // ---- action=load（0.39.88）：只回读验证落档，**不重新采证**（采证要真机 + 分钟级）----
+        if (argStr(args, "action", "") == "load") {
+            if (path.size == 0) {
+                var res0 = JsonObject()
+                res0.put("ok", JsonBool(false))
+                res0.put("error", JsonString("t2h:verify action=load 需要参数 path（或设环境变量 LINGQU_VERIFY_PATH）"))
+                return res0
+            }
+            return verifyRecordResponse(path)
+        }
         let wantShots = argBool(args, "screenshot", true)
         var serial = argStr(args, "serial", "")
         if (serial == "") {
@@ -3871,6 +4084,10 @@ public class VerifyCommand <: CommandHandler {
         res.put("crashes", JsonInt(ev.crashes))
         res.put("total", JsonInt(stats.total))
         res.put("pass", JsonInt(stats.pass))
+        // 功能口径的分子（0.39.88）：`pass` 是全局通过数（含启动/构建等基础设施项），
+        // 与 ⑥ 屏那对分母（covered=核心功能项数）不同源。两者一起回投，界面按口径取，
+        // 才不会再出现 "通过 7/3" 这种把两套口径混在一起的读数。
+        res.put("featurePass", JsonInt(stats.featurePass))
         res.put("fail", JsonInt(stats.fail))
         res.put("limit", JsonInt(stats.limit))
         res.put("unknown", JsonInt(stats.unknown))
@@ -6125,6 +6342,106 @@ func collectBuildProfiles(dir: String, depth: Int64, maxDepth: Int64, out: Array
         }
     }
     return ""
+}
+
+/**
+ * 纯函数：把 PATH 变量值拆成目录列表（去空、去首尾空白；sep 显式传入）。
+ *
+ * sep 不按宿主机猜：Windows 用 `;`（路径里本来就带 `:`，按 `:` 切会把盘符切开），
+ * POSIX 用 `:`。显式传入还有个好处——纯函数，两端都能被单测钉住。
+ */
+public func pathDirsOf(pathEnv: String, sep: String): Array<String> {
+    var out = ArrayList<String>()
+    if (pathEnv.size == 0) {
+        return out.toArray()
+    }
+    for (part in pathEnv.split(sep, -1)) {
+        let dir = part.trimAscii()
+        if (dir.size == 0) {
+            continue
+        }
+        if (!out.contains(dir)) {
+            out.add(dir)
+        }
+    }
+    return out.toArray()
+}
+
+/**
+ * 纯函数：llvm-mingw 的候选安装根（去空、保序去重）。
+ * 安装位置五花八门：`C:\tool\llvm-mingw*`（本机就装这儿，带版本号）、
+ * `%ProgramFiles%\llvm-mingw*`、以及不带版本号的旧目录。
+ */
+public func llvmMingwRootsOf(toolDir: String, programFiles: String, programFilesX86: String): Array<String> {
+    var out = ArrayList<String>()
+    for (r in [toolDir.trimAscii(), programFiles.trimAscii(), programFilesX86.trimAscii()]) {
+        if (r.size == 0 || out.contains(r)) {
+            continue
+        }
+        out.add(r)
+    }
+    return out.toArray()
+}
+
+/** 目录里名字以 `llvm-mingw` 开头的子目录（读不到就当没有，绝不抛） */
+func llvmMingwDirsUnder(root: String): Array<String> {
+    var out = ArrayList<String>()
+    if (root.size == 0 || !exists(Path(root))) {
+        return out.toArray()
+    }
+    var entries: Array<FileInfo>
+    try {
+        entries = Directory.readFrom(root)
+    } catch (e: Exception) {
+        let _ = e
+        return out.toArray()
+    }
+    for (info in entries) {
+        // 目录名判定用纯函数（发行包的目录名一律小写：llvm-mingw-20260324-ucrt-x86_64）
+        if (info.isDirectory() && isLlvmMingwDirName(info.name)) {
+            out.add(joinPath(root, info.name))
+        }
+    }
+    return out.toArray()
+}
+
+/** 纯函数：目录名像不像 llvm-mingw 的发行目录（只按前缀判，不猜版本号格式） */
+public func isLlvmMingwDirName(name: String): Bool {
+    return name.trimAscii().startsWith("llvm-mingw")
+}
+
+/**
+ * llvm-mingw 的 clang 候选（0.39.95）。
+ *
+ * 判据是「构建时能不能按名字找到它」，不是「某个目录里有没有文件」——cargo 是按名字
+ * 在 PATH 上找链接器的。旧实现写死 `C:\tool\llvm-mingw\bin\…`，而本机装的是带版本号的
+ * 目录（`C:\tool\llvm-mingw-20260324-ucrt-x86_64\bin`，且只在 PATH 里）⇒ 明明能用却报「缺失」。
+ */
+func llvmMingwClangCandidates(): Array<String> {
+    let exe = "x86_64-w64-mingw32-clang.exe"
+    var out = ArrayList<String>()
+    // ① PATH 上那份就是构建真正会用到的那份；PATH 里可能放的是安装根，再补一层 bin
+    var pathEnv = envOr("PATH", "")
+    if (pathEnv.size == 0) {
+        pathEnv = envOr("Path", "")
+    }
+    for (dir in pathDirsOf(pathEnv, ";")) {
+        out.add(joinPath(dir, exe))
+        out.add(joinPath(joinPath(dir, "bin"), exe))
+    }
+    // ② 常见安装根下的版本化目录
+    let roots = llvmMingwRootsOf(
+        joinPath(envOr("SystemDrive", "C:"), "\\tool"),
+        envOr("ProgramFiles", ""),
+        envOr("ProgramFiles(x86)", ""))
+    for (root in roots) {
+        for (d in llvmMingwDirsUnder(root)) {
+            out.add(joinPath(joinPath(d, "bin"), exe))
+        }
+    }
+    // ③ 旧的不带版本号目录兜底
+    out.add("C:\\tool\\llvm-mingw\\bin\\${exe}")
+    return out.toArray()
 }
 
 /** 把路径分隔符统一成宿主形式（Windows 用反斜杠；其它平台保持正斜杠） */

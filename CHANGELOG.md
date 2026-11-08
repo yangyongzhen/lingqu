@@ -5,6 +5,75 @@
 
 ---
 
+## [0.39.96] - 2026-11-08
+
+**主题**：AI 干完的活，屏上要看得见——⑤ 构建 / ⑥ 验证补上「按落档回读」通道；顶栏胶囊不再把已扫描的工程说成
+「未扫描」；⑥ 屏「通过 x/y」分子分母同源；README 补 8 屏真实窗口截图。
+
+### Added
+
+- `t2h:build` / `t2h:verify` 增加 `action:"load"`：**纯读盘回投、绝不重跑**（重跑得到的是"这一刻的数"，
+  与落档对不上），界面进 ⑤/⑥ 屏与 AI 跑完该步时自动回填——0.39.87 只补了 scan/deps 两条通道。
+- `t2h:ui_report` 增 `verifyCovered / verifyNotVerified / verifyScope`：⑥ 屏统计口径可被自动断言。
+- `LINGQU_UI_PROBE=shots`：页面自跑左栏 8 屏，抓图侧按 `activeScreen` 变化逐屏 `PrintWindow` 抓真实窗口。
+
+### Fixed
+
+- ⑥ 屏写成「通过 7/3」：分子取功能口径 `featurePass`、分母取了全局 `pass`，两套口径混用。改成与
+  `src/report_feed.cj` 同源配对（分子 `featurePass`、分母 `covered`）。
+- 顶栏胶囊把「已扫描 R=13 项」说成「未扫描」：只有点进 ① 屏才回读扫描落档。现在切/恢复工程后主动回读，
+  回读成功即重绘胶囊，胶囊与左栏徽标说的是同一份落档（§4-94/§4-95 同族）。
+- 左栏徽标判据改成「报告在 **且** 至少跑过一步」，不再把"没跑过"渲染成"已完成"。
+
+### 验证
+
+- `scripts/test.sh` 五道闸全绿：业务包 build 零警告、`cjpm test` 475 项 0 FAILED、`cj-tauri check` 三方比对通过、
+  `targets/desktop` 与 `cli/` 均零警告。
+- 8 屏截图逐张核对：胶囊「已扫描 R=13 项」、⑤ 构建「已完成 3/3」、⑥ 验证「通过 3/3」、⑧ 报告「8 步 8/8 · 100%」。
+
+---
+
+## [0.39.95] - 2026-11-08
+
+**主题**：工具链体检别再报假缺失——`hdc` 与 `llvm-mingw` 判到「真的能跑到」，而不是「某个写死的目录里有没有文件」；
+每项标出**影响哪一步**，不适用当前宿主机的项整项不出现。
+
+**现象**（用户实测）：「这些是不是准确？llvm-mingw 跟移植不相关吧，不相干的不需要展示」——
+设置页环境体检把 `hdc 设备桥` 与 `llvm-mingw（Windows 链接前提）` 双双标成「缺失」，
+可本机两者都装着：`hdc.exe` 在 `D:\oh\DevEcoStudio\sdk\default\openharmony\toolchains\`，
+`x86_64-w64-mingw32-clang.exe` 在 `C:\tool\llvm-mingw-20260324-ucrt-x86_64\bin\`（且只在 PATH 上）。
+
+**根因**
+
+- `hdc` 项自己用**裸 `DEVECO_SDK_HOME`** 拼了一份候选路径，而本机该变量仍指着已删除的旧 DevEco
+  （`D:\Program Files\Huawei\DevEco Studio\sdk`）⇒ 拼出来的路径必然不存在（§4-38 同族）。
+  仓里本来就有验过存在性的 `hdcPathOr()`（env → `DEVECO_HOME` 下的 SDK → 常见安装路径），体检却没用它。
+- `llvm-mingw` 只认一条写死路径 `C:\tool\llvm-mingw\bin\…`，而发行包目录名**带版本号**，
+  且真实可用性取决于 **PATH 能不能按名字找到它**（cargo 就是按名字找链接器的）。
+
+**处置**
+
+- `t2h:env`：`hdc` 改走 `hdcPathOr()`；`DevEco` 改走已验证的 `devecoHomeOr()`；
+  `OHOS NDK` 改为「环境变量 + `DEVECO_HOME` 那套 SDK」两路候选并按 **clang 文件**判定存在。
+  路径类环境变量一律**验存在才采用**（§4-38）。
+- `llvm-mingw` 判定换成 `llvmMingwClangCandidates()`：PATH 各段（含 `<dir>` 与 `<dir>\bin` 两种放法）
+  → `%SystemDrive%\tool` / `%ProgramFiles%` / `%ProgramFiles(x86)%` 下的**版本化目录** → 老的不带版本号目录兜底。
+  该项**只在 Windows 宿主出现**：别的平台上不存在这个前提，拿它报缺失就是拿不相干的项污染结论。
+- 体检项新增 `scope`（影响哪一步：交叉编译 / HAP 装配 / 真机部署 / AI 面板 / 仅 Windows 主机构建），
+  界面标签后以小字显示，缺了也知道该不该管；`ui_report` 增 `envTotal/envOk/envMiss/envMissIds/envScopes`
+  （白名单**两处一起加**，§4-60），体检结论从此可被断言。
+- 纯函数 `pathDirsOf` / `llvmMingwRootsOf` / `isLlvmMingwDirName` 新增，`addCheckScoped` 公开以便钉住「就绪/缺失」口径。
+
+**验证**
+
+- `cjpm build` 零警告；`cjpm test` **470 例（460 + 新增 10）**全过，`FAILED: 0 / ERROR: 0`。
+- 本机实测：`DEVECO_HOME=D:\oh\DevEcoStudio`（存在）→ `hdcPathOr()` 命中 `hdc.exe`；
+  `command -v x86_64-w64-mingw32-clang` 命中 `C:\tool\llvm-mingw-20260324-ucrt-x86_64\bin`。
+- **未在运行期复看面板**：当时应用窗口（旧构建）还开着，按用户要求不动它；
+  面板结论待下次重启后由 `ui_report.envMissIds` 确认（应不含 `hdc` / `llvm-mingw`）。
+
+---
+
 ## [0.39.94] - 2026-11-08
 
 **主题**：给 agent 一条**能自己判定"这个功能能不能用"**的手——`lingqu-cli probe`，外加技能与任务书把这门手艺教给它。

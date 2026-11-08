@@ -7,7 +7,7 @@
 把「照几千字踩坑笔记手工移植一个 Tauri 应用」变成**一条命令 + 一份带证据的迁移报告**；
 而且**踩过的坑会自己长成下一轮的规则、指纹与技能**。
 
-[![Release](https://img.shields.io/badge/release-v0.39.94-00868B)](./CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.39.95-00868B)](./CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-449%20passed-2ea44f)](./scripts/test.sh)
 [![Gates](https://img.shields.io/badge/gates-6%2F6%20green-2ea44f)](#-测试与质量)
 [![Language](https://img.shields.io/badge/language-Cangjie%20%2F%20Rust%20%2F%20ArkTS-00868B)](https://cangjie-lang.cn)
@@ -53,7 +53,7 @@
 | **为什么是仓颉** | 外壳（`cj-tauri`）、迁移引擎、AI 引擎（`cjh`）同栈；一个业务包 `src/` 编出桌面与鸿蒙两端产物，没有 Node/Python 运行时依赖 |
 | **特色** | **AI 自动进化飞轮**：经验与未命中错误由 agent 自己落盘，攒够次数后由人裁决进指纹 / 规则 / 技能库，下一轮自动吃上（见 [专章](#-ai-自动进化飞轮本项目的特色)，设计细节见 [`docs/AI自进化飞轮.md`](docs/AI自进化飞轮.md)） |
 | **特色** | **HAP 包自签名机制（纯仓颉实现，全程摆脱 DevEco Studio）**：本地签名链（纯仓颉 AES-128-GCM 解密口令 + 调用 hap-sign-tool）与 AGC 云生成双路线，`sign --auto` 一条命令 → `signed=true` + 真机装机启动——**迁移的最后一公里不依赖任何重型 IDE，一键到真机跑起来** |
-| **现状** | **v0.39.94**：43 个 `t2h:*` 命令 · 21 条 CLI 子命令 · 460 例单测 · 15 条改造规则 · 20 条错误指纹 · 8 步流水线六项门禁全绿；**3/5 样本**已跑出 8 步 8/8（habit-tree / rust-music-3 按新口径 100%；m3u8dl-tauri 0.39.93 真机实测为 **40%**，2/5 项有结论、另 2 项未测）；0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败；0.39.94 新增 `probe`——agent 自己在真机上**点一下再判定**功能可用性（`dumpLayout → 按文本取 bounds 中心 → uiInput click → 再 dump 比对 → 截图 → 写 probe.json`），技能与任务书同步教会它 |
+| **现状** | **v0.39.95**：43 个 `t2h:*` 命令 · 21 条 CLI 子命令 · 470 例单测 · 15 条改造规则 · 20 条错误指纹 · 8 步流水线六项门禁全绿；**3/5 样本**已跑出 8 步 8/8（habit-tree / rust-music-3 按新口径 100%；m3u8dl-tauri 0.39.93 真机实测为 **40%**，2/5 项有结论、另 2 项未测）；0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败；0.39.94 新增 `probe`——agent 自己在真机上**点一下再判定**功能可用性（`dumpLayout → 按文本取 bounds 中心 → uiInput click → 再 dump 比对 → 截图 → 写 probe.json`），技能与任务书同步教会它；0.39.95 修掉环境体检的两处**假缺失**——`hdc` 走了已过期的 `DEVECO_SDK_HOME`、`llvm-mingw` 只认一条写死路径，现在按「真的能跑到」判（复用 `hdcPathOr()`、按 PATH + 版本化目录找 clang），每项标出**影响哪一步**，不适用当前宿主机的项不再展示 |
 
 ---
 
@@ -151,6 +151,21 @@ rust-music 迁移中，右侧 AI 助手面板正在落笔经验（`hashline_edit
 
 ![鸿蒙真机上的 Rust+ArkWeb 应用](docs/imgs/ohos-music-screenshot.jpg)
 
+### 八屏全流程（真实窗口 · 1936×1048 · 逐屏 `PrintWindow` 抓取）
+
+`LINGQU_UI_PROBE=shots` 让页面自己按左栏顺序走一遍 8 屏，抓图侧监听 `activeScreen` 变化、逐屏抓真实窗口；
+**每个数字都由 `.lingqu/` 落档回投**（断点板、扫描、构建、验证、报告读数一致），不是示例值。
+
+| ① 一键迁移 | ② 项目 / 环境 |
+|---|---|
+| ![一键迁移](docs/imgs/ui-01-migrate.png)<br>cjh 是执行者：这里给的是任务书与九步进度断言 | ![项目与环境](docs/imgs/ui-02-env.png)<br>体检 8 项全就绪、最近项目带落档评分、工具箱路径逐个可查 |
+| **③ 迁移画像** | **④ 依赖扫描** |
+| ![迁移画像](docs/imgs/ui-03-profile.png)<br>可迁移度 95（runtime.api）、识别项 R=13、清单按迁移单元计 | ![依赖扫描](docs/imgs/ui-04-deps.png)<br>540 个包、需 patch 0、不可用 11 |
+| **⑤ 规则改造** | **⑥ 构建打包** |
+| ![规则改造](docs/imgs/ui-05-port.png)<br>确定性改造 0 处，每处都给依据与回滚单元 | ![构建打包](docs/imgs/ui-06-build.png)<br>交叉编译 / HAP 装配 / 签名三条闸，3/3 |
+| **⑦ 真机验证** | **⑧ 迁移报告** |
+| ![真机验证](docs/imgs/ui-07-verify.png)<br>可用率 100%（通过 3/3，平台限制与未验证各占位） | ![迁移报告](docs/imgs/ui-08-report.png)<br>8 步 8/8、人工介入 0 处、风险分级 5 条 |
+
 > 截图口径：前两张是**真实应用窗口**（`CopyFromScreen` 抓取本应用窗口区域，非示意图）；
 > 报告屏那一张是用 `LINGQU_UI_PROBE=risk` 触发一次真实的 `t2h:report` 后截的（报告内容 100% 来自落档）。
 > 第三张是迁移样本 [`rust-music`](https://atomgit.com/qq8864/rust-music)（Rust + Tauri 2）
@@ -235,7 +250,7 @@ bash packaging/package-win.sh            # 常规目录包（DLL 按导入闭包
 ```
 [0] cj-tauri sync         清单 → 派生 targets/（改了 cj-tauri.toml 才需要 -s）
 [1] 业务包 cjpm build      零警告（unused / deprecated 一律清零，禁止"先交付后清理"）
-[2] 业务包 cjpm test       460 例 / 49 个 *_test.cj，FAILED=0 且 ERROR=0
+[2] 业务包 cjpm test       470 例 / 50 个 *_test.cj，FAILED=0 且 ERROR=0
 [3] cj-tauri check        清单校验 + 骨架漂移 + 能力三方比对（声明 × 插件自述 × 实际装配）
 [3b] 页面脚本语法          抽出 index.html 的 <script> 块逐个 node --check
 [4] targets/desktop build  骨架侧也要编得过且零警告
@@ -244,7 +259,7 @@ bash packaging/package-win.sh            # 常规目录包（DLL 按导入闭包
 
 | 质量手段 | 具体做法 | 真实产出 |
 |---|---|---|
-| **测试只测纯函数** | 进程 / 网络 / WebView2 / 真机部署**不在单测里造假绿**，这类以实机为准 | 460 例覆盖扫描器、依赖解析、规则改造、HAP 闸、签名判定、风险分级、扫描口径、真机探针… |
+| **测试只测纯函数** | 进程 / 网络 / WebView2 / 真机部署**不在单测里造假绿**，这类以实机为准 | 470 例覆盖扫描器、依赖解析、规则改造、HAP 闸、签名判定、风险分级、扫描口径、真机探针… |
 | **bug 先红后绿** | 修 bug 必须先写复现用例（红）再修（绿） | 本轮 0.39.55 的 3 个真 bug 就是单测当场抓出来的（见下） |
 | **零警告是硬判据** | 门禁统计 `warning:` 行数并**打印明细**（只报条数等于没检查） | 0.39.0 曾因"删调用方留下 unused"栽过，之后写进规矩 |
 | **界面可自动断言** | `t2h:ui_report` 回投版面指标（grid 列宽 / 当前屏 / JS 错误数 / 面板状态 / 200+ 字段）落 `.lingqu/ui-report.{json,log}` | 没有视觉也能证明版面对；本轮两个截图也是这么验的（像素体检：239/300 种颜色，非空白） |

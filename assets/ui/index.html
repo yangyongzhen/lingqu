@@ -2778,13 +2778,18 @@ withBridge(function(tauri){
 
   function renderEnv(d){
     var list = $('envList'); list.innerHTML = '';
-    var ok = 0, miss = 0;
+    var ok = 0, miss = 0, missIds = [], scopes = [];
     (d.items || []).forEach(function(it){
-      if (it.ok) ok++; else miss++;
+      if (it.ok) ok++; else { miss++; missIds.push(String(it.id || '')); }
+      // scope（0.39.95）：标出「它影响哪一步」。用户实测问过「llvm-mingw 跟移植不相关吧」——
+      // 只写「缺失」看不出该项该不该管，标上影响面（交叉编译 / HAP 装配 / 真机部署 / AI 面板）才判断得了。
+      var sc = it.scope ? '<span class="muted small">　' + esc(it.scope) + '</span>' : '';
+      if (it.scope) scopes.push(String(it.id || '') + '=' + String(it.scope));
       var row = document.createElement('div');
       row.className = 'evi';
       row.innerHTML = '<span class="pill ' + (it.ok ? 'ok' : 'err') + '">' + (it.ok ? '就绪' : '缺失') + '</span>' +
-        '<span class="t"><b>' + esc(it.label) + '</b><div class="muted small mono" style="word-break:break-all">' +
+        '<span class="t"><b>' + esc(it.label) + '</b>' + sc +
+        '<div class="muted small mono" style="word-break:break-all">' +
         (it.ok ? esc(it.path) : esc(it.hint)) + '</div></span>';
       list.appendChild(row);
     });
@@ -2795,6 +2800,12 @@ withBridge(function(tauri){
     var t = new Date(); $('envTime').textContent = '更新于 ' + t.toLocaleTimeString();
     $('txtEnv').textContent = miss === 0 ? '环境就绪' : ('缺 ' + miss + ' 项');
     setDot('dotEnv', miss === 0 ? 'ok' : 'warn');
+    // 回投证据（0.39.95）：体检结论要能被自动断言，不靠肉眼看截图
+    window.__envTotal = (d.items || []).length;
+    window.__envOk = ok;
+    window.__envMiss = miss;
+    window.__envMissIds = missIds.join(',');
+    window.__envScopes = scopes.join(',');
   }
   function loadEnv(){
     invoke('t2h:env').then(function(d){
@@ -5386,27 +5397,98 @@ withBridge(function(tauri){
     window.__conf = null;
   }
 
-  function renderScan(res){
+  /**
+   * 把 ① 迁移画像整屏清成「尚未扫描」。
+   * 0.39.96（用户实测）：「新选了个还没开始的项目，点开迁移画像页就已经有数据了」——
+   * 根因：换工程只清了 ③–⑦ 屏（BUILD/HAP/SIGN/DEPLOY/VERIFY/REPORT + PANEL_RESET_IDS 快照），
+   * ① ② ④ 三屏的状态在 `SCAN`/`DEPS`/`PORT_DECISIONS` 与 `window.__scan*` 里，从来没被清过。
+   * 口径：清成「尚未扫描」，不是「扫描失败」——"没跑过"与"跑失败"是两件不同的事
+   *       （§4-63 / §4-134 第③条：把"没跑过"渲染成"失败"是另一种谎报）。
+   * @param noteText 提示文案（失败路径传「扫描失败：…」，无落档路径用默认的「尚未扫描。」）
+   * @param isError  是否按错误样式显示
+   */
+  function clearScanPanel(noteText, isError){
+    SCAN.res = null;
+    window.__scan = null;
+    window.__scanScore = -1;
+    window.__scanRows = 0;
+    window.__scanBlockers = 0;
+    window.__scanKindRows = '';
+    var note = $('scanNote');
+    if (note) {
+      note.style.color = isError ? 'var(--err)' : '';
+      note.textContent = noteText || '尚未扫描。';
+    }
+    if ($('scoreNote')) { $('scoreNote').textContent = '未扫描'; }
+    if ($('scoreTotal')) { $('scoreTotal').textContent = '—'; }
+    if ($('scoreRing')) { $('scoreRing').style.setProperty('--v', 0); }
+    renderScoreDims({});
+    ['mR','mD','mH','mU'].forEach(function(id){ var el = $(id); if (el) { el.innerHTML = '—<small>项</small>'; } });
+    if ($('mC1')) { $('mC1').textContent = '—'; }
+    if ($('mC2')) { $('mC2').textContent = '未对照'; }
+    if ($('mC3')) { $('mC3').textContent = '—'; }
+    clearConfPanels();
+    ['cntCommands','cntEvents','cntPlugins','cntFrontend','cntPlatform'].forEach(function(id){
+      var el = $(id); if (el) { el.textContent = '0'; }
+    });
+    if ($('itemsNote')) { $('itemsNote').textContent = ''; }
+    if ($('scanRows')) { $('scanRows').innerHTML = '<tr><td colspan="5" class="muted">尚未扫描。</td></tr>'; }
+    if ($('blockList')) { $('blockList').innerHTML = '<div class="muted" style="padding:6px 2px">还没有扫描结果。</div>'; }
+  }
+
+  /** 把 ② 依赖扫描清成「尚未扫描依赖」（口径同 clearScanPanel）。 */
+  function clearDepsPanel(){
+    DEPS.items = [];
+    DEPS.filter = 'all';
+    DEPS.out = '';
+    DEPS.error = '';
+    window.__deps = { total: 0, patch: 0, unavailable: 0, ok: 0, out: '', error: '', rows: 0, score: -1 };
+    window.__depsScore = -1;
+    var seg = document.querySelectorAll('#depsLegend .seg button');
+    var i;
+    for (i = 0; i < seg.length; i++) {
+      if (i === 0) { seg[i].classList.add('on'); } else { seg[i].classList.remove('on'); }
+    }
+    if (seg.length === 3) {
+      seg[0].textContent = '全量 0';
+      seg[1].textContent = '需 patch 0';
+      seg[2].textContent = '不可用 0';
+    }
+    var lg = document.querySelectorAll('#depsLegend .legend .lg-n');
+    if (lg.length === 3) { lg[0].textContent = '0'; lg[1].textContent = '0'; lg[2].textContent = '0'; }
+    var note = $('depsNote');
+    if (note) { note.style.color = ''; note.textContent = '尚未扫描依赖。'; }
+    if ($('depsRows')) {
+      $('depsRows').innerHTML = '<tr><td colspan="5" class="muted">还没有数据——填工程路径点「扫描依赖」，'
+        + '或让 AI 跑 lingqu-cli deps --path &lt;工程&gt;。</td></tr>';
+    }
+  }
+
+  /** 把 ④ 规则改造清成「还没跑过」（同一个根因：换工程不清就挂着上一个工程的规则表与决策记录）。 */
+  function clearPortPanel(){
+    PORT_DECISIONS = {};
+    window.__portRulesRaw = [];
+    window.__port = { applied: 0, rules: 0, rulesRaw: [], idempotent: false, auto: 0, guide: 0,
+                      toml: '', backup: '', error: '' };
+    if ($('portRows')) { $('portRows').innerHTML = '<tr><td colspan="4" class="muted">还没有跑过规则改造。</td></tr>'; }
+    ['portApplied','portIdem','portHuman','portStatAuto','portStatPending'].forEach(function(id){
+      var el = $(id); if (el) { el.textContent = '—'; }
+    });
+    if ($('portStatHuman')) { $('portStatHuman').textContent = '—'; }
+    if ($('portStatElapsed')) { $('portStatElapsed').innerHTML = '—<small>未计时</small>'; }
+    var note = $('portNote');
+    if (note) { note.style.color = ''; note.textContent = '还没有跑过规则改造。'; }
+  }
+
+  function renderScan(res, reqPath){
     res = res || {};
     SCAN.res = res;
     var note = $('scanNote');
     if (!res.ok) {
-      // 失败必须**全量清零**：以前只清 __scan/__scanRows，残留的 scanBlockers/scanC2 会
-      // 把「上一轮成功」的数据喂给回投断言（自检假绿）
+      // 失败必须**全量清零**（0.39.96 抽成 clearScanPanel，与"换工程清屏"共用一份实现——
+      // 两处各写一遍迟早漂移，§4-33 同族；以前残留的 scanBlockers/scanC2 会喂出假绿断言）。
+      clearScanPanel('扫描失败：' + (res.error || '未知原因'), true);
       window.__scan = { error: res.error || 'scan failed' };
-      window.__scanRows = 0;
-      window.__scanBlockers = 0;
-      window.__scanKindRows = '';
-      window.__conf = null;
-      $('scoreNote').textContent = '未扫描';
-      $('scoreTotal').textContent = '—';
-      $('scoreRing').style.setProperty('--v', 0);
-      renderScoreDims({});
-      ['mR','mD','mH','mU'].forEach(function(id){ $(id).innerHTML = '—<small>项</small>'; });
-      $('mC1').textContent = '—'; $('mC2').textContent = '未对照'; $('mC3').textContent = '—';
-      clearConfPanels();
-      note.style.color = 'var(--err)';
-      note.textContent = '扫描失败：' + (res.error || '未知原因');
       renderTopProj();
       return;
     }
@@ -5417,7 +5499,10 @@ withBridge(function(tauri){
     var blockers = sc.blockers || [];
 
     window.__scan = {
-      path: res.project || '', out: res.out || '', outError: res.outError || '',
+      // 0.39.88：这里的 path 必须是**工程完整路径**（`res.project` 是工程名），
+      // 否则顶栏胶囊拿它跟当前工程比路径，永远判"未扫描（数字属于上一个工程）"（§4-95 同族）。
+      path: String(reqPath || res.projectPath || res.project || ''),
+      out: res.out || '', outError: res.outError || '',
       R: m.R, D: m.D, H: m.H, U: m.U, C1: m.C1, C3: m.C3, C2: m.C2,
       total: s.total, partial: s.partial, baseline: res.baseline || ''
     };
@@ -5579,9 +5664,9 @@ withBridge(function(tauri){
     $('btnScan').disabled = true;
     note.style.color = '';
     note.textContent = '扫描中：' + p;
-    invoke('t2h:scan', { path: p }).then(function(r){
+      invoke('t2h:scan', { path: p }).then(function(r){
       $('btnScan').disabled = false;
-      renderScan(r);
+      renderScan(r, p);
       logLine((r && r.error) ? 'err' : 'ok', '扫描 ' + ((window.__scan && window.__scan.path) || p)
         + '：R=' + ((window.__scan && window.__scan.R) || 0)
         + ' C1=' + ((window.__scan && window.__scan.C1 !== undefined) ? window.__scan.C1 : '—')
@@ -6620,6 +6705,9 @@ withBridge(function(tauri){
       ok: r.ok === true,
       rate: (typeof r.ratePercent === 'number') ? r.ratePercent : -1,
       pass: (typeof r.pass === 'number') ? r.pass : 0,
+      // 功能口径的分子（0.39.88）：`pass` 是全局通过数，与 covered 那对分母不同源，
+      // 直接拼会写出「通过 7/3」这种自相矛盾的读数（§4-63 同族：两个口径混着用）。
+      featurePass: (typeof r.featurePass === 'number') ? r.featurePass : -1,
       total: (typeof r.total === 'number') ? r.total : 0,
       limit: (typeof r.limit === 'number') ? r.limit : 0,
       unknown: (typeof r.unknown === 'number') ? r.unknown : 0,
@@ -6635,9 +6723,10 @@ withBridge(function(tauri){
     var legacy = VERIFY.covered < 0;
     var denom = legacy ? Math.max(VERIFY.total - VERIFY.limit, 0) : VERIFY.covered;
     var notVer = (VERIFY.notVerified >= 0) ? VERIFY.notVerified : VERIFY.unknown;
+    var num = (VERIFY.featurePass >= 0) ? VERIFY.featurePass : VERIFY.pass;
     $('verRate').innerHTML = (VERIFY.rate < 0 ? '—' : String(VERIFY.rate)) + '<small>%</small>';
     $('verRate').style.color = VERIFY.rate >= 80 ? 'var(--ok)' : (VERIFY.rate >= 0 ? 'var(--err)' : '');
-    $('verPass').innerHTML = VERIFY.pass + '<small>/ ' + denom + '</small>';
+    $('verPass').innerHTML = num + '<small>/ ' + denom + '</small>';
     $('verLimit').textContent = String(VERIFY.limit);
     $('verUnknown').textContent = notVer + ' / ' + VERIFY.total;
     $('verShots').textContent = '截图 ' + VERIFY.shots + ' 张 · .lingqu/evidence/';
@@ -6647,7 +6736,7 @@ withBridge(function(tauri){
       $('verNote').textContent = '可用率 ' + VERIFY.rate + '%（旧口径：分母 ' + denom + '，平台限制已剔除）——重跑一次即可换成核心功能口径';
     } else {
       $('verNote').textContent = '可用率 ' + VERIFY.rate + '%（分母 ' + denom + ' 项有结论：'
-        + VERIFY.pass + ' 通过 / ' + (denom - VERIFY.pass) + ' 未过），另有 ' + notVer + ' 项未测'
+        + num + ' 通过 / ' + Math.max(denom - num, 0) + ' 未过），另有 ' + notVer + ' 项未测'
         + (VERIFY.scope ? ' · 口径 ' + VERIFY.scope : '');
     }
     // 清单逐条渲染：判定 → 颜色标签；证据 → 一行文本；note 作 title
@@ -6807,9 +6896,33 @@ withBridge(function(tauri){
   window.__railBridge = function(path){
     return loadResumeBoard(path).then(function(r){
       if (window.__railApply) { window.__railApply(r || {}); }
+      // 0.39.96：顺手记下「这个工程到底跑过没有」，供 autoReportOnEnter 判"该不该自动出报告"
+      try { window.__projRecord = projRecordStateOf(path, r || {}); } catch (e) { /* 记不下不影响徽标 */ }
       return r;
     });
   };
+
+  /**
+   * 纯函数：从 `t2h:resume` 的返回值判定「这个工程跑过没有」。
+   * 0.39.96（与「新工程还没开始，迁移画像就有数据」同族）：进 ⑦ 屏会自动出一份报告**并写盘**，
+   * 于是从没跑过的工程也会凭空多出 `.lingqu/report/<工程>.json`，左栏第 6 项跟着显示「已完成」——
+   * 把"没跑过"说成"跑过了"。判据只认 8 步里有没有非 pending 的；
+   * `reportExists` **不参与**（报告本身可能是上一次自动出报告留下的）。
+   */
+  function projRecordStateOf(path, r){
+    var steps = (r && r.steps) || [];
+    var done = 0, i;
+    for (i = 0; i < steps.length; i++) {
+      if (steps[i] && steps[i].status && steps[i].status !== 'pending') { done += 1; }
+    }
+    return {
+      key: normPathKey(String(path || '')),
+      steps: done,
+      hasSteps: done > 0,
+      reportExists: !!(r && r.reportExists === true),
+      known: !!(steps.length > 0 || (r && typeof r.reportExists === 'boolean'))
+    };
+  }
 
   function rememberSession(sid){
     if (!sid || sid === window.__resumeSavedSession) { return; }
@@ -7028,6 +7141,20 @@ withBridge(function(tauri){
   function autoReportOnEnter(){
     var p = reportPathValue();
     if (!p) { return; }                    // 没工程路径不写盘：否则会落出 .lingqu/report/unknown.*
+    // 0.39.96：**一步没跑过的工程不自动出报告**。自动出报告会写盘，写完左栏第 6 项就显示
+    // 「已完成」——于是"新工程还没开始"与"迁移报告已完成"同屏并存（用户实测就是这一路的感觉）。
+    // 只在"确实知道它没跑过"时拦（known）；读不到落档就不拦，免得把真有落档的工程也挡掉。
+    var rec = window.__projRecord;
+    if (rec && rec.known === true && rec.hasSteps === false
+        && rec.key === normPathKey(String(p))) {
+      REPORT_AUTO.key = String(p) + '|empty';
+      if ($('rpNote')) {
+        $('rpNote').style.color = '';
+        $('rpNote').textContent = '这个工程还没有任何落档（8 步都没跑）——先跑扫描/迁移，'
+          + '这里不会凭空写一份报告出来。';
+      }
+      return;
+    }
     var v = (typeof VERIFY.rate === 'number') ? VERIFY.rate : -1;
     var key = String(p) + '|' + v;
     if (REPORT_AUTO.key === key) { return; }
@@ -7307,8 +7434,9 @@ withBridge(function(tauri){
           done.push(String(steps[i].title || steps[i].id || ''));
         }
       }
-      // 报告不在断点板的 8 步里（它是落档文件不是步骤），有就一起算上，与左栏第 6 项口径一致
-      if (r && r.reportExists === true) { done.push('迁移报告'); }
+      // 报告不在断点板的 8 步里（它是落档文件不是步骤），与左栏第 6 项同口径：
+      // **只有空报告不算做过**（0.39.96 用户实测：「都还没跑迁移，迁移报告显示已完成」）。
+      if (r && r.reportExists === true && done.length > 0) { done.push('迁移报告'); }
       window.__switchNote.steps = done.length;
       el.style.color = '';
       if (done.length > 0) {
@@ -7332,6 +7460,13 @@ withBridge(function(tauri){
         : ('换了工程（' + (basenameOf(next) || next) + '）：正在核对这个工程的旧落档…');
       window.__switchNote.text = String($('migrateNote').textContent);
     }
+
+    // ① ② ④ 三屏同属"上一次在这个工程上跑出来的"，必须一起清。
+    //    0.39.96 用户实测：「新选了个还没开始的项目，点开迁移画像页就已经有数据，可状态是未开始」——
+    //    这三个屏的数据在 SCAN/DEPS/PORT_DECISIONS 与 window.__scan* 里，**不在** PANEL_RESET_IDS
+    //    快照里，所以下面 ⑤ 那段清不到它们。清成「尚未扫描 / 还没跑过」，不是「失败」。
+    try { clearScanPanel(); clearDepsPanel(); clearPortPanel(); renderTopProj(); }
+    catch (e) { /* 清屏失败不影响主流程，但别让异常挡住后面的重置 */ }
 
     // ⑤ ⑤⑥⑦ 三屏的数据面板与流水线/产物卡：同属"上一次在这个工程上跑出来的"。
     //    状态对象清成**空对象**（不是初始形状）：`renderPipeline` 判 `dp.ok === false` 会报
@@ -7366,6 +7501,16 @@ withBridge(function(tauri){
   // 外层 `setCurrentProject()` 经此桥调用（§4-107：外层不许直接引用内层符号）
   window.__onProjectSwitch = resetProjectRunState;
 
+  /* 切工程 / 恢复上次工程后，主动按落档回读一遍各步（0.39.88）。
+   * 不只在"进 ① 屏"时回读：用户停在首屏（一键迁移）时，顶栏胶囊也要能说出
+   * "这个工程扫过没有"，否则就是 §4-94 那类"界面在谎报"。
+   * 外层 setCurrentProject 经此桥调用（§4-107）。 */
+  window.__refreshStepRecords = function(why){
+    var w = why || 'proj';
+    try { fillStepFromRecord('scan', w); } catch (e) { /* 单个步骤读失败不影响其它步 */ }
+    try { fillStepFromRecord('deps', w); } catch (e) { }
+  };
+
   /* ===== 按落档回填面板（0.39.87）=====
    * 用户报障原话：「执行 AI 自动迁移后会自动执行左侧的迁移画像和依赖扫描等操作，但各个项里面的内容
    * 没有更新，看到的可迁移度等仍是空的」。根因：① 迁移画像 / ② 依赖扫描两屏只认**人点按钮**
@@ -7379,7 +7524,9 @@ withBridge(function(tauri){
   var STEP_SEEN = {};   // 「工程|步骤 → 上次看到跑了没」，只在 ran 由假变真时回读一次
 
   function pathOfStepScreen(step){
-    var inp = (step === 'scan') ? $('scanPath') : $('depsPath');
+    // 每屏的「工程路径」输入框（⑤ 用 buildPath，⑥ 与部署共用 deployPath）
+    var ids = { scan: 'scanPath', deps: 'depsPath', build: 'buildPath', verify: 'deployPath' };
+    var inp = $(ids[step] || '');
     var p = (inp && inp.value) ? String(inp.value).trim() : '';
     if (p) { return p; }
     try { return String(projectPathValue() || '').trim(); } catch (e) { return ''; }
@@ -7393,20 +7540,30 @@ withBridge(function(tauri){
   function fillStepFromRecord(step, why){
     var p = pathOfStepScreen(step);
     if (!p) { return false; }
-    var isScan = (step === 'scan');
-    var cmd = isScan ? 't2h:scan' : 't2h:deps';
-    var render = isScan ? renderScan : renderDeps;
-    var noteEl = isScan ? $('scanNote') : $('depsNote');
+    // 每步一条只读回读命令 + 对应渲染函数 + 提示位（0.39.88 起含 ⑤ 构建 / ⑥ 验证）
+    var SPEC = {
+      scan:   { cmd: 't2h:scan',   render: renderScan,   note: 'scanNote' },
+      deps:   { cmd: 't2h:deps',   render: renderDeps,   note: 'depsNote' },
+      build:  { cmd: 't2h:build',  render: renderBuild,  note: 'buildNote' },
+      verify: { cmd: 't2h:verify', render: renderVerify, note: 'verNote' }
+    };
+    var spec = SPEC[step];
+    if (!spec) { return false; }
+    var cmd = spec.cmd, render = spec.render, noteEl = $(spec.note);
     invoke(cmd, { path: p, action: 'load' }).then(function(r){
       if (r && r.ok === true) {
-        render(r);
+        // 扫描/依赖的渲染第二参要吃工程完整路径（胶囊判"这份数属于哪个工程"，§4-95）
+        render(r, p);
         STEP_FILL.n += 1;
         STEP_FILL.last = step + '@' + (why || '');
         if (noteEl) {
-          noteEl.textContent = '已按落档回读：' + String(r.out || '')
+          noteEl.textContent = '已按落档回读：' + String(r.out || r.outJson || '')
             + (why === 'ai' ? '（AI 刚跑完这一步）' : '（进屏按落档回填，不是重新扫描）');
         }
         reportUi('step-fill:' + step);
+        // 回读改了「这份数属于哪个工程」，顶栏胶囊得跟着重算（0.39.88：原来只有进 ① 屏才回读，
+        // 于是首屏写着「未扫描」、左栏徽标却写着「已完成」，两处自相矛盾）
+        try { if (typeof renderTopProj === 'function') { renderTopProj(); } } catch (e) { /* 胶囊重绘失败不影响回填 */ }
         return;
       }
       // 没落档：**不清屏、也不写"扫描失败"**（把"没跑过"渲染成"失败"是另一种谎报，§4-63 同族），
@@ -7443,6 +7600,10 @@ withBridge(function(tauri){
     // 不该在屏上空着（用户报障：「可迁移度等仍是空的」）。纯读盘，不重跑扫描。
     if (name === 'profile') { try { fillStepFromRecord('scan', 'enter'); } catch (e) {} }
     if (name === 'deps') { try { fillStepFromRecord('deps', 'enter'); } catch (e) {} }
+    // 0.39.88：⑤ 构建打包 / ⑥ 真机验证 同理——agent 跑过 build/verify 之后，
+    // 屏上不该还写着"还没跑交叉编译 / 尚未验证"（§4-135 判据①：agent 会自己跑的步骤，界面要有回读通道）
+    if (name === 'build') { try { fillStepFromRecord('build', 'enter'); } catch (e) {} }
+    if (name === 'verify') { try { fillStepFromRecord('verify', 'enter'); } catch (e) {} }
     if (name !== 'report') { return; }
     // 0.39.85：进 ⑦ 屏先问一句"屏幕上这一代报告还算不算数"——
     // 没出过 / ⑥ 屏又验证过一次（可用率变了）/ 换了工程 → 自动按落档重出（纯读盘、秒级）
@@ -7932,6 +8093,13 @@ withBridge(function(tauri){
       scanBaseline: (window.__scan && window.__scan.baseline) || '',
       scanKind: SCAN.kind,
       scanRows: window.__scanRows || 0,
+      // 0.39.95：工具链体检的结论与影响面（renderEnv 里记的 window.__env*）。
+      // 断言口径：envMissIds 不含 'hdc'/'llvm-mingw'（本机两者都在），envScopes 每项都带影响面。
+      envTotal: (typeof window.__envTotal === 'number') ? window.__envTotal : -1,
+      envOk: (typeof window.__envOk === 'number') ? window.__envOk : -1,
+      envMiss: (typeof window.__envMiss === 'number') ? window.__envMiss : -1,
+      envMissIds: String(window.__envMissIds || ''),
+      envScopes: String(window.__envScopes || ''),
       // 0.39.87：AI 跑完扫描/依赖后界面回读落档的证据。
       // 断言口径：stepFillN>0 ∧ stepFillLast 含 'scan' 或 'deps' ∧ scanRows>0（① 屏不再是空的）。
       // ① 屏的可迁移度总分（renderScan 里记在 window.__scanScore），用来断言"AI 跑完扫描后别再是空的"
@@ -8063,6 +8231,8 @@ withBridge(function(tauri){
       verifyOk: VERIFY.ok === true,
       verifyRate: (typeof VERIFY.rate === "number") ? VERIFY.rate : -1,
       verifyPass: (typeof VERIFY.pass === "number") ? VERIFY.pass : 0,
+      // 功能口径分子（0.39.88）：与 verifyCovered 配对的才是它
+      verifyFeaturePass: (typeof VERIFY.featurePass === "number") ? VERIFY.featurePass : -1,
       verifyTotal: (typeof VERIFY.total === "number") ? VERIFY.total : 0,
       verifyLimit: (typeof VERIFY.limit === "number") ? VERIFY.limit : 0,
       verifyUnknown: (typeof VERIFY.unknown === "number") ? VERIFY.unknown : 0,
@@ -8279,6 +8449,31 @@ withBridge(function(tauri){
     //       settingsProbeMs ≥ 0、settingsProbeRows 里能看到按钮从「测试中…」回到「测试连通」、
     //       errorCount=0；且**配置一字未改**（settingsDump 的 model/base 与启动时一致）。
     // 这是「没有视觉也能证明按钮真的干了事」的唯一办法——探针真的会花一次模型调用。
+    // 文档配图序列（LINGQU_UI_PROBE=shots，0.39.96）：按左栏顺序把 7 屏挨个切一遍，
+    // 每屏停留 SHOT_STAY 毫秒并回投一次 ui_report。**页面只负责切屏 + 回投**，
+    // 抓图由外部脚本按 `.lingqu/ui-report.json` 的 `activeScreen` 变化来做——
+    // 页面不写图片、不碰文档，这样"截图"这件事不会渗进业务代码。
+    if (mode === 'shots') {
+      // 左栏一共 8 项（⚡ 一键迁移 + ① 项目/环境 + ②–⑦），全都要出图
+      var SHOT_SEQ = ['migrate', 'env', 'profile', 'deps', 'port', 'build', 'verify', 'report'];
+      var SHOT_STAY = 7000;   // 留足回读落档 + 渲染的时间（① ② 屏进屏要读盘）
+      var SHOT_IDX = 0;
+      var SHOT_ROUNDS = 2;   // 跑两轮：抓图侧可能比窗口晚起，第二轮兜住漏掉的屏
+      var shotTick = function(){
+        if (SHOT_IDX >= SHOT_SEQ.length * SHOT_ROUNDS) {
+          window.__shots = { ok: 1, n: SHOT_IDX, seq: SHOT_SEQ.join(',') };
+          reportUi('shots-done');
+          return;
+        }
+        var name = SHOT_SEQ[SHOT_IDX % SHOT_SEQ.length];
+        SHOT_IDX += 1;
+        try { switchScreen(name); } catch (e) { /* 单屏切失败不中断整串 */ }
+        reportUi('shots-' + SHOT_IDX + '-' + name);
+        setTimeout(shotTick, SHOT_STAY);
+      };
+      setTimeout(shotTick, 3000);   // 先让首屏（最近项目表）读一次盘
+      return;
+    }
     if (mode === 'probe') {
       setTimeout(function(){ openSettings(); }, 1000);
       setTimeout(function(){ reportUi('probe-settings-open'); }, 2400);
@@ -8602,8 +8797,20 @@ withBridge(function(tauri){
         if ($('verRate')) { $('verRate').innerHTML = '100<small>%</small>'; }
         if ($('migratePct')) { $('migratePct').textContent = '100%　真机已连接'; }
         AIP.active = false; AIP.finished = true;
+        // 0.39.96：再伪造一份「① 屏有上一个工程的扫描数据」——用户实测「新工程还没开始，
+        // 点开迁移画像就有数据」，判据是换工程后评分环/表格/状态对象都必须清空。
+        try {
+          renderScan({ ok: true, project: pa, out: 'X:/lingqu-probe-fake/scan.json',
+            metrics: { R: 13, D: 13, H: 0, U: 0, C1: 100, C3: 100, C2: -1 },
+            score: { total: 72, deps: 60 },
+            scan: { items: {
+                      commands: [{ name: 'probe_cmd', verdict: '改造', rule: 'R1', siteCount: 1, sites: ['src/a.rs'], evidence: 'e' }],
+                      events: [], plugins: [], frontend: [], platform: [] },
+                    blockers: [] } });
+        } catch (e) { fails.push('前置：伪造扫描数据失败（' + ((e && e.message) || e) + '）'); }
         var before = { btn: ($('btnAiPort') && $('btnAiPort').disabled === true) ? 1 : 0,
-                       hap: $('hapBuilt') ? $('hapBuilt').textContent : '' };
+                       hap: $('hapBuilt') ? $('hapBuilt').textContent : '',
+                       scan: (typeof window.__scanScore === 'number') ? window.__scanScore : -1 };
         setCurrentProject(pb);
         var r1 = (window.__projRun && window.__projRun.resets) || 0;
         if (before.btn !== 1) { fails.push('前置：按钮本应是禁用的（探针没伪造成功）'); }
@@ -8614,6 +8821,20 @@ withBridge(function(tauri){
         if ($('hapBuilt') && $('hapBuilt').textContent !== '—') { fails.push('HAP 面板没回到占位（' + $('hapBuilt').textContent + '）'); }
         if ($('migratePct') && $('migratePct').textContent !== '—') { fails.push('进度百分比没清（' + $('migratePct').textContent + '）'); }
         if ($('verRate') && String($('verRate').textContent).indexOf('100') >= 0) { fails.push('可用率面板没清（' + $('verRate').textContent + '）'); }
+        // ① 屏（迁移画像）：评分环 / 表格 / 状态对象三处都要回到"没跑过"
+        if (before.scan !== 72) { fails.push('前置：① 屏本应伪造出可迁移度 72（实际 ' + before.scan + '）'); }
+        if (typeof window.__scanScore === 'number' && window.__scanScore > 0) {
+          fails.push('换工程后 ① 屏仍挂着上一个工程的可迁移度（' + window.__scanScore + '）');
+        }
+        if (window.__scan && window.__scan.path) {
+          fails.push('换工程后 ① 屏扫描状态没清（path=' + window.__scan.path + '）');
+        }
+        if ($('scoreTotal') && $('scoreTotal').textContent !== '—') {
+          fails.push('换工程后评分环没清（' + $('scoreTotal').textContent + '）');
+        }
+        if ($('scanRows') && String($('scanRows').textContent).indexOf('probe_cmd') >= 0) {
+          fails.push('换工程后 ① 屏表格仍是上一个工程的条目');
+        }
         if ($('btnMigrateStop') && $('btnMigrateStop').disabled !== true) { fails.push('没有在跑时「停止」应置灰'); }
         if ($('migrateNote') && String($('migrateNote').textContent).indexOf('换了工程') < 0) {
           fails.push('提示没说明换了工程（' + String($('migrateNote').textContent).slice(0, 40) + '）');
@@ -9142,6 +9363,15 @@ function setCurrentProject(p){
   syncProjectEchoes();
   renderTopProj();   // 顶栏胶囊跟着换（0.39.28：原来它写死成 habit-tree）
   refreshRailBadges();   // 左栏步骤徽标跟着工程走（0.39.41：原来是写死的「待接入」）
+  // 各步按落档回读一次（0.39.88）：顶栏胶囊"扫过没有"、① ② 屏的数字，都要与**这个工程**的落档一致，
+  // 不能等到用户点进那一屏才回填。桥没挂上就留证据，别装作读过了（§4-63 同族）。
+  if (typeof window.__refreshStepRecords === 'function') {
+    try { window.__refreshStepRecords(changed ? 'proj' : 'proj-same'); }
+    catch (e) {
+      window.__uiErrors = (window.__uiErrors || []);
+      window.__uiErrors.push('stepRefresh: ' + (e && e.message ? e.message : e));
+    }
+  }
 }
 
 /* ===== 左栏步骤徽标：由落档驱动（0.39.41）=====
@@ -9235,16 +9465,26 @@ window.__railApply = function(res){
       note: s.note || ''
     };
   });
-  // 报告这项（0.39.64，用户实测"报告已生成、左栏仍是未开始"）：断点板只有 8 步
-  // （scan…verify），**没有 report 这一步**，而左栏第 6 项按 `rows['report']` 取数 ⇒ 永远 undefined
-  // ⇒ 永远「未开始」。现在后端 `t2h:resume` 直接回投报告落档是否存在，这里补一行合成观测。
+  // 报告这项（0.39.64 补上；0.39.96 修判据）：断点板只有 8 步（scan…verify），没有 report 这一步，
+  // 所以这里合成一行。**但"报告文件在"不等于"报告这一步做过了"**：进 ⑦ 屏的自动出报告会写盘，
+  // 于是从没跑过的工程也有一份 0/8 的空报告 ⇒ 左栏第 6 项假显示「已完成」（用户实测原话：
+  // 「都还没跑迁移，迁移报告显示为已完成状态，这个不对吧？」）。判据改成：
+  // 有报告 **且** 8 步里至少跑过一步；只有空报告时如实说清它是空档，**不算做过**（§4-63 第三态）。
+  var anyStepRan = ((res && res.steps) || []).some(function(s){
+    return !!(s && s.status && s.status !== 'pending');
+  });
   if (res && typeof res.reportExists === 'boolean') {
+    var repOk = (res.reportExists === true) && anyStepRan;
     rows['report'] = {
       step: 'report',
       title: '迁移报告',
-      ran: res.reportExists === true,
-      ok: res.reportExists === true,
-      note: res.reportExists === true ? String(res.reportOut || '') : '还没出报告（⑦ 屏点「生成报告」）'
+      ran: repOk,
+      ok: repOk,
+      note: (res.reportExists !== true)
+        ? '还没出报告（⑦ 屏点「生成报告」）'
+        : (anyStepRan
+            ? String(res.reportOut || '')
+            : ('有一份空报告（8 步一步没跑）——它没反映任何迁移结果，不计"已完成"：' + String(res.reportOut || '')))
     };
   }
   renderRailBadges(rows);
