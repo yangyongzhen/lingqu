@@ -35,6 +35,9 @@
 - 同一天另两个样本按同一口径跑通：**habit-tree**（10:21，0 处人工介入）、
   **m3u8dl-tauri**（11:29，1 处人工介入）。即 **3 个真实 Tauri 应用 8 步 8/8 + 可用率 100%**
   （juCang 仍为旧口径 85%，待重算），README 进度随之 **60% → 65%**。
+- **六道门禁整跑全绿**（`./scripts/test.sh`，exit 0）：`build-biz / test / check / js-syntax /
+  build-app / build-cli` 全部 PASS，三条构建闸均 **0 warning**，`cjpm test` TOTAL=445 / FAILED=0 / ERROR=0；
+  第 ④ 闸按 §4-92 只结束本仓自己那只 `main.exe`，cjh 引擎未受影响。
 - 单测 **445 例全绿**（`PASSED 445 / FAILED 0 / ERROR 0`）；顺带修掉一例**停在旧口径的断言**：
   `testPreflightBlocksOnBundleMismatch` 仍在要求签名提示含「DevEco」，与"签名不走 DevEco"的定案冲突
   → 改为断 `sign --auto` / `sign --login`，并**反向断言**文案里不许出现 DevEco（§4-147 同族）。
