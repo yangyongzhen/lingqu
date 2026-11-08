@@ -7009,7 +7009,9 @@ withBridge(function(tauri){
                  risk: { level: '', label: '', summary: '', hi: 0, items: [] },
                  // 0.39.85：报告是"生成那一刻的快照"。记下生成时间与自动重出次数，
                  // 才说得清"屏幕上这个数字是哪一代落档算出来的"（§4-133）。
-                 generatedAt: '', autoCount: 0 };
+                 // 0.39.98：loaded/source 再说清"这一份是回读来的还是刚重出的"
+                 // ——agent 用 lingqu-cli report 跑过之后，屏上不该显示"从没生成过"。
+                 generatedAt: '', autoCount: 0, loaded: false, source: '' };
 
   function reportPathValue(){
     var p = ($('reportPath') && $('reportPath').value ? $('reportPath').value : '').trim();
@@ -7052,6 +7054,9 @@ withBridge(function(tauri){
       // 生成时间来自 t2h:report 的回投（后端早就给了，以前没存）；autoCount 要跨多次渲染累计
       generatedAt: String(r.generatedAt || ''),
       autoCount: (typeof REPORT.autoCount === 'number') ? REPORT.autoCount : 0,
+      // 0.39.98：来源位。回读来的这份**没有重出过**，界面要能说出来（别把"读盘"说成"刚生成"）
+      loaded: r.loaded === true,
+      source: (r.loaded === true) ? 'record' : 'generated',
       artifacts: (r.artifacts && r.artifacts.length) ? r.artifacts : [],
       error: String(r.error || ''),
       // 风险分级（0.39.47）：字段名与 t2h:report 的返回一一对应（riskLevel/riskItems…）
@@ -7102,7 +7107,8 @@ withBridge(function(tauri){
         rkBody.appendChild(tr);
       });
     }
-    $('rpTime').textContent = (r.generatedAt ? ('生成于 ' + String(r.generatedAt)) : '—')
+    $('rpTime').textContent = (REPORT.generatedAt ? ('生成于 ' + String(REPORT.generatedAt)) : '—')
+      + (REPORT.source === 'record' ? '　（按落档回读，没重出）' : '')
       + (REPORT.autoCount ? ('　进屏自动重出 ' + REPORT.autoCount + ' 次') : '');
     if (REPORT.error) {
       $('rpNote').style.color = 'var(--err)';
@@ -7120,7 +7126,8 @@ withBridge(function(tauri){
         : '点「生成迁移报告」按落档出报告。';
     }
     $('rpPaths').innerHTML = REPORT.paths.html
-      ? ('已导出：<br><span class="mono">' + esc(REPORT.paths.md) + '</span><br><span class="mono">'
+      ? ((REPORT.source === 'record' ? '上一次导出（按落档回读）：<br>' : '已导出：<br>')
+         + '<span class="mono">' + esc(REPORT.paths.md) + '</span><br><span class="mono">'
          + esc(REPORT.paths.html) + '</span><br><span class="mono">' + esc(REPORT.paths.json) + '</span>')
       : '还没导出——点「生成迁移报告」会同时写 MD / HTML / JSON 三份。';
     var art = $('rpArtifacts');
@@ -7176,6 +7183,43 @@ withBridge(function(tauri){
    * 所以「换了工程」与「同一工程又验证过一次」都会触发一次重出，反复切屏则不会重复写盘。
    * 为什么必须自动：报告是**快照**，落档会变；以前只有点按钮/AI 收尾才渲染，
    * 于是 ⑥ 屏把可用率从 66% 重跑到 100% 之后，⑦ 屏能一直挂着 66%（§4-133）。 */
+  /* ⑦ 屏的「按落档回读」（0.39.98）
+   *
+   * 判据（§4-135 判据①，⑤⑥ 屏的同族）：agent 用 `lingqu-cli report` 跑过之后，
+   * `.lingqu/report/<工程>.json` 躺在盘上、结论俱全，而 ⑦ 屏渲染成
+   * `reportOk=false / reportRate=-1` —— 看着像"从没生成过"，因为 `REPORT` 只有人点
+   * 「生成迁移报告」才会被填。**纯读盘、不重出**：重出一遍要写三份文件，
+   * 屏幕上的数字就成了"重算的那份"，与落档不再是同一份（§0.1「落档说了算」）。 */
+  var REPORT_LOAD = { loaded: false, error: '', tried: 0 };
+
+  function loadReportRecord(){
+    var p = reportPathValue();
+    REPORT_LOAD.tried += 1;
+    if (!p) {
+      REPORT_LOAD.loaded = false;
+      REPORT_LOAD.error = '没有工程路径，不知道该读谁的落档';
+      return Promise.resolve(false);
+    }
+    return invoke('t2h:report', { action: 'load', path: p }).then(function(r){
+      r = r || {};
+      if (r.loaded !== true) {
+        REPORT_LOAD.loaded = false;
+        REPORT_LOAD.error = String(r.error || '');
+        // 落档不存在时**不清空**屏上已有的内容（可能刚生成过、也可能这次真没跑过），
+        // 只把原因记下来由 note 说清（§4-63：没跑过 ≠ 跑失败）
+        return false;
+      }
+      REPORT_LOAD.loaded = true;
+      REPORT_LOAD.error = '';
+      renderReport(r);
+      return true;
+    }).catch(function(e){
+      REPORT_LOAD.loaded = false;
+      REPORT_LOAD.error = String(e && e.message ? e.message : e);
+      return false;
+    });
+  }
+
   var REPORT_AUTO = { key: '' };
   function autoReportOnEnter(){
     var p = reportPathValue();
@@ -7517,7 +7561,7 @@ withBridge(function(tauri){
     VERIFY = { ok: false, rate: -1, pass: 0, total: 0, limit: 0, unknown: 0, shots: 0, md: '', error: '' };
     REPORT = { ok: false, project: '', did: [], undone: [], need: [], stats: {},
                paths: { md: '', html: '', json: '' }, conclusion: '', generatedAt: '',
-               autoCount: 0, artifacts: [], error: '',
+               autoCount: 0, artifacts: [], error: '', loaded: false, source: '',
                risk: { level: '', label: '', summary: '', hi: 0, items: [] } };
     restorePanelSnapshot();
     try { renderPipeline(); renderArtifacts(); } catch (e) { /* 面板重绘失败不影响主流程 */ }
@@ -7644,13 +7688,21 @@ withBridge(function(tauri){
     if (name === 'build') { try { fillStepFromRecord('build', 'enter'); } catch (e) {} }
     if (name === 'verify') { try { fillStepFromRecord('verify', 'enter'); } catch (e) {} }
     if (name !== 'report') { return; }
-    // 0.39.85：进 ⑦ 屏先问一句"屏幕上这一代报告还算不算数"——
-    // 没出过 / ⑥ 屏又验证过一次（可用率变了）/ 换了工程 → 自动按落档重出（纯读盘、秒级）
-    try { autoReportOnEnter(); } catch (e) { /* 自动重出失败不影响手动按钮 */ }
-    if (BATCH_AUTO.done) { return; }
-    BATCH_AUTO.done = 1;
-    if (!$('batchSamples') || $('batchSamples').value) { return; }
-    runBatch();
+    // 0.39.98：**先按落档回读**（纯读盘、秒级），屏幕立刻与盘上一致；
+    // 读完再交给 0.39.85 的「这一代还算不算数」判定决定要不要重出（重出会写盘、改数字）。
+    // 顺序不能反：重出可能失败/耗时，而"看得见的就是落档里的"这件事不能等任何人点按钮。
+    var afterLoad = function(){
+      try { autoReportOnEnter(); } catch (e) { /* 自动重出失败不影响手动按钮 */ }
+      if (BATCH_AUTO.done) { return; }
+      BATCH_AUTO.done = 1;
+      if (!$('batchSamples') || $('batchSamples').value) { return; }
+      runBatch();
+    };
+    try {
+      loadReportRecord().then(afterLoad).catch(afterLoad);
+    } catch (e) {
+      afterLoad();
+    }
   };
 
   /* ===== AI 迁移技能（2026-11-01，AI 接入第 1 步）=====
@@ -8327,6 +8379,10 @@ withBridge(function(tauri){
       // 报告与落档同代（0.39.85）：reportStale=屏幕上这一代已落后于 ⑥ 屏最新落档（必须 false）；
       // reportGeneratedAt=这一代是按什么时候的落档出的（空 = 没出过）；reportAutoCount=进屏自动重出了几次
       reportStale: reportStaleNow(),
+      // 这份报告是从哪来的（0.39.98）：record=按落档回读（只读盘）/ generated=这次重出。
+      // 断言口径：reportLoaded=1 且 reportOk=1 —— 说明屏幕上的数字来自 .lingqu，不是"从没生成过"
+      reportLoaded: REPORT.loaded === true,
+      reportSource: REPORT.source || '',
       reportGeneratedAt: REPORT.generatedAt || '',
       reportAutoCount: (typeof REPORT.autoCount === 'number') ? REPORT.autoCount : 0,
       // 风险分级（0.39.47）：总体级别 / 标签 / 明细条数 / 高风险条数 / 汇总句（界面到底显示了什么）

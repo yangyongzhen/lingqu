@@ -5,6 +5,41 @@
 
 ---
 
+## [0.39.98] - 2026-11-08
+
+**主题**：⑦ 迁移报告屏按落档回读——agent 跑过 `lingqu-cli report`，屏上不许再显示「从没生成过」。
+0.39.87 给 ⑤ 构建 / ⑥ 验证两屏补了 `action:"load"`，**⑦ 屏漏在外面**：note-gen-2 的
+`.lingqu/report/note-gen-2.json`（19:26，结论「8 步完成 3/8（37%）」）明明躺在盘上，
+`ui_report` 却报 `reportOk=false / reportRate=-1`，因为 `REPORT` 只有人点「生成迁移报告」才被填。
+
+### Added
+
+- **`t2h:report {action:"load"}`**（`src/main.cj`）：只读回投 `.lingqu/report/<工程>.json`，
+  **不重新生成、不写任何文件**——重出一遍会写三份文件，屏幕上的数字就成了"重算的那份"。
+- **纯函数 `reportRecordOf(res, root, projPath, projName)`**：按盘上 `lingqu/report/v1` 的 schema 抄字段
+  （`sections[{key,title,lines}]` / `artifacts` / `risk{…}` / `stats{…}` / `files{md,html}`），
+  并把嵌套 `risk` 展成界面读的扁平 `riskLevel/riskLabel/riskSummary/riskHigh/riskItems`；
+  三份产物路径按**工程路径**重定位（落档里记的是相对 CWD 的 `.lingqu\report/x.md`，§4-75 同族）。
+- `ui_report` 新增 `reportLoaded` / `reportSource`（两处一起加，§4-60）：断言 `reportLoaded=1 ∧ reportOk=1`
+  即证明屏上数字来自落档，而不是"从没生成过"。
+- 单测 `src/tests/report_load_test.cj`：主路径（三段计数/统计透传/风险别名/产物重定位）+
+  三个边界（空落档不崩、只有一段时后两段计 0、`verifyRate=-1` 仍是"尚未验证"不许变 0）。
+
+### Changed
+
+- 进 ⑦ 屏的顺序改为**先回读、再判重出**：回读秒级且只读盘，屏幕立刻与盘上一致；
+  0.39.85 的「这一代过期就自动重出」保持原样，排在回读之后（它要写盘、会改数字）。
+- 报告屏文案标出来源：时间行「（按落档回读，没重出）」、导出区「上一次导出（按落档回读）：」，
+  别把"读盘"说成"刚生成"（§4-94 同族：界面不许对自己编数字来源）。
+
+### 验证范围
+
+- ①②④⑤ + 3b 六项门禁全绿（build 0 warning / test TOTAL=486 全绿 / check / js-syntax / desktop / cli）。
+- 真实 note-gen-2 回读**尚未在界面上取证**：断言口径 `ui_report.reportLoaded=1` 且 `reportSource="record"`，
+  下次开窗进 ⑦ 屏时抓一次；本轮只在单测与命令层验证。
+
+---
+
 ## [0.39.97] - 2026-11-08
 
 **主题**：监管态不许再"装还在干活"——补上第三态「**已交接**」。0.39.87 端到端实测：agent 自己

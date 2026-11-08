@@ -2257,6 +2257,9 @@ public class UiReportCommand <: CommandHandler {
         // 报告与落档同代（0.39.85）：stale=界面上这一代已落后于 ⑥ 屏最新落档（必须 false）；
         // generatedAt=这一代按什么时候的落档出的；autoCount=进屏自动重出了几次。白名单两处都要加（§4-60）
         o.put("reportStale", JsonBool(argBool(args, "reportStale", false)))
+        // ⑦ 屏的这份报告是从哪来的（0.39.98）：record=按落档回读（只读盘）/ generated=这次重出
+        o.put("reportLoaded", JsonBool(argBool(args, "reportLoaded", false)))
+        o.put("reportSource", JsonString(argStr(args, "reportSource", "")))
         o.put("reportGeneratedAt", JsonString(argStr(args, "reportGeneratedAt", "")))
         o.put("reportAutoCount", JsonInt(argInt(args, "reportAutoCount", 0)))
         // 风险分级（0.39.47）：总体级别 / 标签 / 条数 / 高风险条数——白名单两处都要加（§4-60）
@@ -4308,6 +4311,151 @@ public func reportOutPathOf(projPath: String, projName: String): String {
     return lqDirOf(projPath) + cjhPathSep() + "report" + cjhPathSep() + reportFileBase(name) + ".md"
 }
 
+/**
+ * 只读回读**迁移报告**落档（0.39.98）：`t2h:report {action:"load"}` 走这里。
+ *
+ * 为什么要有：⑦ 屏的每个数字都挂在 `REPORT` 这个"这次生成出来的"对象上，只有人点
+ * 「生成迁移报告」才被填。于是 agent 跑过 `lingqu-cli report`、`.lingqu/report/<工程>.json`
+ * 明明躺在盘上，界面却渲染成 `reportOk=false / reportRate=-1`（看着像"从没生成过"）。
+ * 与 ⑤⑥ 屏同一病因（§4-135）：干活的那一方写了落档，显示的那一方没跟上。
+ *
+ * **纯读盘**：不重新生成、不写任何文件——屏幕上的数字必须与落档逐字一致。
+ */
+func reportRecordResponse(path: String): JsonObject {
+    var res = JsonObject()
+    let nm = sanitizeFileName(projectNameOf(path))
+    res.put("project", JsonString(if (nm.size > 0) { nm } else { "unknown" }))
+    res.put("path", JsonString(path))
+    if (path.trimAscii().size == 0) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("t2h:report action=load 需要参数 path（或设环境变量 LINGQU_REPORT_PATH）"))
+        return res
+    }
+    let outFile = lqPathOf(path, "report/${reportFileBase(nm)}.json")
+    res.put("outJson", JsonString(outFile))
+    if (!exists(Path(outFile))) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("还没有迁移报告落档（${outFile}）：点「生成迁移报告」，或让 agent 跑 " +
+            "lingqu-cli report --path <工程>"))
+        return res
+    }
+    var root = JsonValue.fromStr("{}")
+    try {
+        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("读迁移报告落档失败：${e}"))
+        return res
+    }
+    res.put("loaded", JsonBool(true))
+    return reportRecordOf(res, root, path, nm)
+}
+
+/**
+ * 把 `lingqu/report/v1` 落档映射成 `t2h:report` 的返回体（纯函数，有单测）。
+ *
+ * 落档形态对着盘上那份抄（§4-57）：`sections[{key,title,lines}]`、`artifacts[{label,path}]`、
+ * `risk{level,label,summary,high,mid,low,items}`、`stats{stepDone…verifyRate…}`、`files{md,html}`。
+ * 界面侧读的是**扁平**的 `riskLevel/riskLabel/…`，所以这里补别名，不逼界面记两套。
+ * `files.md/html` 里记的是**相对 CWD** 的路径（实测 `.lingqu\report/x.md`），一律按工程路径重定位。
+ */
+/** 取对象里的数组字段，取不到/类型不对就给空数组（回读落档时到处要用） */
+func jsonArrayOrEmpty(o: JsonObject, k: String): JsonArray {
+    match (o.get(k)) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsArray => return v.asArray()
+            case _ => return JsonArray()
+        }
+        case None => return JsonArray()
+    }
+}
+
+/** 取对象里的对象字段，取不到/类型不对就给空对象 */
+func jsonObjectOrEmpty(o: JsonObject, k: String): JsonObject {
+    match (o.get(k)) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsObject => return v.asObject()
+            case _ => return JsonObject()
+        }
+        case None => return JsonObject()
+    }
+}
+
+func reportRecordOf(res: JsonObject, root: JsonValue, projPath: String, projName: String): JsonObject {
+    var obj = JsonObject()
+    match (root.kind()) {
+        case JsonKind.JsObject => obj = root.asObject()
+        case _ => ()
+    }
+    res.put("generatedAt", JsonString(argStr(obj, "generatedAt", "")))
+    res.put("conclusion", JsonString(argStr(obj, "conclusion", "")))
+    // 三段（did / undone / need）与证据清单原样透传：界面按 sections[index] 取，后端别重排
+    var secs = JsonArray()
+    var counts = [0, 0, 0]
+    let rawSecs = jsonArrayOrEmpty(obj, "sections")
+    var i: Int64 = 0
+    while (i < rawSecs.size()) {
+        let sec = rawSecs[i]
+        var so = JsonObject()
+        match (sec.kind()) {
+            case JsonKind.JsObject => so = sec.asObject()
+            case _ => ()
+        }
+        if (i < 3) {
+            counts[i] = jsonArrayOrEmpty(so, "lines").size()
+        }
+        secs.add(sec)
+        i += 1
+    }
+    res.put("sections", secs)
+    res.put("didCount", JsonInt(counts[0]))
+    res.put("undoneCount", JsonInt(counts[1]))
+    res.put("needCount", JsonInt(counts[2]))
+    match (obj.get("artifacts")) {
+        case Some(v) => res.put("artifacts", v)
+        case None => res.put("artifacts", JsonArray())
+    }
+    var stats = JsonObject()
+    match (obj.get("stats")) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsObject => stats = v.asObject()
+            case _ => ()
+        }
+        case None => ()
+    }
+    res.put("stats", stats)
+    // 风险分级：落档是嵌套的 risk{…}，界面要扁平的 riskXxx（0.39.47 起就是这个口径）
+    var risk = JsonObject()
+    match (obj.get("risk")) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsObject => risk = v.asObject()
+            case _ => ()
+        }
+        case None => ()
+    }
+    res.put("riskLevel", JsonString(argStr(risk, "level", "")))
+    res.put("riskLabel", JsonString(argStr(risk, "label", "")))
+    res.put("riskSummary", JsonString(argStr(risk, "summary", "")))
+    res.put("riskHigh", JsonInt(argInt(risk, "high", 0)))
+    res.put("riskMid", JsonInt(argInt(risk, "mid", 0)))
+    res.put("riskLow", JsonInt(argInt(risk, "low", 0)))
+    match (risk.get("items")) {
+        case Some(v) => res.put("riskItems", v)
+        case None => res.put("riskItems", JsonArray())
+    }
+    // 三份产物按工程路径重定位（落档记的是相对 CWD 的路径，换个工作目录就指错地方）
+    let base = reportFileBase(projName)
+    res.put("md", JsonString(lqPathOf(projPath, "report/${base}.md")))
+    res.put("html", JsonString(lqPathOf(projPath, "report/${base}.html")))
+    res.put("json", JsonString(lqPathOf(projPath, "report/${base}.json")))
+    res.put("ok", JsonBool(true))
+    res.put("error", JsonString(""))
+    return res
+}
+
 /** 步骤 id 列表（错误提示里要能列全，别让人猜） */
 func taskStepIdsJoined(): String {    var text = ""
     for (id in taskStepIds()) {
@@ -4341,6 +4489,10 @@ public class ReportCommand <: CommandHandler {
         }
         if (path.size == 0) {
             path = envOr("LINGQU_VERIFY_PATH", "")
+        }
+        // ---- action=load（0.39.98）：只回读报告落档，**不重新生成**（生成要写盘三份文件）----
+        if (argStr(args, "action", "") == "load") {
+            return reportRecordResponse(path)
         }
         var projName = ""
         if (path.size > 0) {
