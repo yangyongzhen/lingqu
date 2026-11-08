@@ -533,6 +533,48 @@ public func escalationLineFor(stalled: Bool, overBudget: Bool, minutes: Int64, f
 }
 
 /**
+ * 「已交接」判定（纯函数，0.39.88）。
+ *
+ * 为什么需要：`isStalled` 只认"落档连续不变"，而 0.39.87 实测的现场是**没人推、也没人知道**——
+ * agent 自己 `turn_done`（rounds=33 / tools=32）之后交了报告就收工，监管态却仍显示
+ * 「进行中：正在处理「交叉编译」」，`stalled=false / finished=false`，用户盯着屏幕以为它在干活。
+ * 这不是绕圈（它没在动），也不是完工（活没干完），是**第三态：已交接**。
+ *
+ * 三条同时成立才算，任何一条不成立都不许报（宁可晚报，不可谎报）：
+ *   turnEnded     轨迹最后一条是 `turn_done` —— 这一轮真的收了
+ *   !allConcluded 8 步还有没结论的 —— 活确实没干完
+ *   !busy         没有工具在跑 —— 不是"正在干活"
+ */
+public func handoffDue(turnEnded: Bool, allConcluded: Bool, busy: Bool): Bool {
+    return turnEnded && !allConcluded && !busy
+}
+
+/** 交接时的一句话结论（纯函数）：说清「谁停了 / 到哪一步 / 该谁接手」 */
+public func autoportHandoffVerdict(rows: ArrayList<MigrateRow>): String {
+    let done = autoportDoneCount(rows)
+    let total = Int64(rows.size)
+    var failed = ""
+    for (r in rows) {
+        if (r.ran && !r.ok && r.skipped.size == 0 && failed.size == 0) {
+            failed = r.title
+        }
+    }
+    var at = ""
+    if (failed.size > 0) {
+        at = "，卡在「${failed}」"
+    }
+    return "AI 本轮已收尾（自己认为无法再推进）——已交接给你：${done}/${total} 步有结论${at}"
+}
+
+/** 交接时升级给人的那句话（纯函数）：与「停滞 / 超预算」同一处上屏，说清下一步怎么做 */
+public func handoffEscalation(rows: ArrayList<MigrateRow>): String {
+    let done = autoportDoneCount(rows)
+    let total = Int64(rows.size)
+    return "这一轮 AI 已经自己收工，迁移没做完（${done}/${total}）：先把最后那条工具报错修掉再点「继续」，" +
+        "或者直接接管；光等它不会自己再动。"
+}
+
+/**
  * AI 自动迁移的**监管状态**（命令层持有；页面轮询 `t2h:autoport_status` 读它）。
  *
  * 只记"人看得懂的那点东西"：跑到哪、第几次轮询、最近几次落档快照（给停滞判定用）。

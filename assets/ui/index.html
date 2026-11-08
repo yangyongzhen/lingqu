@@ -4180,7 +4180,7 @@ withBridge(function(tauri){
    *   ② 把任务书发过去（走已有 WS 通道，流式回复直接给人看）
    *   ③ 盯落档（t2h:autoport_status）：进度、停滞、预算；要人定的用确认卡
    * 判定只认落档：AI 说"迁好了"，时间轴没变就是没变。 */
-  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0, finished: false, autoReported: false };
+  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0, finished: false, autoReported: false, handoff: false, turnEnded: false };
 
   /** scope → 中文档位文案（全自动 / 半自动「只做这一步」） */
   function autoPortScopeLabel(scope){
@@ -4198,7 +4198,12 @@ withBridge(function(tauri){
     st = st || {};
     AIP.active = st.active === true;
     AIP.polls = (typeof st.polls === 'number') ? st.polls : 0;
-    AIP.stalled = st.stalled === true;
+    // 0.39.88 第三态「已交接」：agent 自己收尾了（轨迹最后一条是 turn_done）、计划还没做完。
+    // 它既不是"在绕圈"（根本没在动），也不是完工 —— 0.39.87 实测界面仍写「进行中」，
+    // 用户盯着屏幕以为它还在干活。这里把它并入"要人接手"的显示口径。
+    AIP.handoff = st.handoff === true;
+    AIP.turnEnded = st.turnEnded === true;
+    AIP.stalled = st.stalled === true || AIP.handoff === true;
     // finished = 8 步全部有结论（通过或明确跳过）。活干完了落档当然不再变，
     // 后端已据此不判停滞；界面这边也不能再喊"绕圈"（0.39.41 用户实测误报）
     AIP.finished = st.finished === true;
@@ -4268,6 +4273,28 @@ withBridge(function(tauri){
     return Math.round((Date.now() - AIP.started) / 60000);
   }
 
+  /**
+   * 「已交接」时的那段话（0.39.88）：结论 + **卡点**。
+   *
+   * 只写"AI 停了"是不够的——用户要的是"那我该干什么"。所以固定三段：
+   * 到哪一步 / 卡在什么上（最后一条工具报错首行）/ 现在能做哪两件事。
+   */
+  function handoffNoteOf(st){
+    st = st || {};
+    var head = String(st.escalation || '');
+    if (!head) {
+      var c = (typeof st.concludedCount === 'number') ? st.concludedCount : 0;
+      var t = (typeof st.total === 'number') ? st.total : 0;
+      head = '这一轮 AI 已经自己收工，迁移没做完（' + c + '/' + t + '）。';
+    }
+    var err = String(CJ.lastToolErr || '');
+    var name = String(CJ.lastToolErrName || '');
+    var tail = err
+      ? ('\n卡在最后这条工具报错' + (name ? ('（' + name + '）') : '') + '：' + err.slice(0, 200))
+      : '\n没有工具报错——那是模型侧自己判断没法推进，直接接管或点「继续」都行。';
+    return head + tail;
+  }
+
   function pollAiPort(){
     // activity：页面收到的 WS 帧总数（含 delta）。agent 长时间"只思考/只流式回话、不调工具"时，
     // 落档和轨迹都不动，但帧一直在来 —— 带上它，后端就不会把"正在干活"判成"在绕圈"（0.39.34）
@@ -4283,6 +4310,11 @@ withBridge(function(tauri){
         aiPortNote('全部步骤都已有结论（' + c + '/' + t + '，含明确跳过的）——活已经干完，'
           + '落档不再变化属正常；可以直接看结果卡/报告，需要收尾就点「停止」。'
           + '（这多半是上一轮跑过的落档：想从头再跑一遍就点「↻ 从头重跑」，它会把旧落档归档再开始）');
+      } else if (st.handoff === true) {
+        // 第三态（0.39.88）：AI 自己收工了。**必须说清"没人干了"**，并把卡点摆出来，
+        // 否则就是用户实测的那种：界面写着「进行中：正在处理交叉编译」，实际五分钟后什么都没有。
+        aiPortNote(handoffNoteOf(st));
+        reportUi('autoport-handoff');
       } else if (st.stalled === true) {
         aiPortNote(String(st.escalation || 'AI 好像绕圈了'));
         reportUi('autoport-stalled');
@@ -4369,6 +4401,10 @@ withBridge(function(tauri){
         }
         sendDirective(kick);
         AIP.active = true;
+        // 新一轮开始：上一轮的「已交接」结论必须清掉，否则界面顶着旧结论看新回合
+        AIP.handoff = false;
+        AIP.turnEnded = false;
+        AIP.stalled = false;
         if ($('btnMigrateStop')) { $('btnMigrateStop').disabled = false; }
         aiPortNote('AI 已接手（任务书 ' + AIP.directiveChars + ' 字，' + autoPortScopeLabel(scope) + '）。' + prepText);
         // 0.39.82：开跑前把设置重读一次。后端可能刚为"预算落地"重启过引擎，
@@ -4390,6 +4426,9 @@ withBridge(function(tauri){
     wsSend({ type: 'chat', message: '继续，按任务书接着干：先跑 resume 看落档，只处理没过的步骤；'
       + '落档没变化说明上次的修法没生效，换个思路再试；实在不行就升级给人。' });
     AIP.active = true;
+    AIP.handoff = false;
+    AIP.turnEnded = false;
+    AIP.stalled = false;
     if ($('btnMigrateStop')) { $('btnMigrateStop').disabled = false; }
     startAiPolling();
     reportUi('autoport-continue');
@@ -7916,6 +7955,9 @@ withBridge(function(tauri){
       aiPortPolls: (typeof AIP.polls === 'number') ? AIP.polls : 0,
       aiPortStalled: AIP.stalled === true,
       aiPortFinished: AIP.finished === true,
+      // 第三态「已交接」（0.39.88）：断言 aiPortHandoff=1 且 aiPortVerdict 含「已交接」
+      aiPortHandoff: AIP.handoff === true,
+      aiPortTurnEnded: AIP.turnEnded === true,
       // 左栏步骤徽标（0.39.41）：profile=通过 | deps=未开始 | …
       // 状态挂在 window.__rail：左栏那段代码在 CJ 作用域**之外**（写 CJ.xxx 会 ReferenceError）
       railBadges: (window.__rail && window.__rail.badges) ? String(window.__rail.badges) : '',

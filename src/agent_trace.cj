@@ -148,3 +148,35 @@ public func agentTraceBusy(projectPath: String): Bool {
         return false
     }
 }
+
+/** 轨迹里**最后一条非空记录**的 kind（纯函数；空文本给空串） */
+public func traceLastKindOfText(text: String): String {
+    var last = ""
+    for (l in text.split("\n", -1)) {
+        let t = l.trimAscii()
+        if (t.size > 0) {
+            last = t
+        }
+    }
+    return traceKindOfLine(last)
+}
+
+/**
+ * agent 的回合**是否已经结束**（最后一条轨迹是 `turn_done`）。
+ *
+ * 与 `agentTraceBusy` 是一对：busy 说"正在跑工具"，本函数说"这一轮已经收了"。
+ * 两者都为假 = 既没在跑工具、也没有人在推 —— 这正是 0.39.87 端到端实测漏掉的那一格：
+ * agent 自己 `turn_done`（rounds=33）之后，监管态仍写「进行中：正在处理「交叉编译」」，
+ * `stalled=false / finished=false`，用户盯了五分钟以为它还在干活。
+ */
+public func agentTraceTurnEnded(projectPath: String): Bool {
+    let f = tracePathOf(projectPath)
+    if (!exists(Path(f))) {
+        return false
+    }
+    try {
+        return traceLastKindOfText(String.fromUtf8(File.readFrom(f))) == "turn_done"
+    } catch (e: Exception) {
+        return false
+    }
+}

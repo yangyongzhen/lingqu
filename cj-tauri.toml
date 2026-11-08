@@ -2,7 +2,7 @@
 # cj-tauri sync 从这里派生 targets/ 骨架（desktop/ohos）；cj-tauri check 校验它并检测骨架漂移。
 [app]
   name = "lingqu"
-  version = "0.39.96"
+  version = "0.39.97"
   # 应用标识：桌面是安装 ID，鸿蒙直接是 bundleName（每段须字母开头、只含字母数字下划线）
   id = "com.lingqu.migrator"
   # 业务包名（cjpm 约束①：toml 模块名必须等于源包名）

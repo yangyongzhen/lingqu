@@ -5,6 +5,46 @@
 
 ---
 
+## [0.39.97] - 2026-11-08
+
+**主题**：监管态不许再"装还在干活"——补上第三态「**已交接**」。0.39.87 端到端实测：agent 自己
+`turn_done`（rounds=33 / tools=32）收了工，界面却仍写「进行中：正在处理「交叉编译」」，
+`stalled=false / finished=false`，用户盯着屏幕以为它在跑。它不是绕圈（根本没动），也不是完工（活没干完）。
+
+### Added
+
+- **第三态判定 `handoffDue(turnEnded, allConcluded, busy)`**（`src/autoport.cj`，纯函数）：
+  三条同时成立才算——轨迹最后一条是 `turn_done`（这一轮真收了）、8 步还有没结论的（活没干完）、
+  没有工具在跑（不是"正在干活"）。任何一条不成立都不许报（宁可晚报，不可谎报）。
+- **`agentTraceTurnEnded(projectPath)` + `traceLastKindOfText(text)`**（`src/agent_trace.cj`）：
+  与 `agentTraceBusy` 成一对——一个说"正在跑工具"，一个说"这一轮已收"。判据只认落档/轨迹，
+  不依赖页面记忆（刷新、换屏都不该改变"谁在干活"这个事实）。
+- **`autoportHandoffVerdict` / `handoffEscalation`**：说清「谁停了 / 几步有结论 / 卡在哪一步 / 下一步怎么做」。
+- `t2h:autoport_status` 新增 `handoff` / `turnEnded` 两个字段，`verdict` / `escalation` 随交接态改写。
+- `ui_report` 新增 `aiPortHandoff` / `aiPortTurnEnded`（两处一起加，§4-60），界面据此可断言。
+
+### Changed
+
+- 界面把「已交接」并入"要人接手"口径：`AIP.stalled = stalled || handoff`；
+  轮询新增交接分支，note 里**贴出最后一条工具报错首行**（没报错就明说"那是模型侧判断"）。
+- 开跑/点「继续」时清掉上一轮的 `handoff / turnEnded / stalled`，不让旧结论顶着新回合。
+
+### Tests
+
+- 新增 `src/tests/autoport_handoff_test.cj`：`handoffDue` 主路径 + 三个反向（已完工 / 在干活 / 回合未完）、
+  交接结论与升级文案的措辞、`traceLastKindOfText` 的三个边界（尾部空行 / 最后是 tool / 空文本）。
+  `cjpm test` TOTAL **475 → 482**。
+
+### 验证范围
+
+- ①②（业务包 build 零警告 / test 482 全绿）已过。
+- ④ 桌面产物闸**未跑**：本轮手里有正在跑的实测窗口，跑 ④ 会为释放产物结束 `main.exe`（§4-72）。
+  关窗后必须补跑 `./scripts/test.sh` 全量。
+- 真实「已交接」现场未再复现（本轮迁移停在 ④ 交叉编译，agent 收尾时本轮监管态已停），
+  断言口径：`ui_report.aiPortHandoff=1` 且 `aiPortVerdict` 含「已交接」。
+
+---
+
 ## [0.39.96] - 2026-11-08
 
 **主题**：AI 干完的活，屏上要看得见——⑤ 构建 / ⑥ 验证补上「按落档回读」通道；顶栏胶囊不再把已扫描的工程说成

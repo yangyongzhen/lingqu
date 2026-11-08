@@ -2024,6 +2024,10 @@ public class UiReportCommand <: CommandHandler {
         // 自动迁移是否"全部有结论"（0.39.41）：界面据此不再喊"绕圈"
         o.put("aiPortFinished", JsonBool(argBool(args, "aiPortFinished", false)))
         o.put("aiPortVerdict", JsonString(argStr(args, "aiPortVerdict", "")))
+        // 第三态「已交接」（0.39.88）：agent 自己收尾、计划没做完——断言 aiPortHandoff=1
+        // 且 aiPortVerdict 里出现「已交接」，不再把"没人干活"显示成「进行中」
+        o.put("aiPortHandoff", JsonBool(argBool(args, "aiPortHandoff", false)))
+        o.put("aiPortTurnEnded", JsonBool(argBool(args, "aiPortTurnEnded", false)))
         // 左栏步骤徽标（0.39.41）：profile=通过 | deps=未开始 | …（写死的「待接入」已删）
         o.put("railBadges", JsonString(argStr(args, "railBadges", "")))
         o.put("railFail", JsonString(argStr(args, "railFail", "")))
@@ -5774,6 +5778,17 @@ public class AutoPortStatusCommand <: CommandHandler {
         }
         let done = autoportDoneCount(rows)
         let concluded = autoportConcludedCount(rows)
+        // 0.39.88 第三态「已交接」：agent 自己收尾了，落档里还有没结论的步骤。
+        // 判据全部来自落档/轨迹（turn_done + 未完成 + 没工具在跑），不依赖页面记忆——
+        // 页面被刷新/换屏也不该改变"到底谁在干活"这个事实。
+        let turnEnded = agentTraceTurnEnded(path)
+        let handoff = handoffDue(turnEnded, allConcluded, busy)
+        var verdict = autoportVerdict(rows, allConcluded || !active, stalled)
+        var escalation = escalationLineFor(stalled, false, minutes, allConcluded)
+        if (handoff) {
+            verdict = autoportHandoffVerdict(rows)
+            escalation = handoffEscalation(rows)
+        }
         var arr = JsonArray()
         for (r in rows) {
             arr.add(r.toJson())
@@ -5793,8 +5808,10 @@ public class AutoPortStatusCommand <: CommandHandler {
         o.put("percent", JsonInt(done * 100 / Int64(MIGRATE_STEPS.size)))
         o.put("stalled", JsonBool(stalled))
         o.put("busySecs", JsonInt(busySecs))
-        o.put("verdict", JsonString(autoportVerdict(rows, allConcluded || !active, stalled)))
-        o.put("escalation", JsonString(escalationLineFor(stalled, false, minutes, allConcluded)))
+        o.put("turnEnded", JsonBool(turnEnded))
+        o.put("handoff", JsonBool(handoff))
+        o.put("verdict", JsonString(verdict))
+        o.put("escalation", JsonString(escalation))
         o.put("rows", arr)
         return o
     }
