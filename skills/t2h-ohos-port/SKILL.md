@@ -70,10 +70,66 @@ lingqu-cli verify --path .                   # 采证 + 功能清单 + 可用率
 lingqu-cli report --path .                   # 三段式迁移报告
 lingqu-cli resume --path .                   # 8 步断点板（下一步是哪步）
 lingqu-cli batch  --samples "a|b|c"          # 多工程矩阵
+lingqu-cli probe  --path . --feature <名> --click-file <按钮文本文件>   # 真机点一下再判定
 ```
 
 规则：**先 `resume` 看停在哪步，再跑那一步**；判断"能不能用"只认 `verify` 的落档，
 不要拿 `build` 通过就宣称可用。真机装不上先 `sign` 体检再看 `deploy` 的 hilog。
+
+## 真机功能自测（点了有没有反应，让证据说话）
+
+> 「进程在跑 / 日志正常 / 截图看着像」都不算功能可用。要判定某个功能，必须在真机上
+> **点它一下，再对比点了之后发生了什么**——这一步是 agent 自己能做、也应当自己做的实验。
+
+闭环六步（`lingqu-cli probe` 已把它做成一条命令）：
+
+1. `dumpLayout` 存 before
+2. 按**文本**找节点，取 `attributes.bounds` 的 `"[x1,y1][x2,y2]"` 中心——
+   **别按截图估坐标**：设备 1840×2800，截图是缩放过的，估出来的点必偏
+3. `uiInput click <x> <y>`
+4. 再 dump 一次 after，比对文本集合：**冒出新的文本 = 有反应；一字不差 = 没反应**
+5. 截图归档（给人看，也是第二路证据）
+6. 结论写进 `.lingqu/verify/<工程>.probe.json`，`verify` 会**优先**采用它
+
+```bash
+lingqu-cli probe --path . --feature pick_m3u8_file --click-file ./pick.txt
+lingqu-cli probe --path . --feature start_download --click-file ./start.txt --expect-log-file ./expect.txt
+```
+
+判定口径：点后版面**多出新文本**（且不含"无法/失败/错误"）→ `pass`；版面**没变** → `fail`；
+日志命中 `--expect-log` 同样算 `pass` 的一种。落档里有 `verdict / note / evidence`，`note` 要写清
+"多出了哪条文本"或"节点数 35→35"，别只写"失败"。
+
+**中文一律写进 UTF-8 文件再传**（`--click-file` / `--expect-log-file`）：仓颉在 Windows 上
+接不到非 ASCII 的 argv，`--click 选择文件` 会直接崩（AGENTS §4-119）。同理给 agent 传的任何中文内容都走文件。
+
+探针**不计人工介入**（A3）——这是 agent 自己做的实验。判不准就如实记「未测」，别凑结论：
+需要前置现场的（例：取消下载要先有"下载进行中"）、需要滚动或跨窗口才看得见的节点。
+
+## 工具自检与自装（devecocli）
+
+`devecocli`（`@deveco/deveco-cli`）是华为的 HarmonyOS 开发工具集 CLI，能查平台文档、拉官方 skills、
+读设备日志。**先探再用，别一上来 `npm i -g` 覆盖用户环境**：
+
+```bash
+"$APPDATA/npm/devecocli.cmd" --version    # 绝对路径探（它不在 cjh 继承来的 PATH 上）
+command -v devecocli                      # 有就直接用
+```
+
+探不到才装：`npm i -g @deveco/deveco-cli`（装完仍是上面那个绝对路径）。实测 1.0.0 有的子命令：
+
+| 子命令 | 用途 |
+|---|---|
+| `device` / `emulator` | 列设备、起模拟器 |
+| `log --bundle-name <包名> --keyword <词> --tail 200` | 拉 hilog——**崩溃/白屏先看它** |
+| `docs search <词>` / `docs read` / `docs catalog` | 查本地平台文档 |
+| `skills list` / `skills find` / `skills add --skill <hmos-*> --path ~/.cjh/skills` | 拉官方 skills（61 个 `hmos-*`） |
+| `init --path ~/.cjh/skills --agent` | 把 skills 装成 agent 可用的形态 |
+| `create` / `build` / `run` / `serve` / `update` | 建/编/跑工程 |
+
+**它没有 `sign`**：签名走 `lingqu-cli sign --login` + `sign --auto`，别指望它。两条边界：
+`skills list` 是**线上拉取**（断网就空）；`docs` 依赖本地 `docs.zip`，缺了先 `update`。
+它也没有"点了有没有反应"的判定能力——那件事用 `lingqu-cli probe`。
 
 ## 让灵渠的界面能执行你的建议（回复格式约定）
 

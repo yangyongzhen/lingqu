@@ -224,7 +224,9 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
             inp.cliPath + " sign   --login      # AGC 登录（浏览器授权一次，必须人配合）\n" +
             inp.cliPath + " sign   --auto --path .  # 自动签发：注册设备→证书→profile→写回 build-profile\n" +
             inp.cliPath + " deploy --path .     # 真机装启 + hilog\n" +
-            inp.cliPath + " verify --path .     # 采证 + 功能清单 + 可用率\n" +
+            inp.cliPath + " probe  --path . --feature <功能名> --click-file <按钮文本文件>   # " +
+            "真机点一下再判定（写 .lingqu/verify/<工程>.probe.json）\n" +
+            inp.cliPath + " verify --path .     # 采证 + 功能清单 + 可用率（会优先采用 probe 的结论）\n" +
             inp.cliPath + " report --path .     # 三段式报告\n```\n"
         d += "（路径里有空格就整条用双引号括起来。）\n"
     } else {
@@ -271,8 +273,31 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
         d += autoPortScopeGoal(inp.scope) + "\n"
         d += "**做完就停**：不要顺手把后面的步骤也做了，下一步由人点。\n\n"
     }
-    d += "## 真机：" + (if (inp.device) { "在线 —— `deploy` / `verify` 要跑，装不上先看签名态\n" }
-        else { "**不在线** —— 跳过 deploy/verify（落档会是\"未跑\"，如实报告即可，别当成失败）\n" }) + "\n"
+    d += "## 真机：" + (if (inp.device) { "在线 —— `deploy` / `verify` / `probe` 都要跑，装不上先看签名态\n" }
+        else { "**不在线** —— 跳过 deploy/verify/probe（落档会是\"未跑\"，如实报告即可，别当成失败）\n" }) + "\n"
+    if (inp.device) {
+        // A4「核心功能可用率」的分母是核心功能清单，而清单里每一项都要有**真机上的结论**。
+        // 光跑 verify 只能采证（数崩溃、读截图），点不点得动它一概不知道 —— 实测就是这么把
+        // 两个空壳命令放过成"未测"的（AGENTS §4-48：进程在跑 ≠ 界面正常）。
+        d += "### 功能是**点**出来的，不是看出来的\n"
+        d += "「装上了 / 进程在跑 / 日志没报错 / 截图看着像」都不能算功能可用。要判定某一项，"
+        d += "就在真机上点它一下，再对比点了之后发生了什么 —— 这件事你自己能做，也应当你做：\n"
+        d += "```bash\n"
+        d += "printf '选择文件' > .lingqu/click.txt      # 中文一律写文件，别写进命令行参数（Windows argv 过不了非 ASCII）\n"
+        d += inp.cliPath + " probe --path . --feature pick_file --click-file .lingqu/click.txt\n"
+        d += inp.cliPath + " probe --path . --feature start_download --click-file .lingqu/start.txt " +
+            "--expect-log-file .lingqu/expect.txt\n"
+        d += "```\n"
+        d += "- 判据是**版面变化**：点后冒出新的文本 → `pass`；版面一字不差 → `fail`（说明这个按钮是死的）；"
+        d += "日志命中 `--expect-log` 也算 `pass`；\n"
+        d += "- 结论自动落进 `.lingqu/verify/<工程>.probe.json`，`verify` 会**优先**采用它；"
+        d += "你**不用**手写这个文件；\n"
+        d += "- 探针是你在做实验，**不计人工介入**（A3）；\n"
+        d += "- 判不了就如实记「未测」，别凑：需要前置现场的（例：取消下载要先有\"下载进行中\"）、"
+        d += "需要滚动或跨窗口才看得见的节点，都算未测，写清缺什么现场。\n"
+        d += "- 点不动先分清是**壳没接**（该命令在 OHOS 分支是空实现）还是**真崩了**："
+        d += "看源码里那条命令的 OHOS 分支，别反复试点。\n\n"
+    }
 
     d += "## 纪律（说错一句就露馅）\n"
     d += "- **平台限制 ≠ 失败**：鸿蒙没有的能力登记为限制，不算 bug，更不许写\"已修复\"；\n"

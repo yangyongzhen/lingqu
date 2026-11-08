@@ -25,13 +25,13 @@ import stdx.encoding.json.*
 /** CLI 支持的命令（与注册表一致；GUI 专属的 quit/cjh_* 不开放） */
 public let CLI_COMMANDS: Array<String> = [
     "migrate", "scan", "deps", "port", "revert", "decisions", "diagnose", "build", "hap", "sign",
-    "deploy", "verify", "report", "batch", "resume", "env", "skill", "agent_context", "git_clone", "notes"
+    "deploy", "verify", "report", "probe", "batch", "resume", "env", "skill", "agent_context", "git_clone", "notes"
 ]
 
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
 func cliIsBoolFlag(key: String): Bool {
     for (k in ["screenshot", "verifyOnly", "apply", "start", "all", "json", "wait", "applyPort",
-               "preflight", "force"]) {
+               "preflight", "force", "shot"]) {
         if (k == key) {
             return true
         }
@@ -168,7 +168,10 @@ public func cliUsage(): String {
     text += "  lingqu-cli sign --login                 # 自动签名第一步：AGC 登录（浏览器授权一次）\n"
     text += "  lingqu-cli sign --auto --path E:/work/habit-tree   # 自动签名全流程（设备/证书/profile/写回）\n"
     text += "  lingqu-cli resume --path E:/work/habit-tree\n"
-    text += "  lingqu-cli report --path E:/work/habit-tree\n\n"
+    text += "  lingqu-cli verify --path E:/work/habit-tree\n"
+    text += "  lingqu-cli probe --path E:/work/habit-tree --feature pick_m3u8_file --click-file ./pick.txt\n"
+    text += "                                         # 真机上点一下再判定：版面冒出新内容/日志命中期望行=pass，什么都没变=fail\n"
+    text += "                                         # --click-file / --expect-log-file：中文文本一律走 UTF-8 文件（argv 传中文会崩，§4-119）\n"
     text += "说明：命令与界面上的按钮一一对应（同一份实现），结果同时落工程里的 .lingqu/。\n"
     text += "退出码：0 = ok；1 = 失败或参数不全（stderr 里会是 JSON 的错误原因）。\n"
     return text
@@ -456,6 +459,10 @@ func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcCont
     }
     if (cmd == "verify") {
         return VerifyCommand().handle(fullName, args, ctx)
+    }
+    if (cmd == "probe") {
+        // 真机点按探针：没有 GUI 入口（它是 agent 的手），直接走实现，不注册 IPC 命令
+        return runProbe(args)
     }
     if (cmd == "report") {
         return ReportCommand().handle(fullName, args, ctx)

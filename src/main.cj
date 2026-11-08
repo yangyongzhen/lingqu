@@ -3891,7 +3891,10 @@ public class VerifyCommand <: CommandHandler {
         res.put("outJson", JsonString(outJson))
         res.put("evidenceLog", JsonString(outEvidence))
         res.put("error", JsonString(outError))
-        eprintln("[lingqu][verify] ${projName} pass=${stats.pass}/${stats.covered} scope=${stats.scope} " +
+        // 分子分母必须同源：全局 pass（含启动/构建等基础设施项）配功能分母会写成 "6/5"。
+        // 功能口径用 featurePass/covered，全局口径单独写 pass，读的人一眼能分清。
+        eprintln("[lingqu][verify] ${projName} feature=${stats.featurePass}/${stats.covered} " +
+            "scope=${stats.scope} pass=${stats.pass} " +
             "limit=${stats.limit} unknown=${stats.unknown} notVerified=${stats.notVerified} rate=${stats.ratePercent}%")
         return res
     }
