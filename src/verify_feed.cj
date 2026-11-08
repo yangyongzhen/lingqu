@@ -264,6 +264,21 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
         case None => ()
     }
 
+    // 真机实测结论（我们自己点按取证后落的档，**不算人工介入**）：
+    //   {"features": {"start_download": {"verdict":"pass","note":"日志回「请先输入…」","evidence":"<截图路径>"}}}
+    // 与 human.json 分开存是故意的——A3 数的是"人被打扰几次"，探针不该虚增它；
+    // 但它的证据强度高于静态推断：点了有没有响应是事实，代码看起来像空壳只是推断（0.39.93）。
+    var probeFeatures = JsonObject()
+    match (readJsonOrNone(resolveLqPath(projPath, "verify/${projName}.probe.json"))) {
+        case Some(p) =>
+            let feats = objFieldOf(p, "features")
+            match (feats.kind()) {
+                case JsonKind.JsObject => probeFeatures = feats.asObject()
+                case _ => ()
+            }
+        case None => ()
+    }
+
     // 逐条命令：命中哪处平台 API / 鸿蒙侧是不是空壳 / 人测过没有
     let cmdArr = objFieldOf(items, "commands")
     match (cmdArr.kind()) {
@@ -282,6 +297,17 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                                 f.fallbackLanded = !ohosImplStubOnly(src, nm)
                             }
                             f.humanVerdict = jsonStrField(human, nm)
+                            // 真机探针（有就记，没测过就留空 → 条目照旧判"未测"）
+                            let pr = objFieldOf(probeFeatures, nm)
+                            let pv = jsonStrField(pr, "verdict")
+                            if (pv == "pass" || pv == "fail") {
+                                f.probeVerdict = pv
+                                f.probeNote = jsonStrField(pr, "note")
+                                let pe = jsonStrField(pr, "evidence")
+                                if (pe != "") {
+                                    f.probeEvidence.add(pe)
+                                }
+                            }
                             features.add(f)
                         }
                     case None => ()

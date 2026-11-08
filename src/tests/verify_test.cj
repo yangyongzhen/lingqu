@@ -509,3 +509,66 @@ public func testOhosImplStubOnlyReadsRealSourceShape(): Unit {
         "}\n"
     @Assert(ohosImplStubOnly(landed, "pick_folder"), false)
 }
+
+// ── 0.39.93：真机实测（探针落档）压过静态推断 + 全局 pass 不许当功能分子 ──────────
+// 现场（m3u8dl-tauri，2026-11-08 15:32 落档）：核心功能 pass=0 / covered=3 → 0%，
+// 报告结论句却写成「4/3 项有结论」——分子取了全局 pass（4，含 launch/build/hap/frontend），
+// 分母取了功能 covered（3）。两个不同集合相除，用户一眼就看出来是假数字。
+
+@Test
+public func testProbeVerdictBeatsStaticInference(): Unit {
+    let i = greenInput()
+    // 静态推断：命中命令执行 API、鸿蒙侧空壳 → 本来判 fail
+    let ok = featOf("start_download", "开始下载", "std::process::Command", false)
+    // 但真机上点过，日志真的回了一句话 → 以实测为准
+    ok.probeVerdict = "pass"
+    ok.probeNote = "真机点按「开始下载」：运行日志回「请先输入 m3u8 地址或选择本地文件」"
+    i.features.add(ok)
+    // 反向：静态没命中平台 API（本来只会判"未测"），但真机点了毫无反应 → fail
+    let bad = featOf("get_task", "查询任务进度", "", true)
+    bad.probeVerdict = "fail"
+    bad.probeNote = "真机点按：界面与日志均无任何变化"
+    i.features.add(bad)
+    let items = buildChecklist(i)
+    let a = itemOf(items, "feat:start_download")
+    @Assert(a.verdict, "pass")
+    @Assert(a.note.contains("真机实测"), true)
+    @Assert(a.note.contains("请先输入"), true)
+    @Assert(itemOf(items, "feat:get_task").verdict, "fail")
+}
+
+@Test
+public func testProbeEvidenceLandsInChecklistItem(): Unit {
+    let i = greenInput()
+    let f = featOf("detect_ffmpeg", "探测 ffmpeg", "", true)
+    f.probeVerdict = "pass"
+    f.probeNote = "界面显示「未找到（将回退为二进制合并）」= 探测跑了并给了结论"
+    f.probeEvidence.add(".lingqu/shots/start.layout.json")
+    i.features.add(f)
+    let it = itemOf(buildChecklist(i), "feat:detect_ffmpeg")
+    @Assert(it.verdict, "pass")
+    var found = false
+    for (e in it.evidence) {
+        if (e.contains("start.layout.json")) {
+            found = true
+        }
+    }
+    // 证据要能自证：截图/版面树路径必须落进条目，否则"实测过"只是一句话
+    @Assert(found, true)
+}
+
+@Test
+public func testStatsExposeFeaturePassSeparately(): Unit {
+    // 用户看到的现场：装配 4 项 pass + 3 项功能 fail → 报告那句「4/3 项有结论」
+    let i = greenInput()
+    i.features.add(featOf("pick_folder", "选择目录", "rfd::FileDialog", false))
+    i.features.add(featOf("pick_m3u8_file", "选择文件", "rfd::FileDialog", false))
+    i.features.add(featOf("open_in_explorer", "打开所在目录", "std::process::Command", false))
+    let s = computeStats(buildChecklist(i))
+    @Assert(s.scope, "features")
+    // 全局 pass 含装配项 → 绝不能拿它当功能分子
+    @Assert(s.pass > s.featurePass, true)
+    @Assert(s.featurePass, 0)
+    @Assert(s.covered, 3)
+    @Assert(s.ratePercent, 0)
+}

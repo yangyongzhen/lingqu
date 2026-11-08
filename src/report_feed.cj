@@ -174,7 +174,11 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
             // 结论句据此不加括号，不会把"旧档缺字段"说成"全都测过了"。
             facts.verifyCovered = intFieldOf(stats, "covered", 0)
             facts.verifyNotVerified = intFieldOf(stats, "notVerified", 0)
+            // 结论句的分子：功能口径用功能通过数；装配口径（没扫过）才回落全局 pass。
+            // 老落档没有 featurePass → 装配口径下就是 pass 本身，features 口径下按 0 处理（宁少不多）。
             facts.verifyScope = jsonStrField(stats, "scope")
+            let fPass = intFieldOf(stats, "featurePass", -1)
+            facts.verifyFeaturePass = if (fPass >= 0) { fPass } else if (facts.verifyScope == "features") { 0 } else { facts.verifyPass }
             facts.verifyRate = intFieldOf(stats, "ratePercent", -1)
             facts.limitItems = collectVerdictTitles(root, "limit")
             facts.unknownItems = collectVerdictTitles(root, "unknown")

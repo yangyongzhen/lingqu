@@ -279,3 +279,28 @@ public func testBareLqRelStripsLingquPrefix(): Unit {
     f.verifyRate = -1
     @Assert(reportConclusion(f).contains("尚未验证"), true)
 }
+
+@Test
+public func testConclusionNumeratorIsFeaturePass(): Unit {
+    // 现场错文案：「核心功能可用率 0%（4/3 项有结论，另 4 项未测）」
+    // 4 是全局 pass（launch/build/hap/frontend），3 是功能 covered —— 两个集合相除。
+    let f = satisfiedFacts()
+    f.project = "m3u8dl-tauri"
+    f.verifyScope = "features"
+    f.verifyRate = 40
+    f.verifyPass = 4
+    f.verifyFeaturePass = 2
+    f.verifyCovered = 5
+    f.verifyNotVerified = 2
+    let s = reportConclusion(f)
+    @Assert(s.contains("2/5 项有结论"), true)
+    // 分子大过分母那种数字永远不许再出现
+    @Assert(s.contains("4/5"), false)
+    // 退回装配口径（没扫过功能清单）时仍用全局 pass，别把功能分子硬套上去
+    f.verifyScope = "gates-only"
+    f.verifyRate = 100
+    f.verifyPass = 4
+    f.verifyCovered = 4
+    f.verifyNotVerified = 0
+    @Assert(reportConclusion(f).contains("4/4 项有结论"), true)
+}

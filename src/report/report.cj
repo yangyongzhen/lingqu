@@ -362,6 +362,11 @@ public class MigrationFacts {
     public var verifyCovered: Int64 = 0
     /** 未测项数：不进分母，但报告与界面必须写出来 */
     public var verifyNotVerified: Int64 = 0
+    /**
+     * **核心功能**通过条数（不等于 `verifyPass`：后者含 launch/build/hap/frontend 装配项）。
+     * 结论句的分子必须用它，否则会出现「可用率 0%（4/3 项有结论）」这种分子比分母大的假数字（0.39.93）。
+     */
+    public var verifyFeaturePass: Int64 = 0
     /** 分母口径来源：`features`（核心功能清单）/ `gates-only`（没扫过，退回装配口径） */
     public var verifyScope: String = ""
     public var verifyRate: Int64 = -1
@@ -589,7 +594,10 @@ public func reportConclusion(facts: MigrationFacts): String {
     if (facts.verifyRate >= 0) {
         rateText = "${facts.verifyRate}%"
         if (facts.verifyCovered > 0) {
-            rateText += "（${facts.verifyPass}/${facts.verifyCovered} 项有结论"
+            // 分子分母必须同源（0.39.93）：features 口径用"功能通过数"，否则拿装配 pass（含 launch/build/hap/frontend）
+            // 去除以功能分母，就会写出「可用率 0%（4/3 项有结论）」——分子比分母还大。
+            let num = if (facts.verifyScope == "features") { facts.verifyFeaturePass } else { facts.verifyPass }
+            rateText += "（${num}/${facts.verifyCovered} 项有结论"
             if (facts.verifyNotVerified > 0) {
                 rateText += "，另 ${facts.verifyNotVerified} 项未测"
             }

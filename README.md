@@ -7,8 +7,8 @@
 把「照几千字踩坑笔记手工移植一个 Tauri 应用」变成**一条命令 + 一份带证据的迁移报告**；
 而且**踩过的坑会自己长成下一轮的规则、指纹与技能**。
 
-[![Release](https://img.shields.io/badge/release-v0.39.92-00868B)](./CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-445%20passed-2ea44f)](./scripts/test.sh)
+[![Release](https://img.shields.io/badge/release-v0.39.93-00868B)](./CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-449%20passed-2ea44f)](./scripts/test.sh)
 [![Gates](https://img.shields.io/badge/gates-6%2F6%20green-2ea44f)](#-测试与质量)
 [![Language](https://img.shields.io/badge/language-Cangjie%20%2F%20Rust%20%2F%20ArkTS-00868B)](https://cangjie-lang.cn)
 [![Platform](https://img.shields.io/badge/platform-Windows%20→%20HarmonyOS%20PC-lightgrey)](#-平台与验证范围)
@@ -53,7 +53,7 @@
 | **为什么是仓颉** | 外壳（`cj-tauri`）、迁移引擎、AI 引擎（`cjh`）同栈；一个业务包 `src/` 编出桌面与鸿蒙两端产物，没有 Node/Python 运行时依赖 |
 | **特色** | **AI 自动进化飞轮**：经验与未命中错误由 agent 自己落盘，攒够次数后由人裁决进指纹 / 规则 / 技能库，下一轮自动吃上（见 [专章](#-ai-自动进化飞轮本项目的特色)，设计细节见 [`docs/AI自进化飞轮.md`](docs/AI自进化飞轮.md)） |
 | **特色** | **HAP 包自签名机制（纯仓颉实现，全程摆脱 DevEco Studio）**：本地签名链（纯仓颉 AES-128-GCM 解密口令 + 调用 hap-sign-tool）与 AGC 云生成双路线，`sign --auto` 一条命令 → `signed=true` + 真机装机启动——**迁移的最后一公里不依赖任何重型 IDE，一键到真机跑起来** |
-| **现状** | **v0.39.92**：43 个 `t2h:*` 命令 · 20 条 CLI 子命令 · 445 例单测 · 15 条改造规则 · 20 条错误指纹 · 8 步流水线六项门禁全绿；**3/5 样本**已按新口径跑出 8 步 8/8 + 核心功能可用率 100%（habit-tree / m3u8dl-tauri / rust-music-3，后者 0.39.92 复测）；0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败 |
+| **现状** | **v0.39.93**：43 个 `t2h:*` 命令 · 20 条 CLI 子命令 · 449 例单测 · 15 条改造规则 · 20 条错误指纹 · 8 步流水线六项门禁全绿；**3/5 样本**已跑出 8 步 8/8（habit-tree / rust-music-3 按新口径 100%；m3u8dl-tauri 0.39.93 真机实测为 **40%**，2/5 项有结论、另 2 项未测）；0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败 |
 
 ---
 
@@ -235,7 +235,7 @@ bash packaging/package-win.sh            # 常规目录包（DLL 按导入闭包
 ```
 [0] cj-tauri sync         清单 → 派生 targets/（改了 cj-tauri.toml 才需要 -s）
 [1] 业务包 cjpm build      零警告（unused / deprecated 一律清零，禁止"先交付后清理"）
-[2] 业务包 cjpm test       445 例 / 48 个 *_test.cj，FAILED=0 且 ERROR=0
+[2] 业务包 cjpm test       449 例 / 48 个 *_test.cj，FAILED=0 且 ERROR=0
 [3] cj-tauri check        清单校验 + 骨架漂移 + 能力三方比对（声明 × 插件自述 × 实际装配）
 [3b] 页面脚本语法          抽出 index.html 的 <script> 块逐个 node --check
 [4] targets/desktop build  骨架侧也要编得过且零警告
@@ -244,7 +244,7 @@ bash packaging/package-win.sh            # 常规目录包（DLL 按导入闭包
 
 | 质量手段 | 具体做法 | 真实产出 |
 |---|---|---|
-| **测试只测纯函数** | 进程 / 网络 / WebView2 / 真机部署**不在单测里造假绿**，这类以实机为准 | 445 例覆盖扫描器、依赖解析、规则改造、HAP 闸、签名判定、风险分级、扫描口径… |
+| **测试只测纯函数** | 进程 / 网络 / WebView2 / 真机部署**不在单测里造假绿**，这类以实机为准 | 449 例覆盖扫描器、依赖解析、规则改造、HAP 闸、签名判定、风险分级、扫描口径… |
 | **bug 先红后绿** | 修 bug 必须先写复现用例（红）再修（绿） | 本轮 0.39.55 的 3 个真 bug 就是单测当场抓出来的（见下） |
 | **零警告是硬判据** | 门禁统计 `warning:` 行数并**打印明细**（只报条数等于没检查） | 0.39.0 曾因"删调用方留下 unused"栽过，之后写进规矩 |
 | **界面可自动断言** | `t2h:ui_report` 回投版面指标（grid 列宽 / 当前屏 / JS 错误数 / 面板状态 / 200+ 字段）落 `.lingqu/ui-report.{json,log}` | 没有视觉也能证明版面对；本轮两个截图也是这么验的（像素体检：239/300 种颜色，非空白） |

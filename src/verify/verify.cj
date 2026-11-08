@@ -129,6 +129,18 @@ public class FeatureInput {
     public var fallbackLanded: Bool = false
     /** 人工实测结论：`pass` / `fail` / 空 = 没测过（人的实测永远优先于推断） */
     public var humanVerdict: String = ""
+    /**
+     * **真机实测**结论：`pass` / `fail` / 空 = 没实测过。
+     *
+     * 来源是 `<工程>/.lingqu/verify/<工程>.probe.json`（我们自己在真机上点按取证后落的档）。
+     * 和 `humanVerdict` 分开存是**故意的**：A3 数的是"人被打扰几次"，我们自己的探针不该虚增它，
+     * 但它的证据强度高于任何静态推断（点了有没有响应是事实，代码看起来像什么只是推断）。
+     */
+    public var probeVerdict: String = ""
+    /** 实测时看到了什么（进条目 note，别只留一个 pass/fail） */
+    public var probeNote: String = ""
+    /** 实测证据路径（截图 / 版面树 dump），落进条目的 evidence 供复核 */
+    public var probeEvidence: ArrayList<String> = ArrayList<String>()
 
     public init(commandName: String, title: String) {
         this.commandName = commandName
@@ -434,6 +446,13 @@ public class VerifyStats {
     public var covered: Int64 = 0
     /** 未测项数（unknown）：**不进分母**，但必须在报告与界面里显式写出来 */
     public var notVerified: Int64 = 0
+    /**
+     * **核心功能**里的通过条数（`kind == "feature"` 且 verdict=pass）。
+     *
+     * 为什么不复用 `pass`：`pass` 含 launch/build/hap/frontend 这些装配项，而 `covered` 只数功能项。
+     * 两者相除就是用户实测看到的「可用率 0%（**4/3 项有结论**）」——分子比分母还大（0.39.93）。
+     */
+    public var featurePass: Int64 = 0
     /** 分母的口径来源：`features`（核心功能清单）/ `gates-only`（没扫过，只能退回装配口径） */
     public var scope: String = ""
     /** 口径来源的人话解释（直接进报告，别让人猜这个百分比在算谁） */
@@ -450,6 +469,7 @@ public class VerifyStats {
         o.put("unknown", JsonInt(this.unknown))
         o.put("covered", JsonInt(this.covered))
         o.put("notVerified", JsonInt(this.notVerified))
+        o.put("featurePass", JsonInt(this.featurePass))
         o.put("scope", JsonString(this.scope))
         o.put("scopeNote", JsonString(this.scopeNote))
         o.put("ratePercent", JsonInt(this.ratePercent))
@@ -564,7 +584,15 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
         } else if (f.degradedApi != "") {
             it.evidence.add("鸿蒙侧分支是空壳（只 return None / todo!()）→ 前端拿到 null 静默不做任何事")
         }
-        if (f.humanVerdict == "fail") {
+        if (f.probeVerdict != "") {
+            // 真机点过 → 以实测为准（证据强度高于任何静态推断）
+            it.verdict = f.probeVerdict
+            let seen = if (f.probeNote != "") { f.probeNote } else { "真机上点按过" }
+            it.note = "真机实测：${seen}"
+            for (e in f.probeEvidence) {
+                it.evidence.add("实测证据：${e}")
+            }
+        } else if (f.humanVerdict == "fail") {
             it.verdict = "fail"
             it.note = "人工实测：真机上这项不可用"
         } else if (f.humanVerdict == "pass") {
@@ -721,6 +749,7 @@ public func computeStats(items: ArrayList<CheckItem>): VerifyStats {
             "另有 ${fNotVerified} 项未测，不计入分母"
         s.covered = fCovered
         s.notVerified = fNotVerified
+        s.featurePass = fPass
         if (fCovered > 0) {
             s.ratePercent = (fPass * 100) / fCovered
         }
@@ -729,6 +758,8 @@ public func computeStats(items: ArrayList<CheckItem>): VerifyStats {
         s.scopeNote = "没扫过核心功能清单 → 退回装配口径（编得过 / 装配过 / 起得来），**不代表功能可用**"
         s.covered = s.pass + s.fail
         s.notVerified = s.unknown
+        // 装配口径下分子分母同源，就是全局 pass（没有功能项可数）
+        s.featurePass = s.pass
         if (s.covered > 0) {
             s.ratePercent = (s.pass * 100) / s.covered
         }
