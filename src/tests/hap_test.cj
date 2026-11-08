@@ -271,3 +271,20 @@ public func testStripAnsiSurvivesChineseAndGbk(): Unit {
     @Assert(stripAnsi("普通一行"), "普通一行")
     @Assert(stripAnsi(""), "")
 }
+
+@Test
+public func testOhpmLauncherOf(): Unit {
+    // 0.39.91 复现：Windows 上直接跑 ohpm.bat 必失败（CreateProcess 不能直启 .bat），
+    // 现场报 `Created process failed … The system cannot find the file specified.`。
+    // 所以 Windows 只要有 node + pm-cli.js 就必须走 node，不许回落 .bat。
+    @Assert(ohpmLauncherOf(true, true, true, true), "node")
+    // Windows 缺 node/cli-js 时才回落 .bat（至少别静默不做事）
+    @Assert(ohpmLauncherOf(true, false, false, true), "bat")
+    @Assert(ohpmLauncherOf(true, true, false, true), "bat")
+    // Windows 三样都缺 → 空串，调用方如实报"缺 ohpm"
+    @Assert(ohpmLauncherOf(true, false, false, false), "")
+    // POSIX 上 .bat 正常，优先 .bat；没有 .bat 才用 node
+    @Assert(ohpmLauncherOf(false, true, true, true), "bat")
+    @Assert(ohpmLauncherOf(false, true, true, false), "node")
+    @Assert(ohpmLauncherOf(false, false, false, false), "")
+}

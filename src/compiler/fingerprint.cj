@@ -157,6 +157,94 @@ public func distAssetKeysOf(distDir: String): ArrayList<String> {
     return out
 }
 
+/**
+ * 列 `dist/` **根目录**下的入口文件（`index.html` 之类），相对路径即文件名。
+ *
+ * 为什么要单列：`frontendDist` 不一定是 vite 那种 `assets/` 布局。现场（rust-music-3，
+ * 2026-11-08）是 `frontendDist: "ui"` + 只有一个 `index.html`，两处取键都只认 `assets/`
+ * 前缀 ⇒ 抽出 0 个键 ⇒ 指纹闸把"编译成功、前端也确实在里面"判成红（假红）。
+ */
+public func distEntryKeysOf(distDir: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    if (!exists(Path(distDir))) {
+        return out
+    }
+    var entries: Array<FileInfo>
+    try {
+        entries = Directory.readFrom(distDir)
+    } catch (e: Exception) {
+        let _ = e
+        return out
+    }
+    for (info in entries) {
+        if (info.isDirectory()) {
+            continue
+        }
+        let name = info.name
+        if (isAssetExt(name) && !out.contains(name)) {
+            out.add(name)
+        }
+    }
+    return out
+}
+
+/**
+ * 布局判定（纯函数）：决定这次用哪套指纹口径。
+ *   · `assets` —— dist 里有 `assets/` 产物（vite 等现代前端），沿用 stale/missing 三方比对
+ *   · `entry`  —— 没有 `assets/`，但有入口文件（`index.html` 这类）。`.so` 里没有可枚举的
+ *                键前缀，只能做「存在性」比对（见 compareEntryKeys）
+ *   · `none`   —— 两边都没有前端资源：闸该红，但文案要说"没有"而不是"旧了"
+ */
+public func assetLayoutOf(distKeys: ArrayList<String>, entryKeys: ArrayList<String>): String {
+    if (distKeys.size > 0) {
+        return "assets"
+    }
+    if (entryKeys.size > 0) {
+        return "entry"
+    }
+    return "none"
+}
+
+/** 字节级包含（`.so` 是任意二进制，不解码；needle 只支持 ASCII 键） */
+public func binaryContainsKey(data: Array<UInt8>, key: String): Bool {
+    let nb = key.toArray()
+    if (nb.size == 0 || data.size < nb.size) {
+        return false
+    }
+    var i: Int64 = 0
+    while (i + nb.size <= data.size) {
+        var hit = true
+        for (k in 0..nb.size) {
+            if (data[i + k] != nb[k]) {
+                hit = false
+                break
+            }
+        }
+        if (hit) {
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+/**
+ * `entry` 布局的比对：只有"这个键在不在 `.so` 里"。
+ * 没有 stale 方向——`.so` 里没有可枚举的键表，凭空扫"像路径的串"只会把
+ * `module.json` 之类的无关字符串当成资源（那是另一种假红）。
+ */
+public func compareEntryKeys(data: Array<UInt8>, entryKeys: ArrayList<String>): AssetDiff {
+    let d = AssetDiff()
+    for (k in entryKeys) {
+        if (binaryContainsKey(data, k)) {
+            d.matched.add(k)
+        } else {
+            d.missingInSo.add(k)
+        }
+    }
+    return d
+}
+
 func walkDistForAssets(root: String, cur: String, out: ArrayList<String>): Unit {
     var entries: Array<FileInfo>
     try {

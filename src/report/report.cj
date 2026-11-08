@@ -358,6 +358,12 @@ public class MigrationFacts {
     public var verifyFail: Int64 = 0
     public var verifyLimit: Int64 = 0
     public var verifyUnknown: Int64 = 0
+    /** 有结论的项数（pass+fail）= 可用率的分母（0.39.89 口径） */
+    public var verifyCovered: Int64 = 0
+    /** 未测项数：不进分母，但报告与界面必须写出来 */
+    public var verifyNotVerified: Int64 = 0
+    /** 分母口径来源：`features`（核心功能清单）/ `gates-only`（没扫过，退回装配口径） */
+    public var verifyScope: String = ""
     public var verifyRate: Int64 = -1
     public var limitItems: ArrayList<String> = ArrayList<String>()
     public var unknownItems: ArrayList<String> = ArrayList<String>()
@@ -493,9 +499,11 @@ public func buildReport(facts: MigrationFacts): ReportDoc {
     if (facts.lessonCount > 0 && facts.lessonsLine != "") {
         did.lines.add(facts.lessonsLine)
     }
-    if (facts.verifyPass > 0) {
-        let denom = facts.verifyTotal - facts.verifyLimit
-        did.lines.add("功能清单通过 ${facts.verifyPass}/${denom} 项（平台限制已从分母剔除）")
+    if (facts.verifyPass > 0 || facts.verifyCovered > 0) {
+        did.lines.add("核心功能清单通过 ${facts.verifyPass}/${facts.verifyCovered} 项（分母只算有结论的项）")
+    }
+    if (facts.verifyNotVerified > 0) {
+        did.lines.add("还有 ${facts.verifyNotVerified} 项没测（不计入分母：别把上面的百分比读成「全都可用」）")
     }
     if (did.lines.size == 0) {
         did.lines.add("还没有任何步骤跑出结果——先跑一次扫描")
@@ -577,7 +585,17 @@ public func buildReport(facts: MigrationFacts): ReportDoc {
 
 /** 一句话结论：8 步进度 + 可用率 + 人工介入数（A3/A4 两个验收指标都在这一句里） */
 public func reportConclusion(facts: MigrationFacts): String {
-    let rateText = if (facts.verifyRate >= 0) { "${facts.verifyRate}%" } else { "尚未验证" }
+    var rateText = "尚未验证"
+    if (facts.verifyRate >= 0) {
+        rateText = "${facts.verifyRate}%"
+        if (facts.verifyCovered > 0) {
+            rateText += "（${facts.verifyPass}/${facts.verifyCovered} 项有结论"
+            if (facts.verifyNotVerified > 0) {
+                rateText += "，另 ${facts.verifyNotVerified} 项未测"
+            }
+            rateText += "）"
+        }
+    }
     return "${facts.project}：8 步完成 ${facts.stepDone}/${facts.stepTotal}" +
         "（${facts.stepPercent}%），核心功能可用率 ${rateText}，" +
         "${facts.humanAccepted} 处人工介入"

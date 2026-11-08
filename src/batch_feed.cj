@@ -114,6 +114,8 @@ public func collectBatchRow(projName: String, projPath: String, now: String): Ba
                 row.verifyPass = intFieldOf(stats, "pass", 0)
                 row.verifyTotal = total
                 row.verifyLimit = intFieldOf(stats, "limit", 0)
+                row.verifyCovered = intFieldOf(stats, "covered", -1)
+                row.verifyNotVerified = intFieldOf(stats, "notVerified", -1)
             }
         case None => ()
     }

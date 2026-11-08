@@ -145,7 +145,7 @@ public func testRowCellsShowNotRunHonestly(): Unit {
     @Assert(c2[3], "430 包 / 不可用 10")
     @Assert(c2[4], "通过")
     @Assert(c2[6], "debug")
-    @Assert(c2[8], "60%（3/5）")     // 分母 = 6 − 1（平台限制已剔除）
+    @Assert(c2[8], "60%（3/5）")     // 老落档没有 covered/notVerified → 回落 total−limit（6−1），显示保持原样
     @Assert(c2[9], "8/8（100%）")
     @Assert(c2[11], "未达标")
 }

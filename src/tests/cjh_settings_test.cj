@@ -222,3 +222,19 @@ public func testIterBudgetStateOf(): Unit {
     // 边界：前后空白不影响判定（日志里带缩进是常事）
     @Assert(iterBudgetStateOf("  file:40->120  "), "needs-restart")
 }
+
+@Test
+public func testIterBudgetSatisfiedOf(): Unit {
+    // 0.39.91 复现：live 已被上次 POST 抬到 120，而 ~/.cjh/settings.json 里还是 40。
+    // 旧判据只看 live ⇒ 判 already、不写盘 ⇒ 引擎一重启回落 40（41 rounds 实测 15 次）。
+    @Assert(iterBudgetSatisfiedOf(120, 40, 120), false)
+    // 双达标才算满足
+    @Assert(iterBudgetSatisfiedOf(120, 120, 120), true)
+    @Assert(iterBudgetSatisfiedOf(200, 300, 120), true)
+    // live 读不到（引擎不在）→ 没满足，该去落文件
+    @Assert(iterBudgetSatisfiedOf(-1, 120, 120), false)
+    // 两边都没有 → 没满足
+    @Assert(iterBudgetSatisfiedOf(-1, -1, 120), false)
+    // 文件高、live 低（引擎刚起还没应用）→ 没满足，需重启才能生效那一路
+    @Assert(iterBudgetSatisfiedOf(40, 120, 120), false)
+}

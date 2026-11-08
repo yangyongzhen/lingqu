@@ -402,3 +402,49 @@ func findBytes(data: Array<UInt8>, needle: String, from: Int64): Int64 {
 public func hapVerifyOf(hapBytes: Array<UInt8>): HapEntries {
     return scanHapEntries(hapBytes)
 }
+
+/**
+ * 纯函数：`ohpm` 用哪种方式拉起（0.39.91）。
+ *
+ * 现场（rust-music-3，2026-11-08）：`t2h:hap` 在装配前要 `ohpm install --all`，
+ * 代码直接 `executeWithOutput("<DevEco>/tools/ohpm/bin/ohpm.bat", …)`，Windows 上
+ * 报 **`Created process failed, errMessage: "The system cannot find the file specified."`**
+ * —— 文件明明存在，因为 **CreateProcess 不能直启 `.bat`**（得经 cmd.exe 或 node）。
+ * 后果不是一句报错：hap 连红四轮，agent 只能自己手工 `ohpm install` 再重跑才过，
+ * 白烧轮次（ADR D-015 里最贵的东西）。
+ *
+ * 所以判据是"用哪个启动器"，而不是"文件在不在"：
+ *   · Windows + 有 node 与 `pm-cli.js` → `node`（与 hvigor 同款，实测可跑，且不经 shell）
+ *   · 否则有 `ohpm.bat` → `bat`（POSIX 下正常）
+ *   · 都没有 → 空串（调用方如实报"缺 ohpm"，不要静默跳过）
+ */
+/** 宿主是否 Windows（编译期分支，同 cjh_host.cj 的写法） */
+@When[os == "Windows"]
+public func hostIsWindows(): Bool {
+    return true
+}
+
+@When[os != "Windows"]
+public func hostIsWindows(): Bool {
+    return false
+}
+
+public func ohpmLauncherOf(isWindows: Bool, nodeExists: Bool, cliJsExists: Bool,
+    batExists: Bool): String {
+    if (isWindows) {
+        if (nodeExists && cliJsExists) {
+            return "node"
+        }
+        if (batExists) {
+            return "bat"
+        }
+        return ""
+    }
+    if (batExists) {
+        return "bat"
+    }
+    if (nodeExists && cliJsExists) {
+        return "node"
+    }
+    return ""
+}

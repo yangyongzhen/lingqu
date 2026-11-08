@@ -550,11 +550,20 @@ input.echo.ovr{border-color:var(--warn)!important;color:var(--warn)!important;ba
 .ai-show:hover{filter:brightness(1.1)}
 body.ai-hidden .ai-show{display:block}
 .kbd{font-family:var(--mono);font-size:10px;padding:1px 5px;border:1px solid var(--line);border-radius:5px;background:var(--panel2);color:var(--dim)}
+/* 后端失联横幅（0.39.90）：默认不占版面，被判失联才出现 —— 见 AGENTS §4-142 */
+#backendBar{display:none;align-items:center;gap:9px;padding:7px 14px;background:#7f1d1d;color:#fff;
+  font-size:12px;line-height:1.5;border-bottom:1px solid #991b1b;flex:0 0 auto}
+#backendBar.on{display:flex}
+#backendBar .bbTitle{font-weight:600;white-space:nowrap}
+#backendBar .bbText{opacity:.93}
 </style>
 </head>
 <body>
 
 <div class="app">
+  <!-- 后端失联横幅（0.39.90）：事件循环已经结束、IPC 全哑之后，**窗口还在、界面照旧**，
+       用户看到的是"点哪儿都没反应"。这一条必须由界面自己说出来（AGENTS §4-142）。 -->
+  <div id="backendBar"><span class="bbTitle">后端已停止响应</span><span class="bbText" id="backendBarText"></span></div>
   <!-- ==================== 顶栏 ==================== -->
   <header class="titlebar">
     <!-- 当前工程：全局唯一权威（0.39.8）。下面各屏的路径框都只是回显，
@@ -2590,6 +2599,85 @@ function setDot(id, cls){ var el = $(id); if (el) { el.className = 'dot' + (cls 
 withBridge(function(tauri){
   var invoke = function(cmd, args){ return tauri.invoke(cmd, args || {}); };
 
+  /* ===== 后端心跳：僵尸窗口不许沉默（0.39.90） =====
+   * 起因（用户实测原话）：「当前界面点选择，不会弹出来文件选择框了吗？」
+   * 现场根本不是按钮坏了——是个**已经退出到一半的窗口**：
+   *   12:14:53 `[cj-bridge] destroy: host thread still running, handle kept`（事件循环结束）
+   *   之后页面发了 467 条 `js -> native`，原生回投 **0 条**（`ExecuteScript` 计数为 0）
+   * 后果：`dialog:pickFolder` 的 invoke 发出去没人回 ⇒ 不弹框、不报错、连 `prompt` 兜底
+   * 也走不到（那个 .catch 永远等不到 reject）。同一版程序前 5 分钟还成功弹过 5 次框。
+   * 所以：**页面必须自己发现"对面已经没人了"并说出来**（AGENTS §4-142）。
+   * 口径与 §4-103 一致：单次没回包不算（长回合时 IPC 会短暂排不上），连续 3 次才算。
+   */
+  var BEAT = { ok: 0, miss: 0, lastOk: 0, why: '', lost: false, note: '' };
+  var BEAT_TIMEOUT = 5000;   // 单次心跳等多久算没回
+  var BEAT_EVERY = 5000;     // 心跳间隔
+  var BEAT_MISS_LOST = 3;    // 连续几次没回包才判失联（≈ 15s 沉默）
+  var BACKEND_PROBE = { ok: -1, fail: '' };
+
+  // 纯判据：探针直接拿它断言，别让"判失联"只活在定时器里（没有视觉也能证明判据对）
+  function backendVerdictOf(miss, ageMs){
+    if (miss >= BEAT_MISS_LOST) {
+      var age = (ageMs >= 0)
+        ? ('，最后一次回包在 ' + Math.round(ageMs / 1000) + ' 秒前')
+        : '，启动之后一次都没回过';
+      return { lost: true, note: '连续 ' + miss + ' 次心跳没有回包' + age +
+        '。这个窗口已经收不到任何操作（按钮不会有效果），请关闭后重新启动灵渠。' };
+    }
+    return { lost: false, note: '' };
+  }
+
+  function renderBackendBar(v){
+    var bar = document.getElementById('backendBar');
+    if (!bar) { return; }
+    var on = !!(v && v.lost);
+    bar.className = on ? 'on' : '';
+    if (on) {
+      var t = document.getElementById('backendBarText');
+      if (t) { t.textContent = v.note; }
+    }
+  }
+
+  function beatFinish(ok, why){
+    var now = Date.now();
+    if (ok) {
+      BEAT.ok += 1; BEAT.miss = 0; BEAT.why = ''; BEAT.lastOk = now;
+    } else {
+      BEAT.miss += 1; BEAT.why = String(why || '');
+    }
+    var v = backendVerdictOf(BEAT.miss, BEAT.lastOk ? (now - BEAT.lastOk) : -1);
+    var wasLost = BEAT.lost;
+    BEAT.lost = v.lost;
+    BEAT.note = v.note;
+    renderBackendBar(v);
+    // 刚判失联那一刻立刻落一份证据（此后 IPC 全哑，再等就没有第二次机会上报了）
+    if (v.lost && !wasLost) { reportUi('backend-lost'); }
+    if (!v.lost && wasLost) { reportUi('backend-recovered'); }
+  }
+
+  function beatOnce(){
+    var done = false;
+    var guard = setTimeout(function(){
+      if (done) { return; }
+      done = true;
+      beatFinish(false, 'timeout');
+    }, BEAT_TIMEOUT);
+    try {
+      invoke('system:ping').then(function(){
+        if (done) { return; }
+        done = true; clearTimeout(guard); beatFinish(true, '');
+      }, function(e){
+        if (done) { return; }
+        done = true; clearTimeout(guard); beatFinish(false, 'reject:' + String((e && e.message) || e));
+      });
+    } catch (e) {
+      if (done) { return; }
+      done = true; clearTimeout(guard); beatFinish(false, 'throw:' + String((e && e.message) || e));
+    }
+  }
+  setTimeout(beatOnce, 1500);
+  setInterval(beatOnce, BEAT_EVERY);
+
   /* ===== 环境体检 ===== */
   /* ===== 执行日志（0.39.49）：只记"真发生过的事" =====
    * 起因（用户实测）：「实时日志 · 占位示意 · P5 接真数据」——那块日志是**写死的 14 行示例**，
@@ -3322,12 +3410,28 @@ withBridge(function(tauri){
       '<div class="bubble">' + html + '</div></div></div>')).querySelector('.bubble');
   }
 
+  // 0.39.91：判定"这条工具报错在说‘要人登录’"。工具输出中英文混着用（`sign --login`、
+  // `token 可能已失效，重跑 sign --login`、`拉团队列表失败`、`登录`），只认其中一种就漏。
+  function loginHintOf(text) {
+    var t = String(text == null ? '' : text).toLowerCase();
+    if (!t) { return false; }
+    if (t.indexOf('登录') >= 0) { return true; }
+    if (t.indexOf('login') >= 0) { return true; }
+    if (t.indexOf('拉团队列表失败') >= 0) { return true; }
+    return (t.indexOf('token') >= 0) && (t.indexOf('失效') >= 0);
+  }
+
   function newAssistantTurn() {
     var bubble = addMsg('ai', '');
     CJ.curBubble = bubble;
     CJ.acc = '';
     CJ.lastToolErr = '';   // 新回合开始：清掉上一回合的工具错误（0.39.51）
     CJ.lastToolErrName = '';
+    // 0.39.91（用户实测「为啥没有自动弹出来网页让登录 AGC」）：登录信号要**整回合留痕**。
+    // 现场：卡点是中间的 `sign --auto`（报"token 可能已失效，重跑 sign --login"），
+    // 之后 agent 又跑了 deploy 也失败 ⇒ 回合结束时 lastToolErr 已被 deploy 覆盖 ⇒ 判定不触发。
+    CJ.needLoginSeen = false;
+    CJ.needLoginErr = '';
     // 新回合开始就把「上一回合为什么停」清掉（0.39.63）：否则一条旧的 reason 会串到下一轮，
     // 让普通问答也被当成"迁移停了"（§4-105 同族：一次性快照不许当"现在"用）
     window.__turnEnd = null;
@@ -3371,9 +3475,13 @@ withBridge(function(tauri){
     // 0.39.82（用户实测「且没有提示让我访问网页登录呀」）：最后一条工具报错里出现"登录"，
     // 说明这一轮是卡在**人**这一步了——必须主动把入口递过去，而不是把 cjh 的输出当聊天文字摆着。
     // 登录本身跑在后台（命令立刻返回），URL 由签名那屏渲染成可点链接。
-    var needLogin = (lastErr.indexOf('登录') >= 0) || (lastErr.toLowerCase().indexOf('login') >= 0);
+    // 0.39.91：判据从「最后一条工具报错」升级成「**本回合任一条**工具报错」——
+    // 现场 agent 先 `sign --auto` 报"token 可能已失效，重跑 sign --login"，随后 deploy 也失败，
+    // 于是 lastToolErr 被 deploy 盖掉、登录入口一次都没递出去（用户只能自己猜）。
+    var needLogin = (CJ.needLoginSeen === true) || loginHintOf(lastErr);
     if (needLogin) {
-      window.__needLogin = { tool: errName, at: Date.now() };
+      var why = String(CJ.needLoginErr || lastErr || '');
+      window.__needLogin = { tool: errName, at: Date.now(), why: why.slice(0, 200) };
       addSystemNote('这一步需要在浏览器里登录华为账号（DevEco / AGP）：已经替你起好了登录，'
         + '「交叉编译 → 签名」那一屏会给出可点链接——这是本轮唯一需要你动手的事。');
       try {
@@ -4512,6 +4620,11 @@ withBridge(function(tauri){
     if (isError) {
       CJ.lastToolErr = String(content == null ? '' : content).replace(/\s+/g, ' ').trim();
       CJ.lastToolErrName = String(name || '');
+      // 0.39.91：登录这一类的失败**不许被后面的失败盖掉**——判定只看最后一条会漏（现场实测）。
+      if (loginHintOf(CJ.lastToolErr)) {
+        CJ.needLoginSeen = true;
+        CJ.needLoginErr = CJ.lastToolErr;
+      }
       // ① 屏也要看见"哪条命令挂了"（0.39.52）：成功的工具不记（右栏有），失败必须进来说一句
       if (migAiActive()) {
         migAiPush('err', '工具 ' + String(name || '?') + ' 失败：' + CJ.lastToolErr.slice(0, 160));
@@ -6498,7 +6611,7 @@ withBridge(function(tauri){
 
 
   /* ===== ⑥ 屏 验证与报告（P6）：清单 + 可用率 + 导出 ===== */
-  var VERIFY = { ok: false, rate: -1, pass: 0, total: 0, limit: 0, unknown: 0, shots: 0, md: "", error: "" };
+  var VERIFY = { ok: false, rate: -1, pass: 0, total: 0, limit: 0, unknown: 0, covered: 0, notVerified: 0, scope: "", shots: 0, md: "", error: "" };
   var VERDICT_CHIP = { pass: 'pill ok', fail: 'pill err', limit: 'pill warn', unknown: 'pill' };
   var VERDICT_TEXT = { pass: '通过', fail: '失败', limit: '平台限制', unknown: '未验证' };
   function renderVerify(r){
@@ -6510,18 +6623,33 @@ withBridge(function(tauri){
       total: (typeof r.total === 'number') ? r.total : 0,
       limit: (typeof r.limit === 'number') ? r.limit : 0,
       unknown: (typeof r.unknown === 'number') ? r.unknown : 0,
+      covered: (typeof r.covered === 'number' && r.covered > 0) ? r.covered : -1,
+      notVerified: (typeof r.notVerified === 'number') ? r.notVerified : -1,
+      scope: String(r.scope || ''),
       shots: (typeof r.screenshots === 'number') ? r.screenshots : 0,
       md: String(r.md || ''),
       error: String(r.error || '')
     };
-    var denom = VERIFY.total - VERIFY.limit;
+    // 分母只算"有结论的项"（0.39.89 新口径）。老落档没有 covered/notVerified → 回落旧算法，
+    // 但必须在文案里说清是旧口径，不能拿旧分母冒充新口径。
+    var legacy = VERIFY.covered < 0;
+    var denom = legacy ? Math.max(VERIFY.total - VERIFY.limit, 0) : VERIFY.covered;
+    var notVer = (VERIFY.notVerified >= 0) ? VERIFY.notVerified : VERIFY.unknown;
     $('verRate').innerHTML = (VERIFY.rate < 0 ? '—' : String(VERIFY.rate)) + '<small>%</small>';
     $('verRate').style.color = VERIFY.rate >= 80 ? 'var(--ok)' : (VERIFY.rate >= 0 ? 'var(--err)' : '');
-    $('verPass').innerHTML = VERIFY.pass + '<small>/ ' + Math.max(denom, 0) + '</small>';
+    $('verPass').innerHTML = VERIFY.pass + '<small>/ ' + denom + '</small>';
     $('verLimit').textContent = String(VERIFY.limit);
-    $('verUnknown').textContent = VERIFY.unknown + ' / ' + VERIFY.total;
+    $('verUnknown').textContent = notVer + ' / ' + VERIFY.total;
     $('verShots').textContent = '截图 ' + VERIFY.shots + ' 张 · .lingqu/evidence/';
-    $('verNote').textContent = VERIFY.ok ? ('可用率 ' + VERIFY.rate + '%（分母 ' + denom + '，平台限制已剔除）') : (VERIFY.error || '尚未验证');
+    if (!VERIFY.ok) {
+      $('verNote').textContent = VERIFY.error || '尚未验证';
+    } else if (legacy) {
+      $('verNote').textContent = '可用率 ' + VERIFY.rate + '%（旧口径：分母 ' + denom + '，平台限制已剔除）——重跑一次即可换成核心功能口径';
+    } else {
+      $('verNote').textContent = '可用率 ' + VERIFY.rate + '%（分母 ' + denom + ' 项有结论：'
+        + VERIFY.pass + ' 通过 / ' + (denom - VERIFY.pass) + ' 未过），另有 ' + notVer + ' 项未测'
+        + (VERIFY.scope ? ' · 口径 ' + VERIFY.scope : '');
+    }
     // 清单逐条渲染：判定 → 颜色标签；证据 → 一行文本；note 作 title
     var list = $('verList');
     list.innerHTML = '';
@@ -6971,7 +7099,7 @@ withBridge(function(tauri){
       tb.innerHTML = '<tr><td colspan="12" class="muted">还没有数据——填样本路径后点「生成矩阵」。</td></tr>';
     }
     BATCH.rows.forEach(function(x){
-      // 分母由后端算好（清单项 − 平台限制），前端不再自己推——避免两处口径不一致
+      // 分母由后端算好（有结论的核心功能项，未测项不计入），前端不再自己推——避免两处口径不一致
       var rateTxt = x.hasVerify
         ? (x.verifyRate + '%（' + x.verifyPass + '/' + x.verifyDenom + '）')
         : '未跑';
@@ -7150,14 +7278,59 @@ withBridge(function(tauri){
     if ($('btnAiPortReset')) { $('btnAiPortReset').disabled = false; }
     if ($('btnAiPortContinue')) { $('btnAiPortContinue').style.display = 'none'; }
 
+    // 提示语按**这个工程自己的落档实况**写（0.39.88）。用户实测：换了工程，提示说「这里还没跑过」，
+    // 可左栏六个徽标明明写着「已完成」——同一个界面上两边互相打脸。落档是异步读的，所以先落一句
+    // 中性的，等 `t2h:resume` 回来再改写：有旧落档 / 真没跑过 / 读不到 三档。
+    // 「没跑过」与「跑过了」是两个不同的事实，一律写"没跑过"就是谎报（§4-94、§4-63 同族）。
+    window.__switchNote = { kind: wasActive ? 'active' : 'pending', steps: 0, text: '', err: '' };
+    function applySwitchNote(r){
+      var el = $('migrateNote');
+      if (!el) { return; }
+      if (wasActive) {
+        // 上一次还在跑：这句「没被停止」不能被落档实况顶掉（它是用户必须先知道的事）
+        window.__switchNote.kind = 'active';
+        window.__switchNote.text = String(el.textContent);
+        return;
+      }
+      var steps = (r && r.steps) || [];
+      if (!steps.length && !(r && typeof r.reportExists === 'boolean')) {
+        window.__switchNote.kind = 'unknown';
+        window.__switchNote.err = (r && r.error) ? String(r.error) : '读不到断点板';
+        el.textContent = '换了工程（' + (basenameOf(next) || next) + '）：读不到这个工程的旧落档，'
+          + '没法判断这里跑过没有（' + window.__switchNote.err + '）——左栏徽标此刻也可能不准。';
+        window.__switchNote.text = String(el.textContent);
+        return;
+      }
+      var done = [], i;
+      for (i = 0; i < steps.length; i++) {
+        if (steps[i] && steps[i].status && steps[i].status !== 'pending') {
+          done.push(String(steps[i].title || steps[i].id || ''));
+        }
+      }
+      // 报告不在断点板的 8 步里（它是落档文件不是步骤），有就一起算上，与左栏第 6 项口径一致
+      if (r && r.reportExists === true) { done.push('迁移报告'); }
+      window.__switchNote.steps = done.length;
+      el.style.color = '';
+      if (done.length > 0) {
+        window.__switchNote.kind = 'has-record';
+        el.textContent = '换了工程（' + (basenameOf(next) || next) + '）：这个工程有旧落档（'
+          + done.length + ' 步做过：' + done.slice(0, 6).join('、')
+          + (done.length > 6 ? ' 等' : '') + '）。可以直接接着用；要全部重来就点「↻ 从头重跑」把旧档归档。';
+      } else {
+        window.__switchNote.kind = 'empty';
+        el.textContent = '换了工程（' + (basenameOf(next) || next) + '）：这里还没跑过。'
+          + '填好路径点「🤖 开始 AI 自动迁移」。';
+      }
+      window.__switchNote.text = String(el.textContent);
+    }
     if ($('migrateNote')) {
       $('migrateNote').style.color = wasActive ? 'var(--warn)' : '';
       $('migrateNote').textContent = wasActive
         ? ('已切到新工程（' + (basenameOf(next) || next) + '），这里的进度已按新工程重置；'
            + '但上一个工程（' + (basenameOf(prev) || prev) + '）那次 AI 迁移**没有被停止**，'
            + '它可能还在那边继续干活。要它停就点「停止」。')
-        : ('换了工程（' + (basenameOf(next) || next) + '）：这里还没跑过。'
-           + '填好路径点「🤖 开始 AI 自动迁移」；要沿用旧落档就点「↻ 从头重跑」把旧档归档。');
+        : ('换了工程（' + (basenameOf(next) || next) + '）：正在核对这个工程的旧落档…');
+      window.__switchNote.text = String($('migrateNote').textContent);
     }
 
     // ⑤ ⑤⑥⑦ 三屏的数据面板与流水线/产物卡：同属"上一次在这个工程上跑出来的"。
@@ -7174,9 +7347,18 @@ withBridge(function(tauri){
                risk: { level: '', label: '', summary: '', hi: 0, items: [] } };
     restorePanelSnapshot();
     try { renderPipeline(); renderArtifacts(); } catch (e) { /* 面板重绘失败不影响主流程 */ }
-    // 左栏徽标按新工程重读落档（外层 setCurrentProject 也会刷，这里保证"内层改状态"后立刻一致）
+    // 左栏徽标按新工程重读落档（外层 setCurrentProject 也会刷，这里保证"内层改状态"后立刻一致）；
+    // 顺手拿**同一次读盘结果**把提示语改成实况——省一次 invoke，也保证提示与徽标说的是同一份数据。
     if (typeof window.__railBridge === 'function' && String(next || '').length > 0) {
-      try { window.__railBridge(String(next)); } catch (e) {}
+      try {
+        var pRail = window.__railBridge(String(next));
+        if (pRail && typeof pRail.then === 'function') {
+          pRail.then(function(r){ applySwitchNote(r || null); reportUi('project-switch-note'); })
+            .catch(function(e){ applySwitchNote({ error: (e && e.message) ? e.message : '读落档失败' }); reportUi('project-switch-note'); });
+        }
+      } catch (e) {
+        applySwitchNote({ error: (e && e.message) ? e.message : '读落档失败' });
+      }
     }
     reportUi('project-switch-reset');
     return true;
@@ -7592,6 +7774,14 @@ withBridge(function(tauri){
         var a = window.__uiErrors;
         return (a && a.length) ? String(a.slice(-3).join(' | ')).slice(0, 200) : '';
       })(),
+      // 换工程提示与落档实况（0.39.88）：用户实测「提示说『这里还没跑过』，左栏却写着已完成」。
+      // kind: pending=还在读落档 / has-record=新工程有旧落档 / empty=真没跑过 / unknown=读不到
+      switchNoteKind: (window.__switchNote && window.__switchNote.kind) ? String(window.__switchNote.kind) : '',
+      switchNoteSteps: (window.__switchNote && typeof window.__switchNote.steps === 'number') ? window.__switchNote.steps : 0,
+      // 一致性自检（LINGQU_UI_PROBE=switchnote）：1=通过，0=没跑或不通过；失败原因见 switchNoteFail
+      switchNoteOk: (window.__switchProbe && window.__switchProbe.ok === true) ? 1 : 0,
+      switchNoteFail: (window.__switchProbe && window.__switchProbe.fail)
+        ? String(window.__switchProbe.fail).slice(0, 240) : '',
       // 换工程清理自检（LINGQU_UI_PROBE=projswitch）的结论：1=通过，0=没跑或不通过；失败原因见 note
       projSwitchOk: (window.__projSwitch && window.__projSwitch.ok === true) ? 1 : 0,
       projSwitchNote: (window.__projSwitch && window.__projSwitch.fail)
@@ -7876,6 +8066,9 @@ withBridge(function(tauri){
       verifyTotal: (typeof VERIFY.total === "number") ? VERIFY.total : 0,
       verifyLimit: (typeof VERIFY.limit === "number") ? VERIFY.limit : 0,
       verifyUnknown: (typeof VERIFY.unknown === "number") ? VERIFY.unknown : 0,
+      verifyCovered: (typeof VERIFY.covered === "number") ? VERIFY.covered : -1,
+      verifyNotVerified: (typeof VERIFY.notVerified === "number") ? VERIFY.notVerified : -1,
+      verifyScope: VERIFY.scope || "",
       verifyShots: (typeof VERIFY.shots === "number") ? VERIFY.shots : 0,
       verifyMd: VERIFY.md || "",
       // 版面可断言：清单行有没有横向溢出、首行高度多少（没有视觉也能证明"没竖排/没挤爆"）
@@ -7976,6 +8169,16 @@ withBridge(function(tauri){
       // 异常原文（0.39.48）：以前只报条数，等于"知道出事了但不知道什么事"——
       // 用户那次"点克隆没反应"现场就是 uiErr=3 却查不到原因（AGENTS §4-107 的同一课）
       uiErrText: (window.__uiErrors || []).slice(0, 3).join(' ; ').slice(0, 300),
+      // 后端心跳（0.39.90）：僵尸窗口的可断言证据 —— backendLost=1 就是"这个窗口点了没反应"
+      backendLost: BEAT.lost ? 1 : 0,
+      backendMiss: BEAT.miss,
+      backendOkBeats: BEAT.ok,
+      backendAgeSec: BEAT.lastOk ? Math.round((Date.now() - BEAT.lastOk) / 1000) : -1,
+      backendWhy: String(BEAT.why || '').slice(0, 120),
+      backendNote: String(BEAT.note || '').slice(0, 240),
+      // 判据自检（LINGQU_UI_PROBE=backendlost）：1=通过，0=没跑或不通过，原因见 backendProbeFail
+      backendProbe: BACKEND_PROBE.ok,
+      backendProbeFail: String(BACKEND_PROBE.fail || ''),
       // 假数据清账（0.39.49）：`mockLeft` 必须是 0——页面上不该再有任何「占位示意」的假块；
       // `execLogLines/execLogLast` 证明执行日志是**真记下来的**（不是写死的示例）；
       // `pipeline` 是 ⑤ 屏五格的真实状态（idle/ok/run/err），由本次运行结果推出。
@@ -8104,6 +8307,37 @@ withBridge(function(tauri){
         saveSettings(['探针：切回 openai']);
       }, 7500);
       setTimeout(function(){ reportUi('protocol-saved-openai'); }, 11000);
+      return;
+    }
+    // 后端失联判据自检（LINGQU_UI_PROBE=backendlost，0.39.90）：只验**判据与横幅**，
+    // 不去伪造"真的断了"（那得把进程杀掉，探针里做不到也不该做）。
+    // 判据：backendProbe=1 且 backendProbeFail 为空；横幅能出现、也能收回。
+    if (mode === 'backendlost') {
+      setTimeout(function(){
+        var fails = [];
+        if (backendVerdictOf(0, -1).lost) { fails.push('0 次没回包就判失联'); }
+        if (backendVerdictOf(1, 5000).lost) { fails.push('单次没回包就判失联（引擎忙时会误报，§4-103）'); }
+        if (backendVerdictOf(2, 11000).lost) { fails.push('2 次没回包就判失联（口径是连续 3 次）'); }
+        var lostV = backendVerdictOf(3, 16000);
+        if (!lostV.lost) { fails.push('连续 3 次没回包 + 16 秒没回投，仍不判失联'); }
+        // 断"说清了怎么处置"，不断"某个词连续出现"（§4-65：文案随时可能微调）
+        if (lostV.lost && (String(lostV.note).indexOf('关闭') < 0 || String(lostV.note).indexOf('重新启动') < 0)) {
+          fails.push('失联文案没说清怎么处置（要写清"关闭并重新启动"）');
+        }
+        renderBackendBar(lostV);
+        var bar = document.getElementById('backendBar');
+        if (!bar) { fails.push('页面里没有 #backendBar 横幅节点'); }
+        else {
+          if (String(bar.className).indexOf('on') < 0) { fails.push('判失联时横幅没显示'); }
+          var bt = String((document.getElementById('backendBarText') || {}).textContent || '');
+          if (bt.indexOf('关闭') < 0) { fails.push('横幅正文没写怎么处置（关闭重开）'); }
+          renderBackendBar({ lost: false, note: '' });
+          if (String(bar.className).indexOf('on') >= 0) { fails.push('恢复后横幅没收回'); }
+        }
+        BACKEND_PROBE.ok = fails.length ? 0 : 1;
+        BACKEND_PROBE.fail = fails.join(' ; ');
+        reportUi('probe-backend-lost');
+      }, 1200);
       return;
     }
     // 从头重跑自检（LINGQU_UI_PROBE=reset，0.39.64）：**只验归档**，不真发任务书。
@@ -8396,6 +8630,41 @@ withBridge(function(tauri){
                                 resets: r1, activeAtSwitch: (window.__projRun && window.__projRun.activeAtSwitch) || 0 };
         reportUi('projswitch-probe');
       }, 1200);
+      return;
+    }
+    if (mode === 'switchnote') {
+      // 换工程提示与落档实况一致性自检（0.39.88，用户实测：「换了工程（m3u8dl-tauri）：这里还没跑过」
+      // 可左侧六个徽标明明写着已完成——提示与左栏在同一个界面上互相打脸）。
+      // 三档：① 有落档的工程必须说"有旧落档"；② 真没跑过的工程必须说"还没跑过"；③ 切回真实工程仍是①。
+      var richP = 'E:/test/rust/habit-tree';       // scan…verify 全套落档都在
+      var bareP = 'E:/test/rust/test1/lingqu';      // 只是本应用自己的工程根：没有任何 <工程>.json 落档
+      var backP = 'C:/Users/yang/lingqu-workspaces/m3u8dl-tauri';   // 收尾切回真实工程（别把探针路径留成「上次工程」，§4-137）
+      var sFails = [], sSeen = [];
+      function sNote(){ return $('migrateNote') ? String($('migrateNote').textContent) : ''; }
+      function sSnap(tag){ var t = sNote(); sSeen.push(tag + '=' + t.slice(0, 48)); return t; }
+      setTimeout(function(){
+        setCurrentProject(richP);
+        setTimeout(function(){
+          var t1 = sSnap('rich');
+          // ⚠ 断言只认「有旧落档」这四个字：旧文案里就带着「要沿用**旧落档**就点…」，
+          //   拿 `旧落档` 断会假绿（§4-65 那课：断语义，不断碰巧相同的字节）。
+          if (t1.indexOf('有旧落档') < 0 || t1.indexOf('这里还没跑过') >= 0) {
+            sFails.push('① 有落档的工程没说"有旧落档"（' + t1.slice(0, 44) + '）');
+          }
+          setCurrentProject(bareP);
+          setTimeout(function(){
+            var t2 = sSnap('bare');
+            if (t2.indexOf('这里还没跑过') < 0) { sFails.push('② 没落档的工程没说"这里还没跑过"（' + t2.slice(0, 44) + '）'); }
+            setCurrentProject(backP);
+            setTimeout(function(){
+              var t3 = sSnap('back');
+              if (t3.indexOf('有旧落档') < 0) { sFails.push('③ 切回真实工程后提示仍不对（' + t3.slice(0, 44) + '）'); }
+              window.__switchProbe = { ok: sFails.length === 0, fail: sFails.join(' | '), seen: sSeen.join(' ;; ') };
+              reportUi('switchnote-probe');
+            }, 1800);
+          }, 1800);
+        }, 1800);
+      }, 1500);
       return;
     }
     if (mode === 'store') {

@@ -226,6 +226,19 @@ public func ensureMaxIterations(json: String, target: Int64): String {
 }
 
 /**
+ * 纯函数：预算是否**双达标**（引擎内存 + 配置文件，0.39.91）。
+ *
+ * 现场（2026-11-08，rust-music-3）：整应用迁移跑到第 41 轮停住，`~/.cjh/settings.json`
+ * 里 `max_iterations` **还是 40**，而 `GET /api/settings` 回的是 120（那是上一次 live
+ * POST 改的**内存值**）。旧判据 `if (cur >= target) return "already"` 只看 live ⇒
+ * 判定"已满足"、**不写盘** ⇒ 引擎一重启就回落 40，回合继续被截断（cjh.log 里
+ * `41 rounds` 实测 15 次）。所以两处都要达标，缺一个都不算。
+ */
+public func iterBudgetSatisfiedOf(liveValue: Int64, fileValue: Int64, target: Int64): Bool {
+    return liveValue >= target && fileValue >= target
+}
+
+/**
  * 动作层：确保 cjh 的轮次预算 >= target。
  *
  * @return 说明串（回投给界面/日志）：`live:40->120` / `file:40->120（需重启 cjh 生效）` /
@@ -238,42 +251,70 @@ public func ensureCjhIterationBudget(home: String, target: Int64): String {
     if (got.trimAscii().size > 0) {
         cur = maxIterationsOf(got)
     }
-    if (cur >= target) {
+    // ② 配置文件里的值：**必须一起看**（见 iterBudgetSatisfiedOf 的现场记录）。
+    //    只看 live 会把"内存里被临时抬过"当成"已经落好"，重启即回落。
+    let p = cjhSettingsPathOf(home)
+    var fileVal: Int64 = -1
+    if (p.size > 0 && exists(Path(p))) {
+        try {
+            fileVal = maxIterationsOf(String.fromUtf8(File.readFrom(p)))
+        } catch (e: Exception) {
+            let _ = e
+        }
+    }
+    if (iterBudgetSatisfiedOf(cur, fileVal, target)) {
         return "already:${cur}>=${target}"
     }
-    // ② live 写入
+    // ③ live 写入（引擎在线才做得到）
+    var applied: Int64 = -1
     var payload = JsonObject()
     payload.put("maxIterations", JsonInt(target))
     let posted = cjhApiCall("POST", "/api/settings", payload.toJsonString())
     if (posted.trimAscii().size > 0 && !posted.contains("\"ok\":false") && !posted.contains("\"ok\": false")) {
-        let after = maxIterationsOf(cjhApiCall("GET", "/api/settings", ""))
-        if (after >= target) {
-            return "live:${cur}->${after}"
-        }
+        applied = maxIterationsOf(cjhApiCall("GET", "/api/settings", ""))
     }
-    // ③ 落文件（先备份；文本定点修补）
-    let p = cjhSettingsPathOf(home)
+    // ④ 落文件：**live 达标也要落**——文件才是重启后的值
+    var fileNote = ""
     if (p.size == 0 || !exists(Path(p))) {
-        return "no-settings"
-    }
-    try {
-        let before = String.fromUtf8(File.readFrom(p))
-        let after = ensureMaxIterations(before, target)
-        if (after == before) {
-            return "already:${maxIterationsOf(before)}>=${target}"
-        }
-        // 备份：settings.json.bak.autoport（同一份只留一份，覆盖写；内容就是"抬高之前"）
-        let bak = p + ".bak.autoport"
+        fileNote = "no-settings"
+    } else if (fileVal >= target) {
+        fileNote = "file-ok"
+    } else {
         try {
-            File.writeTo(bak, before.toArray())
+            let before = String.fromUtf8(File.readFrom(p))
+            let after = ensureMaxIterations(before, target)
+            if (after == before) {
+                fileNote = "file-ok"
+            } else {
+                // 备份：settings.json.bak.autoport（同一份只留一份，覆盖写；内容就是"抬高之前"）
+                let bak = p + ".bak.autoport"
+                try {
+                    File.writeTo(bak, before.toArray())
+                } catch (e: Exception) {
+                    let _ = e
+                }
+                File.writeTo(p, after.toArray())
+                fileNote = "file:${maxIterationsOf(before)}->${target}"
+            }
         } catch (e: Exception) {
-            let _ = e
+            fileNote = "error:" + e.toString()
         }
-        File.writeTo(p, after.toArray())
-        return "file:${maxIterationsOf(before)}->${target}（需重启 cjh 生效）"
-    } catch (e: Exception) {
-        return "error:" + e.toString()
     }
+    // ⑤ 结果形态决定调用方怎么处置（iterBudgetStateOf）：live 达标 → applied
+    if (applied >= target) {
+        if (fileNote == "file-ok" || fileNote.startsWith("file:")) {
+            return "live:${cur}->${applied}"
+        }
+        // live 成了、文件没落成：如实说清"重启会回落"，不许报 already
+        return "live:${cur}->${applied}（配置文件未达标：${fileNote}）"
+    }
+    if (fileNote == "file-ok") {
+        return "file:${fileVal}->${target}（需重启 cjh 生效）"
+    }
+    if (fileNote.startsWith("file:")) {
+        return "${fileNote}（需重启 cjh 生效）"
+    }
+    return fileNote
 }
 
 /**

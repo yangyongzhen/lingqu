@@ -1846,6 +1846,12 @@ public class UiReportCommand <: CommandHandler {
         o.put("projResetActive", JsonInt(argInt(args, "projResetActive", 0)))
         o.put("aiPortBtn", JsonInt(argInt(args, "aiPortBtn", 0)))
         o.put("uiErrors", JsonString(argStr(args, "uiErrors", "")))
+        // 换工程提示与落档实况（0.39.88）：用户实测「提示说『这里还没跑过』，左栏却写着已完成」。
+        // kind: pending / has-record / empty / unknown；steps=新工程已做过几步（读 t2h:resume 的落档）
+        o.put("switchNoteKind", JsonString(argStr(args, "switchNoteKind", "")))
+        o.put("switchNoteSteps", JsonInt(argInt(args, "switchNoteSteps", 0)))
+        o.put("switchNoteOk", JsonInt(argInt(args, "switchNoteOk", 0)))
+        o.put("switchNoteFail", JsonString(argStr(args, "switchNoteFail", "")))
         // 换工程清理自检（LINGQU_UI_PROBE=projswitch）：1=通过；失败原因在 note（0.39.86）
         o.put("projSwitchOk", JsonInt(argInt(args, "projSwitchOk", 0)))
         o.put("projSwitchNote", JsonString(argStr(args, "projSwitchNote", "")))
@@ -2011,6 +2017,10 @@ public class UiReportCommand <: CommandHandler {
         o.put("verifyTotal", JsonInt(argInt(args, "verifyTotal", 0)))
         o.put("verifyLimit", JsonInt(argInt(args, "verifyLimit", 0)))
         o.put("verifyUnknown", JsonInt(argInt(args, "verifyUnknown", 0)))
+        // 核心功能口径（0.39.89）：分母 = 有结论的项，未测单列
+        o.put("verifyCovered", JsonInt(argInt(args, "verifyCovered", -1)))
+        o.put("verifyNotVerified", JsonInt(argInt(args, "verifyNotVerified", -1)))
+        o.put("verifyScope", JsonString(argStr(args, "verifyScope", "")))
         o.put("verifyShots", JsonInt(argInt(args, "verifyShots", 0)))
         o.put("verifyMd", JsonString(argStr(args, "verifyMd", "")))
         // 清单行的版面指标（没有视觉也能断言"没竖排、没溢出"）
@@ -2062,6 +2072,16 @@ public class UiReportCommand <: CommandHandler {
         o.put("cloneTarget", JsonString(argStr(args, "cloneTarget", "")))
         o.put("gitUrlGuard", JsonInt(argInt(args, "gitUrlGuard", 0)))
         o.put("uiErrText", JsonString(argStr(args, "uiErrText", "")))
+        // 后端心跳（0.39.90）：僵尸窗口的可断言证据 —— backendLost=1 就是「这个窗口点了没反应」。
+        // 白名单实现必须与页面 reportUi **两处一起加**，否则键会被静默丢掉（AGENTS §4-60）
+        o.put("backendLost", JsonInt(argInt(args, "backendLost", 0)))
+        o.put("backendMiss", JsonInt(argInt(args, "backendMiss", 0)))
+        o.put("backendOkBeats", JsonInt(argInt(args, "backendOkBeats", 0)))
+        o.put("backendAgeSec", JsonInt(argInt(args, "backendAgeSec", -1)))
+        o.put("backendWhy", JsonString(argStr(args, "backendWhy", "")))
+        o.put("backendNote", JsonString(argStr(args, "backendNote", "")))
+        o.put("backendProbe", JsonInt(argInt(args, "backendProbe", -1)))
+        o.put("backendProbeFail", JsonString(argStr(args, "backendProbeFail", "")))
         // 上次工程不存在而未被带回（0.39.48）：空 = 没发生；有值 = 那条路径已不在
         o.put("projRestoreSkipped", JsonString(argStr(args, "projRestoreSkipped", "")))
         // 假数据清账（0.39.49）：mockLeft=页面上还剩几块「占位示意」（必须是 0）；
@@ -2290,11 +2310,23 @@ public class BuildCommand <: CommandHandler {
         var distKeys = ArrayList<String>()
         var assetDiff = AssetDiff()
         var assetError = ""
+        var assetLayout = "none"
         if (soPathFinal != "") {
             try {
-                embeddedKeys = extractAssetKeys(File.readFrom(soPathFinal))
+                let soBytes = File.readFrom(soPathFinal)
                 distKeys = distAssetKeysOf(distDir)
-                assetDiff = compareAssetKeys(embeddedKeys, distKeys)
+                // 0.39.91：`frontendDist` 未必是 vite 的 `assets/` 布局（现场 rust-music-3
+                // 是 `ui/` + 单个 index.html）。没有 assets/ 时改做「存在性」比对——
+                // 旧口径两处都只认 `assets/` 前缀，会把"编好了、前端也在里面"判成假红。
+                let entryKeys = distEntryKeysOf(distDir)
+                assetLayout = assetLayoutOf(distKeys, entryKeys)
+                if (assetLayout == "entry") {
+                    assetDiff = compareEntryKeys(soBytes, entryKeys)
+                    embeddedKeys = assetDiff.matched
+                } else {
+                    embeddedKeys = extractAssetKeys(soBytes)
+                    assetDiff = compareAssetKeys(embeddedKeys, distKeys)
+                }
             } catch (e: Exception) {
                 assetError = "读 .so 失败：${e}"
             }
@@ -2469,16 +2501,32 @@ func findSoOnDisk(srcDir: String, target: String): String {
 }
 
 /**
- * 解析前端产物目录：读 `src-tauri/tauri.conf.json` 的 `frontendDist`（相对 src-tauri 解析），
+ * 解析前端产物目录：读 `tauri.conf.json` 的 `frontendDist`（相对**配置文件所在目录**解析），
  * 读不到就退回工程根的 `dist/`。
+ *
+ * 0.39.91：配置文件未必在 `src-tauri/` 下——**扁平布局**（`src-tauri` 就是工程根，
+ * 现场 rust-music-3）时它在工程根。旧实现只看 `srcDir`，读不到 `frontendDist` 就退回
+ * `dist/`，而该工程前端在 `ui/`、`dist/` 是空的 ⇒ 指纹闸一路假红（§4-144）。
  */
-func resolveDistDirOf(projectDir: String, srcDir: String): String {
-    let conf = "${srcDir}/tauri.conf.json"
+public func resolveDistDirOf(projectDir: String, srcDir: String): String {
+    var conf = "${srcDir}/tauri.conf.json"
+    var confDir = srcDir
+    if (!exists(Path(conf))) {
+        let alt = "${projectDir}/tauri.conf.json"
+        if (exists(Path(alt))) {
+            conf = alt
+            confDir = projectDir
+        }
+    }
     var dist = ""
     if (exists(Path(conf))) {
         try {
             let text = String.fromUtf8(File.readFrom(conf))
-            dist = jsonStringFieldOf(text, "frontendDist")
+            // tauri v2：`build.frontendDist`；v1 与部分模板是顶层键，两个都认
+            dist = jsonStringPathOf(text, "build.frontendDist")
+            if (dist == "") {
+                dist = jsonStringPathOf(text, "frontendDist")
+            }
         } catch (e: Exception) {
             dist = ""
         }
@@ -2486,11 +2534,15 @@ func resolveDistDirOf(projectDir: String, srcDir: String): String {
     if (dist == "") {
         return "${projectDir}/dist"
     }
-    // frontendDist 相对 src-tauri；也常见 "../dist" 这种写法
+    // frontendDist 相对配置文件所在目录；也常见 "../dist" 这种写法（就地拼接，exists 认 `..`）
     if (dist.startsWith("./")) {
         dist = dist[2..]
     }
-    return "${srcDir}/${dist}"
+    let joined = "${confDir}/${dist}"
+    if (exists(Path(joined))) {
+        return joined
+    }
+    return "${projectDir}/dist"
 }
 
 /** 从 JSON 文本里取顶层字符串字段（tauri.conf.json 用；找不到返回 ""） */
@@ -2507,6 +2559,39 @@ func jsonStringFieldOf(text: String, key: String): String {
                     case None => return ""
                 }
             case _ => return ""
+        }
+    } catch (e: Exception) {
+        return ""
+    }
+}
+
+/**
+ * 从 JSON 文本里按**点路径**取字符串字段（`build.frontendDist`），找不到返回 ""。
+ *
+ * 0.39.91：tauri v2 的 `frontendDist` 是 **`build.frontendDist`**，不是顶层键
+ * （tauri v1 才是顶层 `distDir`）——只看顶层永远取到空串，于是 distDir 回落成
+ * 工程根的 `dist/`，而现场那个工程的前端在 `ui/`（§4-144 假红的最后一环）。
+ */
+public func jsonStringPathOf(text: String, path: String): String {
+    try {
+        var cur = JsonValue.fromStr(text)
+        for (seg in path.split(".")) {
+            // JsonKind 是枚举，不能直接 ==；用 match 收窄
+            let isObj = match (cur.kind()) {
+                case JsonKind.JsObject => true
+                case _ => false
+            }
+            if (!isObj) {
+                return ""
+            }
+            match (cur.asObject().get(seg)) {
+                case Some(v) => cur = v
+                case None => return ""
+            }
+        }
+        return match (cur.kind()) {
+            case JsonKind.JsString => cur.asString().getValue()
+            case _ => ""
         }
     } catch (e: Exception) {
         return ""
@@ -2615,6 +2700,7 @@ public class HapCommand <: CommandHandler {
             preflight = "DevEco 里找不到 node/hvigorw.js：${node} / ${hvigorJs}"
         }
         let ohpm = "${deveco}/tools/ohpm/bin/ohpm.bat"
+        let ohpmCli = "${deveco}/tools/ohpm/bin/pm-cli.js"
         if (preflight != "") {
             res.put("ok", JsonBool(false))
             res.put("error", JsonString(preflight))
@@ -2649,15 +2735,28 @@ public class HapCommand <: CommandHandler {
                 res.put("error", JsonString("缺 ${ohosDir}/oh_modules —— 需要先 `ohpm install --all`（或设 autoInstall=true）"))
                 return res
             }
-            try {
-                let (code, out, errOut) = executeWithOutput(ohpm, ["install", "--all"], workingDirectory: Path(ohosDir))
-                phaseLog += "[ohpm install] exit=${code}\n" + lenientUtf8(out) + "\n" + lenientUtf8(errOut) + "\n"
-                installedDeps = code == 0
-                if (code != 0) {
-                    errMsg = "ohpm install 失败（exit=${code}）：${firstLines(lenientUtf8(errOut), 3)}"
+            // 0.39.91：**不能直启 ohpm.bat**——Windows 的 CreateProcess 起不来 .bat，
+            // 实测报 `Created process failed … The system cannot find the file specified.`，
+            // 而文件明明在。改走 node + pm-cli.js（与 hvigor 同款，不经 shell）。
+            let launcher = ohpmLauncherOf(hostIsWindows(), exists(Path(node)),
+                exists(Path(ohpmCli)), exists(Path(ohpm)))
+            if (launcher == "") {
+                errMsg = "缺 ohpm：既没有 ${ohpmCli} 也没有 ${ohpm}（DevEco 装全了吗）"
+            } else {
+                try {
+                    let (code, out, errOut) = if (launcher == "node") {
+                        executeWithOutput(node, [ohpmCli, "install", "--all"], workingDirectory: Path(ohosDir))
+                    } else {
+                        executeWithOutput(ohpm, ["install", "--all"], workingDirectory: Path(ohosDir))
+                    }
+                    phaseLog += "[ohpm install/${launcher}] exit=${code}\n" + lenientUtf8(out) + "\n" + lenientUtf8(errOut) + "\n"
+                    installedDeps = code == 0
+                    if (code != 0) {
+                        errMsg = "ohpm install 失败（exit=${code}）：${firstLines(lenientUtf8(errOut), 3)}"
+                    }
+                } catch (e: Exception) {
+                    errMsg = "ohpm install 起不来（launcher=${launcher}）：${e}"
                 }
-            } catch (e: Exception) {
-                errMsg = "ohpm install 起不来：${e}"
             }
         }
 
@@ -3230,6 +3329,39 @@ public class SignCommand <: CommandHandler {
             res4.put("deviceType", JsonString(deviceType))
             eprintln("[lingqu][sign:auto] ok=${result.ok} bundle=${bundle} cert=${result.certName} " +
                 "newKeys=${inp.forceNewKeys} err=${result.error}")
+            // 0.39.91 现场实测缺口：`--auto` 成功也**必须落档**。之前这条分支只 return 结果，
+            // `.lingqu/sign/` 里留着几小时前的旧档 ⇒ 报告判「8 步完成 7/8」、nextStep 仍指 sign，
+            // 界面/断点板看到的和事实相反（§4-136 同族：证据没落地等于没发生）。
+            try {
+                let autoName = sanitizeFileName(projectNameOf(projPath))
+                let sgDir2 = lqDirOf(projPath) + cjhPathSep() + "sign"
+                ensureDirOf(sgDir2)
+                var root3 = JsonObject()
+                root3.put("schema", JsonString("lingqu/sign/v1"))
+                root3.put("project", JsonString(autoName))
+                root3.put("ohosDir", JsonString(ohosDir))
+                root3.put("buildProfile", JsonString(bp))
+                root3.put("udid", JsonString(udid))
+                root3.put("projectBundle", JsonString(bundle))
+                root3.put("by", JsonString("auto"))
+                root3.put("ok", JsonBool(result.ok))
+                if (!result.ok) {
+                    root3.put("error", JsonString(result.error))
+                    root3.put("nextStep", JsonString(
+                        "重跑 `lingqu-cli sign --login` 换新令牌后 `sign --auto --path .`；" +
+                        "材料口令解不开时加 `--newKeys`"))
+                }
+                var modeObj = JsonObject()
+                modeObj.put("mode", JsonString(if (result.ok) { "auto" } else { "auto-failed" }))
+                modeObj.put("modeLabel", JsonString(if (result.ok) { "自动签" } else { "自动签失败" }))
+                modeObj.put("canInstallDevice", JsonBool(result.ok))
+                root3.put("mode", modeObj)
+                root3.put("autoSign", res4)
+                File.writeTo(sgDir2 + cjhPathSep() + "${autoName}.json", root3.toJsonString().toArray())
+            } catch (e: Exception) {
+                let _ = e
+                eprintln("[lingqu][sign:auto] 落档写入失败（工程里没有 .lingqu？）：${e}")
+            }
             return res4
         }
         var path = argStr(args, "path", "")
@@ -3394,7 +3526,7 @@ public class SignCommand <: CommandHandler {
                 // 比"没配"更难排查（人会以为是口令/路径问题）。宁可拒绝并说清怎么做。
                 applyError = "拒绝写回：本机候选材料的包名是 ${candidateBundle}，与工程包名 ${bundleName} 不一致" +
                     "（hvigor 会报 ${SIGN_BUNDLE_MISMATCH_CODE}）。" +
-                    "正解：在 DevEco 里对**本工程**点一次「Automatically generate signature」（需登录），" +
+                    "正解：跑 `lingqu-cli sign --login`（网页登录一次）+ `sign --auto --path .`，让签名服务按本工程包名签发，" +
                     "或把 AppScope/app.json5 的 bundleName 临时改成 ${candidateBundle}（仅本机验证）。" +
                     "本机现有材料的包名：${census}"
             } else {
@@ -3453,7 +3585,7 @@ public class SignCommand <: CommandHandler {
                         }
                     case None =>
                         applyError = "没找到用同一套材料的工程（口令是 DevEco 加密串，只能从已有工程搬）：" +
-                            "可在 DevEco 里对该工程自动签名一次，或传 donor=<已有工程路径>"
+                            "跑 `lingqu-cli sign --login` + `sign --auto` 重新签一次，或传 donor=<已有工程路径>"
                 }
             }
         }
@@ -3742,6 +3874,12 @@ public class VerifyCommand <: CommandHandler {
         res.put("fail", JsonInt(stats.fail))
         res.put("limit", JsonInt(stats.limit))
         res.put("unknown", JsonInt(stats.unknown))
+        // 核心功能口径（0.39.89）：分母是有结论的项，未测单列——界面必须两者都显示，
+        // 只显示一个百分比就等于把"测了 2 项全过"说成"全都可用"。
+        res.put("covered", JsonInt(stats.covered))
+        res.put("notVerified", JsonInt(stats.notVerified))
+        res.put("scope", JsonString(stats.scope))
+        res.put("scopeNote", JsonString(stats.scopeNote))
         res.put("ratePercent", JsonInt(stats.ratePercent))
         var arr2 = JsonArray()
         for (it in items) {
@@ -3753,8 +3891,8 @@ public class VerifyCommand <: CommandHandler {
         res.put("outJson", JsonString(outJson))
         res.put("evidenceLog", JsonString(outEvidence))
         res.put("error", JsonString(outError))
-        eprintln("[lingqu][verify] ${projName} pass=${stats.pass}/${stats.total - stats.limit} " +
-            "limit=${stats.limit} unknown=${stats.unknown} rate=${stats.ratePercent}%")
+        eprintln("[lingqu][verify] ${projName} pass=${stats.pass}/${stats.covered} scope=${stats.scope} " +
+            "limit=${stats.limit} unknown=${stats.unknown} notVerified=${stats.notVerified} rate=${stats.ratePercent}%")
         return res
     }
 }
@@ -4046,6 +4184,9 @@ public class ReportCommand <: CommandHandler {
         stats.put("verifyTotal", JsonInt(facts.verifyTotal))
         stats.put("verifyLimit", JsonInt(facts.verifyLimit))
         stats.put("verifyUnknown", JsonInt(facts.verifyUnknown))
+        stats.put("verifyCovered", JsonInt(facts.verifyCovered))
+        stats.put("verifyNotVerified", JsonInt(facts.verifyNotVerified))
+        stats.put("verifyScope", JsonString(facts.verifyScope))
         stats.put("humanAccepted", JsonInt(facts.humanAccepted))
         stats.put("evidenceCount", JsonInt(facts.evidenceCount))
 
@@ -4156,6 +4297,9 @@ func reportJson(doc: ReportDoc, facts: MigrationFacts, outMd: String, outHtml: S
     stats.put("verifyFail", JsonInt(facts.verifyFail))
     stats.put("verifyLimit", JsonInt(facts.verifyLimit))
     stats.put("verifyUnknown", JsonInt(facts.verifyUnknown))
+    stats.put("verifyCovered", JsonInt(facts.verifyCovered))
+    stats.put("verifyNotVerified", JsonInt(facts.verifyNotVerified))
+    stats.put("verifyScope", JsonString(facts.verifyScope))
     stats.put("humanAccepted", JsonInt(facts.humanAccepted))
     stats.put("humanIgnored", JsonInt(facts.humanIgnored))
     stats.put("evidenceCount", JsonInt(facts.evidenceCount))
@@ -4330,7 +4474,11 @@ public class BatchCommand <: CommandHandler {
             ro.put("verifyPass", JsonInt(r.verifyPass))
             ro.put("verifyTotal", JsonInt(r.verifyTotal))
             ro.put("verifyLimit", JsonInt(r.verifyLimit))
-            ro.put("verifyDenom", JsonInt(r.verifyTotal - r.verifyLimit))
+            // 分母 = 有结论的核心功能项（0.39.89）；老落档没 covered → 回落 total−limit
+            let vDenom = if (r.verifyCovered > 0) { r.verifyCovered } else { r.verifyTotal - r.verifyLimit }
+            ro.put("verifyDenom", JsonInt(vDenom))
+            ro.put("verifyCovered", JsonInt(r.verifyCovered))
+            ro.put("verifyNotVerified", JsonInt(r.verifyNotVerified))
             ro.put("stepDone", JsonInt(r.stepDone))
             ro.put("stepTotal", JsonInt(r.stepTotal))
             ro.put("humanAccepted", JsonInt(r.humanAccepted))

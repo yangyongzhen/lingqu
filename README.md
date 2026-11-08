@@ -7,8 +7,8 @@
 把「照几千字踩坑笔记手工移植一个 Tauri 应用」变成**一条命令 + 一份带证据的迁移报告**；
 而且**踩过的坑会自己长成下一轮的规则、指纹与技能**。
 
-[![Release](https://img.shields.io/badge/release-v0.39.55-00868B)](./CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-396%20passed-2ea44f)](./scripts/test.sh)
+[![Release](https://img.shields.io/badge/release-v0.39.92-00868B)](./CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-445%20passed-2ea44f)](./scripts/test.sh)
 [![Gates](https://img.shields.io/badge/gates-6%2F6%20green-2ea44f)](#-测试与质量)
 [![Language](https://img.shields.io/badge/language-Cangjie%20%2F%20Rust%20%2F%20ArkTS-00868B)](https://cangjie-lang.cn)
 [![Platform](https://img.shields.io/badge/platform-Windows%20→%20HarmonyOS%20PC-lightgrey)](#-平台与验证范围)
@@ -26,7 +26,7 @@
 > Its distinguishing feature is a **self-evolution flywheel**: the agent writes its own lessons to
 > `<project>/.lingqu/notes/`, unknown errors accumulate as normalized signatures in
 > `.lingqu/diagnose/misses.jsonl`, and only after human review do they become fingerprints / rules / skills
-> that the next run consumes. 396 unit tests, six local gates, MIT.
+> that the next run consumes. 443 unit tests, six local gates, MIT.
 
 ---
 
@@ -35,11 +35,11 @@
 | 项 | 内容 |
 |---|---|
 | **交付时间** | **2027-02-13** |
-| **当前进度** | **60%** |
+| **当前进度** | **65%** |
 | **技术基础** | 本项目**站在两个已开源项目之上**，不复刻基础件、聚焦迁移工具链本身：外壳/UI 框架 [**cj-tauri**](https://atomgit.com/qq8864/cj-tauri)（仓颉 + 系统 WebView 的跨端应用框架）与内置 AI 引擎 [**cjh**](https://atomgit.com/qq8864/cjh)（仓颉 Coding Agent Harness，进程外 REST+WS）——两者同为本人开源（MIT），已分别在桌面与鸿蒙真机验证 |
-| **最后更新** | 2026-11-03 |
+| **最后更新** | 2026-11-08 |
 
-**进度描述**：项目的外壳框架（cj-tauri）与 AI 引擎（cjh）均为**已开源的成熟底座**（见上），本项目在其上做的是**迁移工具链层**：工程解析（五类清单 + 迁移画像）、Cargo 依赖树 OHOS 兼容性扫描与替代建议、15 条规则改造（幂等可回滚）、交叉编译流水线、HAP 装配、AGC 自动签名、hdc 部署、验证报告与风险分级、断点续迁的 **8 步流水线全部落地**，并经鸿蒙 PC 真机验证；已驱动 AI 引擎完成 **4 个真实 Tauri 应用**的迁移（3 个已出真机可用率报告：100% / 100% / 85%，第 4 个 rust-music 已移植成功、取证中）。剩余 40% 为三项验收收尾（任务清单见 [`docs/需求追踪.md`](docs/需求追踪.md) §五）：① **AI 进化飞轮的无人干预闭环实证**——经验自动沉淀与自主 PR 提交的端到端验证；② **规则库多样本压力测试**——依赖矩阵预测力与真实编译失败的对照（目标 Recall ≥80%）；③ **鸿蒙原生能力位矩阵补全**——文件选择框等原生能力逐项真机验证，按新口径重算各样本可用率。
+**进度描述**：项目的外壳框架（cj-tauri）与 AI 引擎（cjh）均为**已开源的成熟底座**（见上），本项目在其上做的是**迁移工具链层**：工程解析（五类清单 + 迁移画像）、Cargo 依赖树 OHOS 兼容性扫描与替代建议、15 条规则改造（幂等可回滚）、交叉编译流水线、HAP 装配、AGC 自动签名、hdc 部署、验证报告与风险分级、断点续迁的 **8 步流水线全部落地**，并经鸿蒙 PC 真机验证；已驱动 AI 引擎完成 **4 个真实 Tauri 应用**的迁移，其中 **3 个样本今天各跑出 8 步 8/8 + 核心功能可用率 100%**（habit-tree 10:21、0 处人工介入；m3u8dl-tauri 11:29、1 处；rust-music-3 15:16 复测、0 处——均按 0.39.89 起的**核心功能口径**），juCang 仍为旧口径 85%、待重算。剩余 35% 为三项验收收尾（任务清单见 [`docs/需求追踪.md`](docs/需求追踪.md) §五）：① **AI 进化飞轮的无人干预闭环实证**——经验自动沉淀与自主 PR 提交的端到端验证；② **规则库多样本压力测试**——依赖矩阵预测力与真实编译失败的对照（目标 Recall ≥80%）；③ **鸿蒙原生能力位矩阵补全**——文件选择框等原生能力逐项真机验证，按新口径重算各样本可用率。
 
 ---
 
@@ -53,7 +53,7 @@
 | **为什么是仓颉** | 外壳（`cj-tauri`）、迁移引擎、AI 引擎（`cjh`）同栈；一个业务包 `src/` 编出桌面与鸿蒙两端产物，没有 Node/Python 运行时依赖 |
 | **特色** | **AI 自动进化飞轮**：经验与未命中错误由 agent 自己落盘，攒够次数后由人裁决进指纹 / 规则 / 技能库，下一轮自动吃上（见 [专章](#-ai-自动进化飞轮本项目的特色)，设计细节见 [`docs/AI自进化飞轮.md`](docs/AI自进化飞轮.md)） |
 | **特色** | **HAP 包自签名机制（纯仓颉实现，全程摆脱 DevEco Studio）**：本地签名链（纯仓颉 AES-128-GCM 解密口令 + 调用 hap-sign-tool）与 AGC 云生成双路线，`sign --auto` 一条命令 → `signed=true` + 真机装机启动——**迁移的最后一公里不依赖任何重型 IDE，一键到真机跑起来** |
-| **现状** | **v0.39.56**：37 个 `t2h:*` 命令 · 20 条 CLI 子命令 · 396 例单测 · 15 条改造规则 · 20 条错误指纹 · 8 步流水线六项门禁全绿；**3/5 样本**已跑到真机验证（habit-tree 100% / m3u8dl-tauri 100% / juCang 85%） |
+| **现状** | **v0.39.92**：43 个 `t2h:*` 命令 · 20 条 CLI 子命令 · 445 例单测 · 15 条改造规则 · 20 条错误指纹 · 8 步流水线六项门禁全绿；**3/5 样本**已按新口径跑出 8 步 8/8 + 核心功能可用率 100%（habit-tree / m3u8dl-tauri / rust-music-3，后者 0.39.92 复测）；0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败 |
 
 ---
 
@@ -67,7 +67,7 @@
 | **生命周期** | 一次会话 = 一次搬运：会话关了，上下文就没了；换个应用、隔两周再回来，从零开始 | **断点续迁 + 任务状态机**：工程停在哪一步、哪些过了哪些没过，落档说了算；随时接着跑 |
 | **迁移质量** | 「跑完了」≈「能用了」：退出码 0 就算成功，白屏、旧 .so、假安装都发现不了 | **落档说了算 + 六项门禁 + 真机证据链**：判定字段写进 JSON 才算通过；真机截图 / hilog / dumpLayout 四段判据，报告里「100%」和「尚未验证」不会打架 |
 | **经验沉淀** | 技能包靠人写人维护：写完就旧，AI 撞到新坑也无法自行记账；**雁过不留痕** | **AI 自动进化飞轮**：agent 自己写经验（四段式）、机器攒未命中证据、人只做裁决——指纹 / 规则 / 技能**从真实迁移里长出来**，下一个应用自动吃上 |
-| **上手成本** | 用户自己装环境、找技能、配 prompt、拼 CLI：工具越好用，前置功课越多 | **开箱即一台完整工作台**：内置 AI 引擎（cjh 随包分发、SHA256 校验、自动拉起），37 个 `t2h:*` 命令 + 20 条 CLI 子命令开箱即用；一条 `migrate` 从源码到真机 |
+| **上手成本** | 用户自己装环境、找技能、配 prompt、拼 CLI：工具越好用，前置功课越多 | **开箱即一台完整工作台**：内置 AI 引擎（cjh 随包分发、SHA256 校验、自动拉起），43 个 `t2h:*` 命令 + 20 条 CLI 子命令开箱即用；一条 `migrate` 从源码到真机 |
 | **谁来干活** | 人写 prompt 驱动 AI，AI 每一步都要人盯着 | **agent 是执行者，工具是它的手**（ADR D-015）：任务书交出去，AI 自己跑流水线；停滞/超预算才叫人，人工介入逐次记录（验收 A3 ≤5 处的口径） |
 
 一句话：**技能包给 AI 一本攻略书，灵渠给 AI 一条带闸门的流水线和一个会自己写攻略的大脑。**
@@ -168,7 +168,7 @@ rust-music 迁移中，右侧 AI 助手面板正在落笔经验（`hashline_edit
 | **错误指纹库**（命中不调模型） | ✅ 20 条 | `FP-001…FP-020`，`t2h:diagnose` 命中即给修法 |
 | **HAP 装配 + 闸门** | ✅ 真机 15 MB 级产物 | 点名校验 `lib<module>.so`、前端指纹闸（`.so` 内嵌 AssetKey ↔ `dist/`） |
 | **HAP 包自签名（路线 A：AGC 云生成 + 本地签名链）** | ✅ 真机打通，**全程摆脱 DevEco Studio** | **纯仓颉 AES-128-GCM 解密签名口令 + hap-sign-tool 本地签名链**（`compiler/sign_*.cj`），`sign --auto` 一条命令 → `signed=true` + `install bundle successfully`——签名两态自动判定（debug/release）+ 上架前强提醒 |
-| **真机部署与验证** | ✅ 3 个样本 | `hdc install` / `aa start` / `hilog` / `uitest dumpLayout` 四段判据；可用率 habit-tree 100% · m3u8dl 100% · juCang 85% |
+| **真机部署与验证** | ✅ 3 个样本 | `hdc install` / `aa start` / `hilog` / `uitest dumpLayout` 四段判据；新口径可用率 habit-tree 100% · m3u8dl 100% · rust-music-3 100%（juCang 85% 旧口径待重算） |
 | **AI 一体化**：一键迁移（后台 8 步）+ **把任务书交给 cjh 让它自己干** | ✅ 实机跑过 | `t2h:migrate` / `t2h:autoport_*`；juCang 一轮 AI 自动迁移 8/8 |
 | **报告**：三段式 + 风险分级 + 自动出报告 | ✅ | `t2h:report`；AI 路径跑完自动出报告（0.39.54） |
 | **AI 自动进化飞轮**：经验落盘 + 未命中台账 + **候选池（suggest/archive）** → 认知层 | ✅ 实现（agent 侧实跑观察中） | `t2h:notes` / `t2h:diagnose` + `notes_test` 24 例；阶段 1 已端到端实测（候选门槛三层生效、入库后出池）；**未验**：agent 在真实迁移途中是否照做 |
@@ -235,7 +235,7 @@ bash packaging/package-win.sh            # 常规目录包（DLL 按导入闭包
 ```
 [0] cj-tauri sync         清单 → 派生 targets/（改了 cj-tauri.toml 才需要 -s）
 [1] 业务包 cjpm build      零警告（unused / deprecated 一律清零，禁止"先交付后清理"）
-[2] 业务包 cjpm test       396 例 / 45 个 *_test.cj，FAILED=0 且 ERROR=0
+[2] 业务包 cjpm test       445 例 / 48 个 *_test.cj，FAILED=0 且 ERROR=0
 [3] cj-tauri check        清单校验 + 骨架漂移 + 能力三方比对（声明 × 插件自述 × 实际装配）
 [3b] 页面脚本语法          抽出 index.html 的 <script> 块逐个 node --check
 [4] targets/desktop build  骨架侧也要编得过且零警告
@@ -244,7 +244,7 @@ bash packaging/package-win.sh            # 常规目录包（DLL 按导入闭包
 
 | 质量手段 | 具体做法 | 真实产出 |
 |---|---|---|
-| **测试只测纯函数** | 进程 / 网络 / WebView2 / 真机部署**不在单测里造假绿**，这类以实机为准 | 396 例覆盖扫描器、依赖解析、规则改造、HAP 闸、签名判定、风险分级、扫描口径… |
+| **测试只测纯函数** | 进程 / 网络 / WebView2 / 真机部署**不在单测里造假绿**，这类以实机为准 | 445 例覆盖扫描器、依赖解析、规则改造、HAP 闸、签名判定、风险分级、扫描口径… |
 | **bug 先红后绿** | 修 bug 必须先写复现用例（红）再修（绿） | 本轮 0.39.55 的 3 个真 bug 就是单测当场抓出来的（见下） |
 | **零警告是硬判据** | 门禁统计 `warning:` 行数并**打印明细**（只报条数等于没检查） | 0.39.0 曾因"删调用方留下 unused"栽过，之后写进规矩 |
 | **界面可自动断言** | `t2h:ui_report` 回投版面指标（grid 列宽 / 当前屏 / JS 错误数 / 面板状态 / 200+ 字段）落 `.lingqu/ui-report.{json,log}` | 没有视觉也能证明版面对；本轮两个截图也是这么验的（像素体检：239/300 种颜色，非空白） |
@@ -282,7 +282,7 @@ lingqu/
 ├── cj-tauri.toml            # 应用清单——单一真相（id / 窗口 / 资产 / 能力目录）；sync 派生 targets/
 ├── cjpm.toml                # 业务包（static 库；骨架以 path 依赖引用）
 ├── src/                     # 业务代码（仓颉）
-│   ├── main.cj              # build(): AppSpec —— 命令注册 / 生命周期接线（37 条 t2h:*）
+│   ├── main.cj              # build(): AppSpec —— 命令注册 / 生命周期接线（43 条 t2h:*）
 │   ├── notes.cj             # ★ 本地经验（AI 飞轮的经验层）
 │   ├── diagnose_miss.cj     # ★ 未命中指纹台账（AI 飞轮的证据层）
 │   ├── autoport.cj          # 把任务书交给 cjh；agent 轨迹观测 / 停滞判定 / 轮次预算
@@ -398,7 +398,7 @@ lingqu-cli notes --action export --path .                                # 整�
 
 ```
 P0–P6 ✅  外壳 / 对话通道 / 扫描 / 依赖 / 改造 / 构建·HAP·签名·部署 / 验证·报告
-P7   🔶  5 样本：3/5 已跑到真机验证（habit-tree 100% / m3u8dl 100% / juCang 85%）
+P7   🔶  5 样本：3/5 已按**新口径**真机验证 8 步 8/8 + 可用率 100%（habit-tree / m3u8dl / rust-music-3）；juCang 85% 为旧口径待重算
          待办：其余 2 个推到底 + 基线/消融实验
 P8   ✅  迁移指南（docs/迁移指南.md）+ 开源门面（README / LICENSE / 贡献 / 安全）
         飞轮阶段 2/3（半自动 PR → CI 评审合并）进行中
@@ -410,8 +410,8 @@ P8   ✅  迁移指南（docs/迁移指南.md）+ 开源门面（README / LICENS
 |---|---|---|
 | A1 | 5 个真实开源 Tauri 应用迁移验证 | `进行中 3/5` |
 | A2 | 迁移分析覆盖率 100% | `已实现已验证`（habit-tree：C1 100%、C2 100%，漏 0/误 0） |
-| A3 | 单应用平均人工介入 ≤ 5 处 | `进行中`（juCang 实测 1 处） |
-| A4 | 鸿蒙电脑核心功能可用率 ≥ 80% | `已实现已验证`（100% / 100% / 85%） |
+| A3 | 单应用平均人工介入 ≤ 5 处 | `进行中`（本次三样本：m3u8dl-tauri 1 处；habit-tree 与 rust-music-3 各 0 处） |
+| A4 | 鸿蒙电脑核心功能可用率 ≥ 80% | `已实现已验证`（新口径 100% / 100% / 100%：habit-tree · m3u8dl · rust-music-3；juCang 85% 旧口径待重算） |
 | A5 | 开源 + 迁移指南 | `已实现`（仓库开源 MIT；[`docs/迁移指南.md`](docs/迁移指南.md)） |
 
 ---

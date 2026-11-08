@@ -477,14 +477,14 @@ public func judgeSign(hasConfig: Bool, filesExist: Bool, allowsDevice: Bool, pro
         if (hasCandidate) {
             c.nextStep = "机器上已有匹配本机 UDID 的材料：把历史/其它工程里那份 signingConfigs 抄回 build-profile.json5（口令是 DevEco 加密串，hvigor 会解密），然后重跑 hvigor assembleHap"
         } else {
-            c.nextStep = "在 DevEco 里勾一次「Automatically generate signature」（需华为账号，会把本机 UDID 注册进 profile），或走 AGC 自动签名流程"
+            c.nextStep = "跑一次 `lingqu-cli sign --login`（打开网页登录 AGC，本机回调自动收码），再 `sign --auto --path .` 自动签——它会把本机 UDID 注册进这个包名的 profile。别去 DevEco 手点（同一件事还多一道人工）"
         }
         return c
     }
     if (!filesExist) {
         c.ok = false
         c.reason = "signingConfigs 指向的 .p12/.cer/.p7b 有文件不存在（材料被删/换机器）"
-        c.nextStep = "确认 certify/profile/storeFile 三个路径都存在；缺了就在 DevEco 里重新自动签名一次"
+        c.nextStep = "确认 certify/profile/storeFile 三个路径都存在；缺了就重跑 `lingqu-cli sign --auto --path .` 让它重新签发（材料不复用时加 `--newKeys`）"
         return c
     }
     if (profileType != "debug") {
@@ -496,7 +496,7 @@ public func judgeSign(hasConfig: Bool, filesExist: Bool, allowsDevice: Bool, pro
     if (!allowsDevice) {
         c.ok = false
         c.reason = "profile 的 device-ids 里没有本机 UDID（设备没注册进这份 profile）"
-        c.nextStep = "在 DevEco 里自动签名一次把本机注册进去，或换一份含本机 UDID 的材料"
+        c.nextStep = "跑 `lingqu-cli sign --login`（网页登录一次）+ `sign --auto --path .` 把本机注册进这个包名的 profile，或换一份含本机 UDID 的材料"
         return c
     }
     c.ok = true
@@ -520,7 +520,7 @@ public func judgeSign(hasConfig: Bool, filesExist: Bool, allowsDevice: Bool, pro
 // 另一道是包名。所以这里把包名独立成一条判定，而不是塞进 `filesExist` 之类的开关里——
 // 否则工具会给出"抄回来即可"这种**照着做也失败**的建议（比不说更糟）。
 //
-// 正解只有一条：在 DevEco 里对**该工程**点一次自动签名（需登录华为账号），
+// 正解只有一条：跑一次 `lingqu-cli sign --login`（网页登录一次，本机回调收码）+ `sign --auto`，
 // 由签名服务按这个包名签发 profile。它属于必须计入 A3 的人工介入，工具要做的是
 // **一次说清**（哪个包名缺、本机有哪些包名、hvigor 会报什么码、该点哪里），别让人试错。
 
@@ -600,8 +600,8 @@ public func judgeSignForWriteback(c: SignCheck, projectBundle: String, candidate
         "本机现有材料的包名：${others}。" +
         "hvigor 写回/抄用别的包名的材料会报 ${SIGN_BUNDLE_MISMATCH_CODE}" +
         "（bundleName 与 SigningConfigs 不一致）。"
-    let how = "在 DevEco 里对**本工程**点一次「Automatically generate signature」" +
-        "（需登录华为账号，会把本机 UDID 注册进这个包名的 profile）；" +
+    let how = "跑 `lingqu-cli sign --login` 打开网页登录一次（AGC），再 `sign --auto --path .`" +
+        "（会把本机 UDID 注册进这个包名的 profile，不用去 DevEco 手点）；" +
         "或把 AppScope/app.json5 的 bundleName 临时改成上面某个已有包名（仅限本机验证，别用于交付）。"
     out.reason = "${out.reason}；工程包名 ${mine} 与候选材料包名不一致"
     out.nextStep = tail + how
@@ -668,7 +668,7 @@ public func judgeSignPreflight(hasConfig: Bool, profileExists: Bool, projectBund
         out.block = true
         out.reason = "工程包名 `${projectBundle}` 与已配签名材料的包名 `${profileBundle}` 不一致" +
             "（hvigor 必然报 ${SIGN_BUNDLE_MISMATCH_CODE}，一个产物都不会有）：" +
-            "在 DevEco 里对本工程自动签名一次，或把 signingConfig 换成本机同包名的材料"
+            "跑 `lingqu-cli sign --login` + `sign --auto` 对本工程签一次，或把 signingConfig 换成本机同包名的材料"
     }
     return out
 }
@@ -828,7 +828,7 @@ public func assessSignMode(hasConfig: Bool, filesExist: Bool, profileType: Strin
         }
         st.switchSteps = signReleaseSteps()
     } else {
-        st.installNextStep = "先配好签名（t2h:sign apply 写回，或在 DevEco 里自动签名一次）"
+        st.installNextStep = "先配好签名（`t2h:sign apply` 写回；没有材料就跑 `lingqu-cli sign --login` + `sign --auto`）"
         st.releaseNextStep = "先确认签名态，再谈上架"
         let steps = signDebugSteps()
         for (s in steps) {

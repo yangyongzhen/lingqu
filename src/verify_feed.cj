@@ -1,6 +1,7 @@
 package lingqu
 
 import lingqu.verify.*
+import std.collection.*
 import std.env.*
 import std.fs.*
 import std.process.*
@@ -138,6 +139,10 @@ func collectVerifyInput(projName: String, projPath: String): ChecklistInput {
                 case JsonKind.JsArray => inp.blockerCount = objFieldOf(scan, "blockers").asArray().size()
                 case _ => inp.blockerCount = 0
             }
+            // 核心功能清单（A4 的分母）+ 平台 API 落地情况
+            let (feats, plats) = scanSurfaceOf(scan, projName, projPath)
+            inp.features = feats
+            inp.platformItems = plats
         case None => ()
     }
 
@@ -176,8 +181,142 @@ func collectVerifyInput(projName: String, projPath: String): ChecklistInput {
     return inp
 }
 
-/** 部署落档里的设备序列号（没有给 ""） */
-func deploySerialOf(projName: String, projPath: String): String {
+/**
+ * 落档里一条命中位置（`src-tauri/src/commands.rs:95`）→ 文件部分。
+ *
+ * 只认"冒号后面紧跟数字"的那个分隔（行号），避免把 Windows 盘符 `C:` 也切断。
+ */
+func siteFileOf(site: String): String {
+    var cut: Int64 = -1
+    var i = 0
+    while (i < site.size) {
+        if (site[i] == 58 && i + 1 < site.size && site[i + 1] >= 48 && site[i + 1] <= 57) {
+            cut = i
+        }
+        i += 1
+    }
+    if (cut < 0) {
+        return site
+    }
+    return site[0..cut]
+}
+
+/** 读工程里的源文件（读不到给空串——调用方按"没证据"处理，绝不当"通过"） */
+func readProjectSrc(projPath: String, rel: String): String {
+    if (rel == "") {
+        return ""
+    }
+    let p = projPath + cjhPathSep() + rel
+    if (!exists(Path(p))) {
+        return ""
+    }
+    try {
+        return String.fromUtf8(File.readFrom(p))
+    } catch (e: Exception) {
+        let _ = e
+        return ""
+    }
+}
+
+/**
+ * scan 落档 → **核心功能清单**（每条 IPC 命令一项）+ **平台 API 落地情况**。
+ *
+ * 为什么要读源码：scan 只记了"这条命令在哪一行"和"这里用了 rfd::FileDialog"，
+ * 而 A4 新口径要的是"降级方案**落地了没有**"——那必须看 `#[cfg(target_env = "ohos")]`
+ * 那一套实现里到底写了什么（现场是 `None`，等于没落地）。
+ * 判定本体是 `verify.cj` 里的纯函数（`ohosImplStubOnly` / `firstApiHitIn`），这里只负责取数。
+ *
+ * 人工实测结论读 `<工程>/.lingqu/verify/<工程>.human.json`：`{ "pick_folder": "fail" }`。
+ * **人的实测永远优先**——推断只能说明"看起来能不能用"。
+ */
+func scanSurfaceOf(scan: JsonValue, projName: String,
+    projPath: String): (ArrayList<FeatureInput>, ArrayList<PlatformInput>) {
+    let features = ArrayList<FeatureInput>()
+    let platforms = ArrayList<PlatformInput>()
+    let items = objFieldOf(scan, "items")
+
+    // 平台 API 名单（判"这条命令碰没碰平台专有能力"要用）
+    let apiNames = ArrayList<String>()
+    let platArr = objFieldOf(items, "platform")
+    match (platArr.kind()) {
+        case JsonKind.JsArray =>
+            let a = platArr.asArray()
+            var k: Int64 = 0
+            while (k < a.size()) {
+                match (a.get(k)) {
+                    case Some(v) =>
+                        let nm = jsonStrField(v, "name")
+                        if (nm != "" && !apiNames.contains(nm)) {
+                            apiNames.add(nm)
+                            platforms.add(PlatformInput(nm))
+                        }
+                    case None => ()
+                }
+                k += 1
+            }
+        case _ => ()
+    }
+
+    // 人工实测结论（没有这个文件就是"全都还没人测过"，不是错误）
+    var human = JsonObject()
+    match (readJsonOrNone(resolveLqPath(projPath, "verify/${projName}.human.json"))) {
+        case Some(h) => human = h.asObject()
+        case None => ()
+    }
+
+    // 逐条命令：命中哪处平台 API / 鸿蒙侧是不是空壳 / 人测过没有
+    let cmdArr = objFieldOf(items, "commands")
+    match (cmdArr.kind()) {
+        case JsonKind.JsArray =>
+            let a = cmdArr.asArray()
+            var k: Int64 = 0
+            while (k < a.size()) {
+                match (a.get(k)) {
+                    case Some(v) =>
+                        let nm = jsonStrField(v, "name")
+                        if (nm != "") {
+                            let f = FeatureInput(nm, nm)
+                            let src = readProjectSrc(projPath, siteFileOf(firstArrayItemOf(v, "sites")))
+                            if (src != "") {
+                                f.degradedApi = firstApiHitIn(src, nm, apiNames)
+                                f.fallbackLanded = !ohosImplStubOnly(src, nm)
+                            }
+                            f.humanVerdict = jsonStrField(human, nm)
+                            features.add(f)
+                        }
+                    case None => ()
+                }
+                k += 1
+            }
+        case _ => ()
+    }
+
+    // 每处平台 API：碰它的命令在鸿蒙侧都落地了，才算"有降级方案"
+    for (p in platforms) {
+        var related: Int64 = 0
+        var landed: Int64 = 0
+        for (f in features) {
+            if (f.degradedApi == p.name) {
+                related += 1
+                if (f.fallbackLanded) {
+                    landed += 1
+                }
+            }
+        }
+        p.fallbackLanded = related > 0 && landed == related
+        if (related == 0) {
+            p.note = "没有 IPC 命令命中它（可能用在非命令路径）→ 无法判定是否落地，不能算平台限制"
+        } else if (landed == related) {
+            p.note = "${related} 个命令在鸿蒙侧都有落地的实现"
+        } else {
+            p.note = "${related - landed}/${related} 个命令的鸿蒙分支是空壳（等于没实现）"
+        }
+    }
+
+    return (features, platforms)
+}
+
+/** 部署落档里的设备序列号（没有给 ""） */func deploySerialOf(projName: String, projPath: String): String {
     match (readJsonOrNone(resolveLqPath(projPath, "deploy/${projName}.json"))) {
         case Some(dep) => return jsonStrField(dep, "serial")
         case None => return ""

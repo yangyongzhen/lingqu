@@ -5,6 +5,226 @@
 
 ---
 
+## [0.39.92] - 2026-11-08
+
+**主题**：**签名这一关过去了，真机链路第一次整条跑通**；顺带修掉"做成了却不留痕"。
+重建后按文档正路走一遍：`sign --auto` 一条命令拿到新密钥、新证书、含本机 UDID 的 profile 并写回
+`signingConfigs`；HAP 一次出 **signed 8,791,204 B**；真机上 `installed/started/hilogHealthy` 全真；
+`verify` 三项核心功能 **3/3（100%）**。而现场同时暴露一个口径问题：签名明明成功，
+`.lingqu/sign/` 里却还是四小时前的旧档，报告因此写「8 步完成 7/8」、`nextStep` 仍指 `sign`。
+
+### Fixed
+- **`t2h:sign --auto` 成功后不落档**（`src/main.cj`）：`--auto` 分支从入口到 `return res4` 没有一处写
+  `.lingqu/sign/<工程>.json`，只有"体检"路径会写 ⇒ 界面、断点板、报告读到的都是旧档，
+  "签名跑过了"这件事在证据里不存在。现在成功/失败都落 `lingqu/sign/v1`：
+  `mode{mode,modeLabel,canInstallDevice}` + `by=auto` + `autoSign` 明细，失败另带 `error` 与 `nextStep`
+  指引（先 `sign --login` 再 `sign --auto`，材料口令解不开加 `--newKeys`）。
+- 证据：落档 15:03 刷新（`mode=debug` / `canInstall=true`），报告 `stepPercent` **87 → 100**、
+  `nextStep` 消失；业务包 `cjpm build` 零警告。
+
+### Added
+- 真机链路首次全绿实测记录（rust-music-3 / 5VFUN26310G06052）：
+  `sign --auto` → HAP `signed=true` → `deploy.installed/started=true` → `verify` 3/3 = 100%。
+
+### 复测（15:12–15:16，补丁进产物后由用户自己再跑一次）
+- 重建产物 **15:07:26**（晚于 `src/main.cj` 的 15:03:42）后重跑，不再靠人工 `sign --path` 体检补档：
+  `build 15:13:11` → `hap 15:13:27`（signed 8,791,204 B）→ `sign 15:14:20`（`mode=debug` /
+  `canInstallDevice=true`）→ `deploy 15:14:28` → `verify 15:15:11`（3/3 = 100%）→
+  `report 15:16:34`，结论 **「8 步完成 8/8（100%），核心功能可用率 100%，0 处人工介入」**，
+  `nextStep` 不再出现；`tasks.json` 八步全 `done`。
+- 同一天另两个样本按同一口径跑通：**habit-tree**（10:21，0 处人工介入）、
+  **m3u8dl-tauri**（11:29，1 处人工介入）。即 **3 个真实 Tauri 应用 8 步 8/8 + 可用率 100%**
+  （juCang 仍为旧口径 85%，待重算），README 进度随之 **60% → 65%**。
+- 单测 **445 例全绿**（`PASSED 445 / FAILED 0 / ERROR 0`）；顺带修掉一例**停在旧口径的断言**：
+  `testPreflightBlocksOnBundleMismatch` 仍在要求签名提示含「DevEco」，与"签名不走 DevEco"的定案冲突
+  → 改为断 `sign --auto` / `sign --login`，并**反向断言**文案里不许出现 DevEco（§4-147 同族）。
+- 遗留（本轮未改，已记进 `docs/进度记录.md`）：`sign` 落档被"体检"路径**整份覆写**，
+  `--auto` 写的 `by=auto` 标记会丢 ⇒ 看不出来源；方向是体检路径只补 `check` 段、不整份重写。
+
+## [0.39.91] - 2026-11-08
+
+**主题**：**"工具自己坏了"和"工程没迁好"必须分清。** 接手一轮真机迁移（rust-music-3）跑完复盘，
+发现三次构建全红**不是工程的问题**：指纹闸只认 vite 的 `assets/` 布局，而该工程是
+`frontendDist: "ui"` + 单个 `index.html`；装配 HAP 前要的 `ohpm install` 在 Windows 上
+直启 `.bat` 必然失败；轮次预算被抬到 120 只改了引擎内存、`~/.cjh/settings.json` 里还是 40，
+下回合又在 41 轮被截断。三处都修在**我们自己的判据**上，SDK 文件一个没动。
+
+### Fixed
+
+- **前端指纹闸假红（`src/compiler/fingerprint.cj` + `src/main.cj`）**：整整**三层**都错，一层修好还是红，
+  必须一起修。① `frontendDist` 是 **tauri v2 的 `build.frontendDist`**（嵌在 `build` 段里），
+  旧代码按**顶层键**取 ⇒ 永远空串；② `tauri.conf.json` 在**扁平布局**下位于工程根，旧代码只看
+  `src-tauri/` ⇒ 连配置文件都找不到；③ 就算读到了 dist，两处取键也只认 `assets/` 前缀（vite 布局），
+  而该工程是 `frontendDist: "ui"` + 单个 `index.html` ⇒ 抽出 0 键。三层叠加的结果是闸报
+  「`.so` 里没有内嵌前端资源」，而 `.so` 里明明白白嵌着 `index.html` / `/index.html`（各 5 处）。
+  处置：新增 `jsonStringPathOf`（点路径取值，`build.frontendDist` 与顶层两种都认）、
+  `resolveDistDirOf` 改 public 且两处 conf 位置都找、新增 `assetLayoutOf` / `distEntryKeysOf` /
+  `compareEntryKeys` / `binaryContainsKey`——先定布局，`assets/` 有产物走老三方比对，
+  只有入口文件就走**存在性**比对（`.so` 里没有可枚举的键表，凭空扫"像路径的串"只会把
+  `module.json` 之类当成资源，那是另一种假红）。
+  **真实工程验证**：`rust-music-3` 上跑 `build --verifyOnly` → `passed: true`、`distDir` 解析到
+  `…/ui`、`failures: []`（修前：`distDir` 落到空的 `dist/`、闸报无内嵌前端资源）。
+  同一份证据在**真实的 AI 一键迁移**里也拿到了：14:46:35 的 `build` 落档 `gates.passed=true`、
+  `failures=[]`——修前这一步是红的。
+- **登录入口递不出去（`assets/ui/index.html`）**：用户实测问「为啥没有自动弹出来网页让登录 AGC」。
+  现场：agent 直接跑 `sign --auto`，报 `拉团队列表失败（token 可能已失效，重跑 sign --login）`，
+  随后 `deploy` 也失败 —— 而"回合结束自动起登录"的判据**只看最后一条工具报错**，
+  被 deploy 的失败盖掉了 ⇒ 登录入口一次都没递到人手上。处置：`CJ.needLoginSeen` **整回合留痕**
+  （任何一条工具失败命中 `loginHintOf` 就记住），回合结束据此起登录并在签名屏给**可点**按钮；
+  `loginHintOf` 同时认中文「登录」与英文 `login` / `token 可能已失效` / `拉团队列表失败`。
+- **签名指引改成实际可用的路（`src/compiler/sign.cj` + `src/main.cj`，9 处）**：原文案多处写
+  「在 DevEco 里点一次自动签名」——那是**多一道人工**的旧路，与我们已支持的
+  `lingqu-cli sign --login`（网页登录一次）+ `sign --auto` 冲突，agent 照着读就只能停在等人。
+  统一改成后者（§4-130 同族：能力在手、说明书指错路）。
+- **`t2h:hap` 直启 `ohpm.bat` 必失败（`src/compiler/hap.cj` + `src/main.cj`）**：Windows 的
+  CreateProcess **起不来 `.bat`**，实测 `Created process failed, errMessage: "The system cannot
+  find the file specified."`（文件明明在）。后果是 hap 连红四轮、agent 只能自己手工
+  `ohpm install` 再重跑，白烧轮次。新增纯函数 `ohpmLauncherOf(...)` + `hostIsWindows()`：
+  Windows 有 node 与 `pm-cli.js` 就走 node（与 hvigor 同款、不经 shell），POSIX 仍走 `.bat`，
+  都没有就如实报"缺 ohpm"，**不静默跳过**。实机验证 `node pm-cli.js --version` → `6.1.2.285`。
+- **轮次预算"抬过却回落"（`src/cjh_settings.cj`）**：`already` 判据只看 live 内存值，
+  于是"上次 POST 改过内存"被当成"已经落好"，文件不写 ⇒ 引擎重启回落 40（`cjh.log` 里
+  `41 rounds` 实测 15 次）。新增纯函数 `iterBudgetSatisfiedOf(live, file, target)`：
+  **两处都达标才算满足**；live 达标时也照样把文件抬上去，配置文件没落成就在返回值里
+  明写「重启会回落」，不许报 `already`。
+
+### Tests
+
+- 新增 5 例：`testAssetLayoutOfFlatDist` / `testDistEntryKeysOfFlatDist` /
+  `testCompareEntryKeysPresence` / `testOhpmLauncherOf` / `testIterBudgetSatisfiedOf`。
+  `cjpm test` **443 例全绿**（原 438 + 5），`cjpm build` 零警告。
+
+---
+
+## [0.39.90] - 2026-11-08
+
+**主题**：**"点了没反应"要先分清「按钮坏了」还是「对面已经没人了」。** 用户实测原话：
+「当前界面点选择，不会弹出来文件选择框了吗？」——查下来按钮、权限（`dialog:default`）、
+插件（`DialogPlugin()`）全都没问题，**同一版程序 5 分钟前还成功弹过 5 次目录框**
+（`dialog: kind=6 … ok=1`）。真正的事发现场是：那个窗口已经**退出到一半**。
+
+### 现场证据（都是实取的，不是推断）
+
+| 时刻 | 事实 |
+|---|---|
+| 12:14:53 | `[cj-bridge] destroy: host thread still running, handle kept`——事件循环结束、宿主开始销毁 |
+| 之后 | 窗口**仍可见**（`hwnd=854120`，最大化），进程**仍在** |
+| 之后 | 页面发 `js -> native` **467 条**，原生回投 `ExecuteScript` **0 条** |
+
+即：C 桥的消息通道还在（听得见），回投要走的 `ExecuteScript` 随事件循环一起没了（说不出）。
+所有 invoke 的 Promise 永不 settle ⇒ 不弹框、不报错、连 `prompt` 兜底和 `.catch` 都走不到。
+**这是"静默失败"里最难查的一种：界面看着完好无损。**
+
+### Added
+
+- **后端心跳与失联横幅**（`assets/ui/index.html`）：每 5 秒 `system:ping`，连续 **3 次**无回包
+  （≈15s）判失联，顶栏亮红条：「后端已停止响应，连续 N 次心跳没有回包…请关闭后重新启动灵渠」。
+  单次没回包**不算**（长回合时 IPC 会短暂排不上，与 §4-103 同口径）。判失联那一刻立刻
+  `reportUi('backend-lost')` 落一份证据——此后 IPC 全哑，再等就没有第二次上报机会。
+- **判据纯函数化 + 自检**：`backendVerdictOf(miss, ageMs)`；`LINGQU_UI_PROBE=backendlost`
+  单独验判据与横幅（0/1/2 次不许判失联、3 次必须判、恢复后横幅要收回）。
+- **`ui_report` 新增 8 个字段**（两处一起加，§4-60）：`backendLost / backendMiss /
+  backendOkBeats / backendAgeSec / backendWhy / backendNote / backendProbe / backendProbeFail`。
+
+### Changed
+
+- 版本号三处升 `0.39.90`。
+
+### Fixed
+
+- 用户所见的「点『选择…』不弹框」：重开应用后目录框正常（`dialog: kind=6` → `ok=0` 取消、
+  `pickerUsed=1`）——即**不是按钮的问题**，是僵尸窗口。应用侧现在会自己说清这种情况。
+
+### 回馈上游
+
+- `atomgit.com/qq8864/cj-tauri` **issue #8**：`cj_plat_fini` 因宿主线程仍在跑而早退后，
+  窗口既不 `DestroyWindow` 也不回收句柄，且 `dispose()` 返回 `Unit` 不给调用方任何
+  "没做成"的信号 ⇒ 留下看得见的空窗口、进程不退出。建议早退也收窗口 / `destroy` 回状态 /
+  给宿主线程一个上界。
+
+### 已知未验
+
+- 失联判定**没有在真僵尸窗口上端到端验过**（造假僵尸要杀掉事件循环，探针里不做）：
+  实测到的是「心跳正常时 `backendAgeSec` 是个位数、`backendProbe=1`」。真断线那一刻的
+  表现留待下次实际撞上时对账。
+- 三个样本的可用率仍是**旧口径**数字（见 0.39.89），本轮未重跑。
+
+---
+
+## [0.39.89] - 2026-11-08
+
+**主题**：**可用率 100% 是假的**——拿"装配跑通了"当"核心功能可用"。用户实测
+（`C:\Users\yang\Desktop\test\m3u8dl-tauri`）落档写着 `ratePercent=100 / total 6 / unknown 0 / limit 1`，
+而真机上**选择文件、保存目录两个按钮点了没反应**。查下来两件事：
+
+1. **分母口径错了**：分母是 `清单项 − 平台限制`，而 8 条清单里**没有一条**是"某个核心功能真的能用"——
+   launch/build/hap 是**装配**跑通，`platform-api` 因为登记了 `rfd::FileDialog` 反被**剔出分母**
+   （§4-63 的反向坑加重版：越不可用越不影响分数）。
+2. **"降级方案落没落地"没人判**：`rfd::FileDialog` 在 `commands.rs` 里的鸿蒙分支是
+   `#[cfg(all(target_os = "linux", target_env = "ohos"))] pub async fn pick_folder() -> ... { None }`
+   —— 等于没实现，前端 `if (p) {...}` 拿到 `None` 就静默什么都不做。这**不算**平台限制，算不可用。
+
+### Changed
+- **A4 可用率口径换成分核心功能清单**（`src/verify/verify.cj`）：
+  - 分母 = **有结论的项**（`stats.covered` = pass + fail），未测单列 `stats.notVerified`，
+    另加 `stats.scope`（`features` = 按核心功能清单算 / `gates-only` = 没扫过时退回装配口径）。
+  - 每条 IPC 命令（scan 的 `items.commands[]`）生成一条功能清单项；判据三档：
+    人测过 → 以人为准（`pass`/`fail`）；命中平台 API 且鸿蒙分支是空壳 → `fail` 并点名；
+    其余无证据 → `unknown`（**未测就是未测**，不许算通过）。
+  - `platform-api` 项：只有**降级方案真的落地**（命中它的命令在鸿蒙侧都有实现）才记 `limit`，
+    否则 `fail` 并列出未落地的那几处。
+  - 聚合的 `ipc` 项不再用「应用起来了」判 `pass`（旧版据此判通过，正是 100% 的来源）。
+
+### Added
+- `src/verify/verify.cj`：源码级判据纯函数 `fnImplsOf` / `ohosImplStubOnly` / `firstApiHitIn` /
+  `bodyRangeOf` / `unwrapToValue`——认 `#[cfg(...)]` 分支归属（`not(...)` 里的 `ohos` 不算鸿蒙分支）、
+  认 `None` / `return None` / `Ok(None)` / `todo!()` 这几种"写了等于没写"。
+- `src/verify_feed.cj`：`scanSurfaceOf()` 把 **scan 落档 + 工程源码 + 人工实测结论** 汇成清单输入；
+  人工结论读 `<工程>/.lingqu/verify/<工程>.human.json`（`{ "pick_folder": "fail" }`），**人测永远优先**。
+- `t2h:verify` 回投新增 `covered` / `notVerified` / `scope`；报告与矩阵、⑥ 屏、`ui_report`
+  （`verifyCovered/verifyNotVerified/verifyScope`，两处一起加，§4-60）全部同步。
+
+### Verified（2026-11-08，本机实跑）
+- 单测：`cjpm test` **TOTAL 438 / PASSED 438 / FAILED 0 / ERROR 0**；`cjpm build` **零警告**。
+- 口径用例覆盖：`Ok(None)` 包装也算空壳、`#[cfg(not(...))]` 不被误判成鸿蒙分支、
+  `pick_folder` 不误命中 `pick_folder_extra`、鸿蒙侧写了真实现就要判"落地"。
+- 未验证：**③④⑤ 闸（`cj-tauri check` / 骨架侧 build / cli build）本轮没跑**——用户在真机测试期间，
+  第 ④ 闸会 `taskkill` 本仓 `main.exe`（§4-72）；且 `cj-tauri.toml` 改了版本号，需先 `sync desktop`
+  + `sync ohos`。新口径在**真机**上的取值也还没复核（`src/verify/verify.cj` 本体与取数层只有单测证据）。
+
+---
+
+## [0.39.88] - 2026-11-08
+
+**主题**：**同一块屏幕上，提示语和左栏互相打脸**。用户实测：「换了工程（m3u8dl-tauri）：这里还没跑过」
+——可左侧六个徽标全写着「已完成」。查下来**左栏是对的**（它读 `.lingqu/<步骤>/<工程>.json`，那个工程
+确实有 scan/deps/port/build/hap/sign/report 落档、只是没有 deploy/verify，所以 `verify=未开始`），
+**错的是那句提示**：换工程时**无条件**写「这里还没跑过」，根本没看新工程有没有旧档。
+
+### Fixed
+- 换工程提示改为按**落档实况**三档生成（读的是**同一次** `t2h:resume` 结果，与左栏徽标同一份数据）：
+  - `has-record`：`这个工程有旧落档（N 步做过：…）。可以直接接着用；要全部重来就点「↻ 从头重跑」把旧档归档。`
+  - `empty`：`这里还没跑过。填好路径点「🤖 开始 AI 自动迁移」。`
+  - `unknown`：`读不到这个工程的旧落档，没法判断这里跑过没有（原因）——左栏徽标此刻也可能不准。`
+  - 上一次迁移还在跑时（`wasActive`）保持原提示不动：「上一个工程那次**没有被停止**」。
+- `ui_report` 新增 `switchNoteKind` / `switchNoteSteps` / `switchNoteOk` / `switchNoteFail`
+  （前端 `reportUi` 与后端白名单**两处一起加**，§4-60）。
+
+### Added
+- 自检 `LINGQU_UI_PROBE=switchnote`：切到有全套落档的 `habit-tree` 必须说「有旧落档」、切到没有任何
+  `<工程>.json` 落档的 lingqu 工程根必须说「这里还没跑过」、最后切回真实工程复核（收尾不留假路径，§4-137）。
+
+### Verified（2026-11-08，本机实跑）
+- 红（修前）：`switchNoteOk=0`，
+  `switchNoteFail=① 有落档的工程没说"有旧落档"（换了工程（habit-tree）：这里还没跑过。…） | ③ 切回真实工程后提示仍不对（…）`
+  （② 通过——"没落档"那档原文案本来就是对的）。
+- 绿（修后）：`switchNoteOk=1` / `switchNoteKind=has-record` / `switchNoteSteps=7`，与左栏
+  `profile/deps/port/build/report=已完成 + verify=未开始` 逐项吻合。
+- `./scripts/test.sh` 六道闸全绿（`cjpm test` TOTAL=432 / FAILED=0 / ERROR=0）。
+- 未验证：`unknown` 那档（读不到断点板）没有可造的样本，只有代码路径；未在鸿蒙真机上复核文案。
+
+---
+
 ## [0.39.87] - 2026-11-07
 
 **主题**：**"AI 说跑完了，屏上还是空的"**。用户实测原话：「执行 AI 自动迁移后会自动执行左侧的
@@ -92,6 +312,22 @@
 - 自检 `LINGQU_UI_PROBE=reportstale`：进屏自动重出 → `reportAutoCount ≥ 1`、`reportGeneratedAt`
   非空、`reportStale=false`；再把「⑥ 屏可用率」临时改成落档不可能给的值 7 → `reportStale` 必须
   变 `true`；还原后回到 `false`（测判定逻辑，不往落档里塞假数）。
+
+### Verified（补充，2026-11-08）
+
+把上面写着"未验证"的那部分跑掉了：**代码未变**，只起窗口跑探针取数
+（明细见 `docs/进度记录.md`「0.39.87-补充验证」）。
+
+- ①② 屏按落档回填：`LINGQU_UI_SCREEN=profile` → `stepFillN=1` / `scanScore=77`
+  （与落档 `score.total=77` **逐字一致**）/ `scanRows=7`；`=deps` → `depsRows=523`
+  （落档 `items` 523 条）。判据 `stepFillN>0 ∧ scanScore>=0` 达成。
+- `LINGQU_UI_PROBE=projswitch` → `projSwitchOk=1` / `projResets=4` / `aiPortBtn=1`、无失败项。
+- `LINGQU_UI_PROBE=reportstale` → 三段 `false → true → false` 全对；
+  **前提是样本必须带可用率落档**，否则该探针假绿（§4-136）。
+- `LINGQU_UI_PROBE=store` → 写 `localStorage` 抛 `SecurityError`（源为 `about://`），
+  与 §4-107 记录一致：本应用"记住偏好"只能走落档通道。
+- 仍未验：③–⑦ 屏的 `action:"load"`（构建/HAP/装配/部署/验证/报告），以及 AI 轮询里
+  `MigrateRow.ran` 假→真跳变触发的回读（要真 agent 跑一轮，分钟级）。
 
 ---
 

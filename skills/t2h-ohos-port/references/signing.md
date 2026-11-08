@@ -224,3 +224,41 @@ AGC 侧（`ret.code`）：
 5. 崩溃面：`ls /data/log/faultlog/faultlogger/`（空 = 没崩）；ArkWeb 白屏时先看 hilog 与 `panic.log`。
 6. **渲染要看人眼**：结构/进程/状态都能自动断言，但"界面真的画出来了"目前只能靠截图人工确认
    （`arkweb_render` 子进程**不一定存在**，别拿它当"没渲染"的判据）。
+
+---
+
+## 7. 最常见的**一次性卡点**：本机有含本机 UDID 的材料，但**包名对不上**
+
+现场实测（rust-music-3，2026-11-08）：
+
+| 事实 | 值 |
+|---|---|
+| 工程包名 | `com.example.rustmusic`（`AppScope/app.json5`） |
+| 本机 UDID | `667BA4F7…` |
+| 候选材料 | 7 套；其中 **3 套含本机 UDID**：`com.yang.testcj`(27 台)、`com.atomgit.m3u8dl_tauri`(6 台)、`com.jiujiang.habit_tree`(26 台) |
+| **`com.example.rustmusic` 的材料** | 5 台，**不含本机** ⇒ `device-ids` 没过 ⇒ 装不上 |
+| 工具判定 | `check.ok=false`、`apply` 拒绝写回（包名不一致）、`mode.canInstallDevice=false` |
+
+**关键认知：profile（`.p7b`）是按 bundleName 签发的**，别的包名的材料哪怕含本机也**不能**给这个包名用
+（`hvigor` 会以 `00303074` 直接拦）。所以"有含本机 UDID 的材料"不等于"能装"。
+
+### 两条出路（第一条是正路）
+
+1. **网页登录一次自动签**（推荐，一次人工）：
+   ```bash
+   lingqu-cli sign --login          # 打开浏览器登录 AGC，本机回环回调收码，令牌落 ~/.lingqu/agc/token.enc
+   lingqu-cli sign --auto --path <工程>   # 建证书 → 申请 profile（含本机 UDID）→ 写回 signingConfigs
+   ```
+   然后重跑 `t2h:hap`（或 `lingqu-cli hap`）出 **signed** HAP，再 `deploy`。
+   **别去 DevEco 手点**——那是旧路，多一道人工，还与"单应用人工介入 ≤5"的验收指标对抗。
+2. **临时改包名做本机验证**（不用于交付）：把 `AppScope/app.json5` 的 `bundleName` 改成
+   `com.atomgit.m3u8dl_tauri` 之类"本机已有含 UDID 材料"的包名，装起来跑 A4 可用率。
+
+### 登录这一步的常见坑（全部实测过）
+
+- `sign --auto` 在没登录时报 **`拉团队列表失败（token 可能已失效，重跑 sign --login）`**；
+  **令牌约 4 小时过期**，过期就重跑 `--login`。
+- CLI 的登录**只把链接打到 stdout**（重定向即 0 字节），agent 跑它时人看不到链接；
+  让 agent 走 `lingqu-decision` 把链接交出来，或用应用签名屏的「登录」按钮（走 `t2h:open_url`）。
+- WebView 里的 `<a target="_blank">` **不保证**能唤起系统浏览器 —— 给按钮，别给裸链接。
+- 登录成功后 `token.enc` 的 mtime 就是证据（`uid` / 团队数在登录输出里）。

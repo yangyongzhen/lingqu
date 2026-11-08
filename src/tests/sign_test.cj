@@ -596,7 +596,10 @@ public func testPreflightBlocksOnBundleMismatch(): Unit {
     @Assert(p.reason.contains("00303074"), true)
     @Assert(p.reason.contains("com.atomgit.m3u8dl_tauri"), true)
     @Assert(p.reason.contains("com.yang.testcj"), true)
-    @Assert(p.reason.contains("DevEco"), true)         // 正解必须在
+    @Assert(p.reason.contains("sign --auto"), true)    // 正解必须在：一条命令自动签
+    @Assert(p.reason.contains("sign --login"), true)   // 首次要人登录 AGC（网页回环，不走 DevEco）
+    // 0.39.91 起签名不再指路 DevEco：文案里出现它 = 又把 agent 往"人工手点"上引（§4-147）
+    @Assert(p.reason.contains("DevEco"), false)
     // 反过来同样要拦（材料签给别的包名，方向无关）
     @Assert(judgeSignPreflight(true, true, "com.x", "com.y").block, true)
 }

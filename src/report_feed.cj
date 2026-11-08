@@ -170,6 +170,11 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
             facts.verifyFail = intFieldOf(stats, "fail", 0)
             facts.verifyLimit = intFieldOf(stats, "limit", 0)
             facts.verifyUnknown = intFieldOf(stats, "unknown", 0)
+            // 新口径（0.39.89）：分母是有结论的项，未测单列。老落档没有这两个字段 → 0，
+            // 结论句据此不加括号，不会把"旧档缺字段"说成"全都测过了"。
+            facts.verifyCovered = intFieldOf(stats, "covered", 0)
+            facts.verifyNotVerified = intFieldOf(stats, "notVerified", 0)
+            facts.verifyScope = jsonStrField(stats, "scope")
             facts.verifyRate = intFieldOf(stats, "ratePercent", -1)
             facts.limitItems = collectVerdictTitles(root, "limit")
             facts.unknownItems = collectVerdictTitles(root, "unknown")

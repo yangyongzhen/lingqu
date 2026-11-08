@@ -43,6 +43,10 @@ public class BatchRow {
     public var verifyPass: Int64 = 0
     public var verifyTotal: Int64 = 0
     public var verifyLimit: Int64 = 0
+    /** 有结论的项数 = 可用率分母（0.39.89）；老落档为 -1（回落 total−limit，并在文案里说明） */
+    public var verifyCovered: Int64 = -1
+    /** 未测项数（不进分母，但矩阵要写出来） */
+    public var verifyNotVerified: Int64 = -1
     // 进度与 A3
     public var stepDone: Int64 = 0
     public var stepTotal: Int64 = 0
@@ -171,7 +175,11 @@ public func batchRowCells(row: BatchRow): ArrayList<String> {
     out.add(if (row.hasHap) { if (row.hapOk) { "通过" } else { "未过" } } else { "未跑" })
     out.add(if (row.signMode == "") { "未跑" } else { row.signMode })
     out.add(if (row.hasDeploy) { if (row.deployOk) { "成功" } else { "未过" } } else { "未跑" })
-    out.add(cellOf(row.hasVerify, "${row.verifyRate}%（${row.verifyPass}/${row.verifyTotal - row.verifyLimit}）"))
+    // 分母 = 有结论的项（0.39.89）；老落档没这个字段 → 回落 total−limit，
+    // 只在**新落档**（有未测计数）时才补「未测 N」，旧档的显示保持原样。
+    let covered = if (row.verifyCovered > 0) { row.verifyCovered } else { row.verifyTotal - row.verifyLimit }
+    let denomTail = if (row.verifyNotVerified >= 0) { " 未测 ${row.verifyNotVerified}" } else { "" }
+    out.add(cellOf(row.hasVerify, "${row.verifyRate}%（${row.verifyPass}/${covered}${denomTail}）"))
     out.add("${row.stepDone}/${row.stepTotal}（${batchCompletion(row)}%）")
     out.add("${row.humanAccepted}")
     out.add(batchVerdict(row))
@@ -235,7 +243,7 @@ public func renderMatrixMarkdown(batch: BatchMatrix): String {
         text += "\n"
     }
     text += "\n> 口径：没有落档的样本显示「未跑」，不参与平均（未验证 ≠ 0 分，也 ≠ 通过）；" +
-        "可用率 = 通过 ÷（清单项 − 平台限制）。\n"
+        "可用率 = 通过 ÷ 有结论的核心功能项（未测项不进分母，矩阵里单列「未测 N」）。\n"
     return text
 }
 
@@ -292,7 +300,8 @@ public func renderMatrixHtml(batch: BatchMatrix): String {
     }
     text += "</tbody></table>\n"
     text += "<p class=\"foot\">生成时间：${escHtml(batch.generatedAt)}。口径：没有落档的样本显示「未跑」，" +
-        "不参与平均（未验证 ≠ 0 分，也 ≠ 通过）；可用率 = 通过 ÷（清单项 − 平台限制）。</p>\n"
+        "不参与平均（未验证 ≠ 0 分，也 ≠ 通过）；可用率 = 通过 ÷ 有结论的核心功能项" +
+        "（未测项不进分母，矩阵里单列「未测 N」）。</p>\n"
     text += "</body></html>\n"
     return text
 }

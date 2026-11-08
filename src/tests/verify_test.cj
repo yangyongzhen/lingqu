@@ -44,6 +44,7 @@ public func testChecklistGreenPathAllPassOrLimit(): Unit {
     @Assert(items.size, 8)
     var pass = 0
     var limit = 0
+    var unknown = 0
     for (it in items) {
         if (it.verdict == "pass") {
             pass += 1
@@ -51,24 +52,28 @@ public func testChecklistGreenPathAllPassOrLimit(): Unit {
         if (it.verdict == "limit") {
             limit += 1
         }
+        if (it.verdict == "unknown") {
+            unknown += 1
+        }
         // 全绿输入里不该出现失败
         @Assert(it.verdict != "fail", true)
     }
-    // 事件那条是 unknown（没逐条触发），所以 pass 不会等于总数
-    @Assert(pass >= 6, true)
-    @Assert(limit, 1)   // 平台 API 一条，登记为限制
+    // 装配侧全绿：launch / build / hap / plugins / frontend
+    @Assert(pass, 5)
+    // 0.39.89：没有「降级方案落地」的证据时**不许**记成平台限制（旧版这里 limit=1）
+    @Assert(limit, 0)
+    // ipc（只有"应用起来了"这条间接证据）/ events / platform-api 都只能是未测
+    @Assert(unknown, 3)
+    @Assert(itemOf(items, "ipc").verdict, "unknown")
 }
 
 @Test
 public func testStatsExcludeLimitsFromDenominator(): Unit {
-    let items = buildChecklist(greenInput())
-    let s = computeStats(items)
-    @Assert(s.total, 8)
-    @Assert(s.limit, 1)
-    // 分母 = total - limit，可用率 = pass / 分母
-    let denom = s.total - s.limit
-    @Assert(s.ratePercent, (s.pass * 100) / denom)
-    // 全部通过时（把 unknown 那条改成 pass 验证口径）：分母仍排除 limit
+    // 没有功能明细时退回装配口径：分母 = 有结论的项，limit 与未测都剔出
+    let s = computeStats(buildChecklist(greenInput()))
+    @Assert(s.scope, "gates-only")
+    @Assert(s.limit, 0)
+    // 手工造：1 通过 + 1 限制 → 分母 1、可用率 100
     let items2 = ArrayList<CheckItem>()
     let a = CheckItem("a", "A")
     a.verdict = "pass"
@@ -77,6 +82,7 @@ public func testStatsExcludeLimitsFromDenominator(): Unit {
     items2.add(a)
     items2.add(b)
     let s2 = computeStats(items2)
+    @Assert(s2.covered, 1)
     @Assert(s2.ratePercent, 100)
     // 只有限制项（分母 0）时按 0 处理，不能除零
     let items3 = ArrayList<CheckItem>()
@@ -307,4 +313,199 @@ public func testDeployFlagsReadInstallAndStartSeparately(): Unit {
     @Assert(i3, false)
     @Assert(s3, false)
     @Assert(h3, false)
+}
+
+// ============================================================
+// 0.39.89：A4「核心功能可用率」的分母错了（先红后绿）
+// ============================================================
+//
+// 现象（用户真机实测）：⑥ 屏报「核心功能可用率 100%」，而他在真机上点
+//   「选择文件」「保存目录」两个按钮**完全没反应**。
+//
+// 根因三层叠在一起：
+//   ① 分母是**装配步骤**（launch/build/hap/ipc/frontend），不是核心功能；
+//      `ipc` 的判据只是"应用起来了 + hilog 干净"，一条命令都没调就判 pass。
+//   ② `rfd::FileDialog` 被登记成"平台限制"后**剔出分母** —— 真机上不可用的功能对分数零影响。
+//   ③ "降级方案落地了没有"根本没有判据，而实际是 OHOS 分支 `return None`、
+//      前端 `if (p)` 静默吞掉（用户点按钮就是没反应）。
+//
+// 新口径（用户拍板）：分母 = 核心功能清单；没测 → unknown 不进分母但要计数；
+//   平台限制只有**降级落地**才允许记 limit，否则该功能判 fail。
+
+/** 造一条功能项 */
+func featOf(cmd: String, title: String, api: String, landed: Bool): FeatureInput {
+    let f = FeatureInput(cmd, title)
+    f.degradedApi = api
+    f.fallbackLanded = landed
+    return f
+}
+
+/** 在清单里按 id 取一条（取不到就让用例红，别静默放过） */
+func itemOf(items: ArrayList<CheckItem>, id: String): CheckItem {
+    for (it in items) {
+        if (it.id == id) {
+            return it
+        }
+    }
+    // 取不到时返回一个必定判红占位项，"没生成条目"本身就是要断的行为
+    let miss = CheckItem(id, "MISSING:${id}")
+    miss.verdict = "MISSING"
+    return miss
+}
+
+@Test
+public func testFeatureWithoutFallbackIsFailNotLimit(): Unit {
+    // 现场形态：pick_m3u8_file 命中 rfd::FileDialog，OHOS 分支 return None，前端无兜底
+    let i = greenInput()
+    i.features.add(featOf("pick_m3u8_file", "选择本地 m3u8 文件", "rfd::FileDialog", false))
+    i.features.add(featOf("pick_folder", "选择保存目录", "rfd::FileDialog", false))
+    let items = buildChecklist(i)
+    for (id in ["feat:pick_m3u8_file", "feat:pick_folder"]) {
+        let it = itemOf(items, id)
+        // 修之前：清单里根本没有这一项（分母是装配步骤），可用率照样 100%
+        @Assert(it.verdict, "fail")
+        @Assert(it.note.contains("rfd::FileDialog"), true)
+        @Assert(it.note.contains("降级"), true)
+    }
+}
+
+@Test
+public func testFeatureVerdictPrefersHumanAndKeepsUntested(): Unit {
+    let i = greenInput()
+    // ① 降级落地了但没人测过 → 未测（不能因为"代码看起来写了"就算通过）
+    i.features.add(featOf("start_download", "开始下载", "", true))
+    // ② 人工实测可用 → pass
+    let humanOk = featOf("cancel_download", "取消下载", "", true)
+    humanOk.humanVerdict = "pass"
+    i.features.add(humanOk)
+    // ③ 人工实测不可用 → fail（人测的结论永远优先于任何推断）
+    let humanBad = featOf("open_in_explorer", "在文件管理器打开", "", true)
+    humanBad.humanVerdict = "fail"
+    i.features.add(humanBad)
+    let items = buildChecklist(i)
+    @Assert(itemOf(items, "feat:start_download").verdict, "unknown")
+    @Assert(itemOf(items, "feat:start_download").note.contains("未测"), true)
+    @Assert(itemOf(items, "feat:cancel_download").verdict, "pass")
+    @Assert(itemOf(items, "feat:open_in_explorer").verdict, "fail")
+}
+
+@Test
+public func testStatsDenominatorIsCoveredNotAssemblySteps(): Unit {
+    // 手工造清单，钉住统计口径本身：分母 = 有结论的项（pass+fail），未测单列
+    let items = ArrayList<CheckItem>()
+    let a = CheckItem("a", "A")
+    a.verdict = "pass"
+    let b = CheckItem("b", "B")
+    b.verdict = "fail"
+    let c = CheckItem("c", "C")
+    c.verdict = "unknown"
+    let d = CheckItem("d", "D")
+    d.verdict = "limit"
+    items.add(a)
+    items.add(b)
+    items.add(c)
+    items.add(d)
+    let s = computeStats(items)
+    @Assert(s.pass, 1)
+    @Assert(s.fail, 1)
+    @Assert(s.notVerified, 1)   // ← 修之前没有这个字段（未测被混进分母）
+    @Assert(s.covered, 2)       // ← 修之前 covered = total - limit = 3
+    @Assert(s.ratePercent, 50)  // 1/2，不是 1/3
+    // 全都未测：可用率必须是 0，而不是"没数据就给 100"
+    let onlyUnknown = ArrayList<CheckItem>()
+    let u1 = CheckItem("u1", "U1")
+    u1.verdict = "unknown"
+    onlyUnknown.add(u1)
+    @Assert(computeStats(onlyUnknown).ratePercent, 0)
+}
+
+@Test
+public func testPlatformLimitRequiresLandedFallback(): Unit {
+    // 两处平台 API：一处降级落地了、一处没有 → 不许整项记 limit
+    let i = greenInput()
+    let p1 = PlatformInput("rfd::FileDialog")
+    p1.verdict = "降级"
+    p1.fallbackLanded = false
+    p1.note = "commands.rs 的 OHOS 分支只 return None"
+    let p2 = PlatformInput("window-state")
+    p2.verdict = "改造"
+    p2.fallbackLanded = true
+    i.platformItems.add(p1)
+    i.platformItems.add(p2)
+    let lim = itemOf(buildChecklist(i), "platform-api")
+    @Assert(lim.verdict, "fail")
+    // 必须点名是哪一处没落地，不能只报"有平台限制"
+    @Assert(lim.note.contains("rfd::FileDialog"), true)
+    // 全部落地了才允许记成平台限制（这时才剔出分母）
+    let i2 = greenInput()
+    let q = PlatformInput("window-state")
+    q.verdict = "改造"
+    q.fallbackLanded = true
+    i2.platformItems.add(q)
+    @Assert(itemOf(buildChecklist(i2), "platform-api").verdict, "limit")
+}
+
+@Test
+public func testOhosStubOnlyDetectsReturnNone(): Unit {
+    // 现场原文（commands.rs，m3u8dl-tauri）
+    @Assert(ohosStubOnly("None"), true)
+    @Assert(ohosStubOnly("return None;"), true)
+    @Assert(ohosStubOnly(""), true)
+    @Assert(ohosStubOnly("todo!()"), true)
+    @Assert(ohosStubOnly("unimplemented!()"), true)
+    // 真写了替代实现的不许判成 stub
+    @Assert(ohosStubOnly("let p = pick_from_tree(); Some(p)"), false)
+    @Assert(ohosStubOnly("return Some(dir);"), false)
+}
+
+/**
+ * 现场原文结构（与 m3u8dl-tauri 的 commands.rs 一致）：
+ * 同名函数两套实现，桌面一套、鸿蒙一套，靠 `#[cfg(...)]` 区分。
+ */
+func sampleCommandsRs(): String {
+    return "#[cfg(not(all(target_os = \"linux\", target_env = \"ohos\")))]\n" +
+        "pub async fn pick_folder() -> Result<Option<String>, String> {\n" +
+        "    let dir = rfd::FileDialog::new().pick_folder();\n" +
+        "    Ok(dir.map(|p| p.to_string_lossy().to_string()))\n" +
+        "}\n" +
+        "\n" +
+        "#[cfg(all(target_os = \"linux\", target_env = \"ohos\"))]\n" +
+        "pub async fn pick_folder() -> Result<Option<String>, String> {\n" +
+        "    // 鸿蒙上暂无文件选择器\n" +
+        "    Ok(None)\n" +
+        "}\n" +
+        "\n" +
+        "pub async fn start_download(id: String) -> Result<(), String> {\n" +
+        "    let _ = id;\n" +
+        "    Ok(())\n" +
+        "}\n" +
+        "\n" +
+        "pub async fn pick_folder_extra() -> Result<(), String> {\n" +
+        "    Ok(())\n" +
+        "}\n"
+}
+
+@Test
+public func testOhosImplStubOnlyReadsRealSourceShape(): Unit {
+    let src = sampleCommandsRs()
+    // 桌面分支不能算成鸿蒙分支（`not(...)` 里也有 ohos 字样）
+    @Assert(fnImplsOf(src, "pick_folder").size, 2)
+    // 鸿蒙分支只 Ok(None) → 空壳 = 降级没落地
+    @Assert(ohosImplStubOnly(src, "pick_folder"), true)
+    // 纯 Rust 命令没有鸿蒙分支，但也没碰平台 API：这里判"没有鸿蒙实现"= 空壳（由上层决定怎么用）
+    @Assert(ohosImplStubOnly(src, "start_download"), true)
+    // 名字前缀不能误命中（pick_folder_extra 不是 pick_folder）
+    @Assert(fnImplsOf(src, "pick_folder_extra").size, 1)
+    // 桌面体里出现平台 API 名 → 这个功能碰了平台专有能力
+    let apis = ArrayList<String>()
+    apis.add("rfd::FileDialog")
+    @Assert(touchesAnyApi(src, "pick_folder", apis), true)
+    @Assert(touchesAnyApi(src, "start_download", apis), false)
+    // 鸿蒙分支写了真实现 → 落地了
+    let landed = "#[cfg(all(target_os = \"linux\", target_env = \"ohos\"))]\n" +
+        "pub async fn pick_folder() -> Result<Option<String>, String> {\n" +
+        "    let p = pick_from_app_tree();\n" +
+        "    Ok(p)\n" +
+        "}\n"
+    @Assert(ohosImplStubOnly(landed, "pick_folder"), false)
 }

@@ -12,10 +12,16 @@ import stdx.encoding.json.*
  *     读前面几轮落档的 scan / build / hap / deploy 结果，喂给本层，最后落盘。
  *
  * 三条口径先钉死，避免"数字好看但站不住"：
- *   ① **平台限制不计入分母**：鸿蒙没有托盘的，是"平台限制"而不是"失败"——
- *      这是课题要求的显式登记（不能把不通过混成失败）。
- *   ② **未采集 ≠ 通过**：`unknown` 计入分母但不计入通过，且报告里点名"缺什么证据"。
- *   ③ **证据逐项挂**：每条清单项都有自己的证据列表，报告里逐条列出来，不搞一个总结数字糊过去。
+ *   ① **分母 = 核心功能清单**（0.39.89 改）：扫描到的每条 IPC 命令就是一条核心功能，
+ *      可用率 = 其中**有结论的**（pass + fail）里通过的比例。不许拿"装得上 / 编得过 / 起得来"
+ *      这类**装配步骤**冒充功能可用性——用户真机实测过：⑥ 屏报 100%，
+ *      而「选择文件」「保存目录」两个按钮点了**完全没反应**。
+ *   ② **未测记未测**：`unknown` **不进分母**，但必须显式计数（`notVerified`）并写进报告与界面。
+ *      少了这个数，"只测了 2 项、通过 2 项 = 100%"就会被读成"全都可用"。
+ *   ③ **平台限制要拿"降级落地"换**：一处平台 API 只有在**工程里真的写了替代实现**时，
+ *      才允许记 `limit` 并剔出分母；否则它的功能判 `fail`
+ *      （现场：OHOS 分支 `return None`，前端 `if (p)` 静默吞掉 ⇒ 按钮点了没反应）。
+ *   另外 ④ **证据逐项挂**：每条清单项都有自己的证据列表，不搞一个总结数字糊过去。
  */
 
 /** 一条功能清单项 */
@@ -23,6 +29,11 @@ public class CheckItem {
     /** 稳定 id（报告与跨轮次对比用，别随文案改） */
     public var id: String = ""
     public var title: String = ""
+    /**
+     * 条目类别：`gate`（装配步骤：编得过 / 装配过 / 起得来）或 `feature`（核心功能）。
+     * 可用率的分母只认 `feature`——这是 0.39.89 的口径修正点。
+     */
+    public var kind: String = "gate"
     /** 判定：pass / fail / limit（平台限制）/ unknown（证据没采到） */
     public var verdict: String = ""
     /** 挂在这条上的证据（截图 / hilog / 落档文件 / 命令返回） */
@@ -92,6 +103,324 @@ public class ChecklistInput {
     /** 证据采集结果：截图张数、faultlog 里的崩溃记录数 */
     public var screenshotCount: Int64 = 0
     public var crashCount: Int64 = 0
+    /**
+     * 核心功能清单（A4 的分母）：来自 scan 的 `items.commands`，一条命令一个功能。
+     * 为空时说明没扫过——这时只能退回旧的聚合口径，并且**必须在报告里说清"没覆盖功能"**。
+     */
+    public var features: ArrayList<FeatureInput> = ArrayList<FeatureInput>()
+    /** 平台 API 明细（scan 的 `items.platform`）：判"降级方案落地了吗"用 */
+    public var platformItems: ArrayList<PlatformInput> = ArrayList<PlatformInput>()
+}
+
+/**
+ * 一条**核心功能**（A4 的分母）。来源：scan 落档的 `items.commands`——每条 IPC 命令就是一个功能。
+ *
+ * 为什么不能拿"装配步骤"当分母（0.39.89 用户真机实测）：⑥ 屏报「核心功能可用率 100%」，
+ * 而「选择文件」「保存目录」两个按钮在真机上**点了完全没反应**——装得上 ≠ 功能能用。
+ */
+public class FeatureInput {
+    /** IPC 命令名（`pick_folder` / `start_download` …），也是清单项 id 的后半段 */
+    public var commandName: String = ""
+    /** 给人看的中文名；空则回落到命令名 */
+    public var title: String = ""
+    /** 该功能命中的平台 API（如 `rfd::FileDialog`）；空 = 没命中，纯纯的自研逻辑 */
+    public var degradedApi: String = ""
+    /** 降级方案是否**在工程里真的落地了**（判据：OHOS 分支不是只 `return None`） */
+    public var fallbackLanded: Bool = false
+    /** 人工实测结论：`pass` / `fail` / 空 = 没测过（人的实测永远优先于推断） */
+    public var humanVerdict: String = ""
+
+    public init(commandName: String, title: String) {
+        this.commandName = commandName
+        this.title = title
+    }
+}
+
+/** 一处平台 API 的降级落地情况（scan 的 `items.platform`，一处一条） */
+public class PlatformInput {
+    public var name: String = ""
+    /** 扫描判定：降级 / 改造 / 不适用 */
+    public var verdict: String = ""
+    /** 降级方案落地了吗——**只有落地了才允许把这一处记成"平台限制"** */
+    public var fallbackLanded: Bool = false
+    /** 为什么这么判（落档里要能自证，别只留一个布尔） */
+    public var note: String = ""
+
+    public init(name: String) {
+        this.name = name
+    }
+}
+
+/**
+ * 判一段 OHOS 分支实现是不是**等于没实现**（只 `return None` / `todo!()` / 空）。
+ *
+ * 这是"降级方案落地了吗"的判据本体。现场（m3u8dl-tauri 的 `commands.rs`）：
+ *
+ * ```
+ * #[cfg(all(target_os = "linux", target_env = "ohos"))]
+ * pub async fn pick_m3u8_file() -> Option<String> { None }     // ← 等于没实现
+ * ```
+ *
+ * 前端 `if (p) { ... }` 拿到 `None` 就静默什么都不做 ⇒ 用户点按钮没反应、也不报错。
+ * 纯函数，便于单测（不碰文件系统）。
+ */
+public func ohosStubOnly(body: String): Bool {
+    // 只看"有没有真的写点东西"：注释、空白、分号、花括号都不算实现
+    let code = compactCode(body)
+    if (code.size == 0) {
+        return true
+    }
+    // 直接占位宏：写了等于没写
+    if (code.contains("todo!(") || code.contains("unimplemented!(") || code.contains("unreachable!(")) {
+        return true
+    }
+    // 常量返回 None：现场写法有 `None` / `return None;` / `Ok(None)`（返回 Result 的命令）几种
+    if (unwrapToValue(code) == "None") {
+        return true
+    }
+    return false
+}
+
+/** 剥掉 `return` 与 `Ok(...)` / `Some(...)` / `Err(...)` 外壳，取到最里层的值表达式 */
+func unwrapToValue(code: String): String {
+    var s = code
+    while (s.startsWith("return")) {
+        s = s[6..s.size]
+    }
+    var guard = 0
+    while (guard < 4) {
+        guard += 1
+        if (s.endsWith("()") && (s.startsWith("None(") || s.startsWith("Some("))) {
+            // None() / Some() 这种"带空括号的常量返回"
+            s = s[0..s.size - 2]
+            continue
+        }
+        let wrapped = s.startsWith("Ok(") || s.startsWith("Some(") || s.startsWith("Err(")
+        if (wrapped && s.endsWith(")")) {
+            s = s[3..s.size - 1]
+            continue
+        }
+        if (s.startsWith("return")) {
+            s = s[6..s.size]
+            continue
+        }
+        break
+    }
+    return s
+}
+
+/** 去掉空白、分号与花括号、以及 `//` 行注释（判"空壳实现"前的归一化） */func compactCode(s: String): String {
+    let out = ArrayList<Byte>()
+    var inLineComment = false
+    var i = 0
+    while (i < s.size) {
+        let c = s[i]
+        if (inLineComment) {
+            // 换行结束行注释；换行本身也丢掉（它不携带语义）
+            if (c == 10) {
+                inLineComment = false
+            }
+            i += 1
+            continue
+        }
+        if (c == 47 && i + 1 < s.size && s[i + 1] == 47) {
+            inLineComment = true
+            i += 2
+            continue
+        }
+        if (c == 32 || c == 9 || c == 13 || c == 10 || c == 59 || c == 123 || c == 125) {
+            i += 1
+            continue
+        }
+        out.add(c)
+        i += 1
+    }
+    return String.fromUtf8(out.toArray())
+}
+
+/** 从 `from` 起找 `sub` 的字节位置（找不到给 -1；不依赖 String.indexOf 的参数形态） */
+func findFrom(s: String, sub: String, from: Int64): Int64 {
+    let n = s.size
+    let m = sub.size
+    if (m == 0 || m > n) {
+        return -1
+    }
+    var i = if (from < 0) { 0 } else { from }
+    while (i + m <= n) {
+        var k = 0
+        while (k < m && s[i + k] == sub[k]) {
+            k += 1
+        }
+        if (k == m) {
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+/**
+ * 取 `openBrace` 处花括号包裹的**函数体文本**（不含花括号本身）。
+ *
+ * 只跳字符串字面量，不认 `'` 字符字面量——Rust 里 `&'static str` 的撇号会被当成"字符常量开头"
+ * 从而把后面一大段吞掉，反而更糟。本项目判据只需体里"有没有真实现"，不对花括号做严格语法解析。
+ */
+func bodyRangeOf(s: String, openBrace: Int64): (Int64, Int64) {
+    var depth: Int64 = 0
+    var i = openBrace
+    let start = openBrace + 1
+    var inStr = false
+    while (i < s.size) {
+        let c = s[i]
+        if (inStr) {
+            if (c == 92) {
+                i += 2
+                continue
+            }
+            if (c == 34) {
+                inStr = false
+            }
+            i += 1
+            continue
+        }
+        if (c == 34) {
+            inStr = true
+            i += 1
+            continue
+        }
+        if (c == 123) {
+            depth += 1
+        }
+        if (c == 125) {
+            depth -= 1
+            if (depth == 0) {
+                return (start, i)
+            }
+        }
+        i += 1
+    }
+    return (start, s.size)
+}
+
+/** `fnName` 前最近的一条 `#[cfg(...)]` 属性文本（没有给 ""） */
+func lastCfgAttrOf(attr: String): String {
+    var best: Int64 = -1
+    var i = findFrom(attr, "#[cfg(", 0)
+    while (i >= 0) {
+        best = i
+        i = findFrom(attr, "#[cfg(", i + 1)
+    }
+    if (best < 0) {
+        return ""
+    }
+    return attr[best..]
+}
+
+/** 一条实现：(是不是鸿蒙分支, 函数体文本) */
+public class FnImpl {
+    public var isOhos: Bool = false
+    public var body: String = ""
+
+    public init() {}
+}
+
+/**
+ * 把源码里同名函数的**所有**实现摆出来（桌面一套、鸿蒙一套各自带 cfg 属性）。
+ *
+ * 现场形态（m3u8dl-tauri `commands.rs`）：
+ * ```
+ * #[cfg(not(all(target_os = "linux", target_env = "ohos")))]  pub async fn pick_folder() -> ... { rfd::... }
+ * #[cfg(all(target_os = "linux", target_env = "ohos"))]       pub async fn pick_folder() -> ... { None }
+ * ```
+ * 注意 `not(...)` 里也含 `ohos` 字样，所以判"鸿蒙分支"必须是 **含 ohos 且不含 not(**
+ * ——否则桌面实现会被误认成鸿蒙实现，判据直接反了。
+ */
+public func fnImplsOf(src: String, fnName: String): ArrayList<FnImpl> {
+    let impls = ArrayList<FnImpl>()
+    let needle = "fn " + fnName
+    var i = findFrom(src, needle, 0)
+    while (i >= 0) {
+        let after = i + needle.size
+        var nameEnds = false
+        if (after < src.size) {
+            let c = src[after]
+            // 后面必须是 ( < 空白 之一，避免 pick_folder 撞上 pick_folder_extra
+            if (c == 40 || c == 60 || c == 32 || c == 10 || c == 13 || c == 9) {
+                nameEnds = true
+            }
+        }
+        if (nameEnds) {
+            // 属性区只从**上一个条目结束处**算起：往前找到最近的 `}`（上一条 fn 的收尾）就停。
+            // 否则 600 字节窗口会把上一条函数的 `#[cfg(...)]` 圈进来——实测让"没有 cfg 的函数"
+            // 被误判成鸿蒙分支（判据整个反过来），用例 testOhosImplStubOnlyReadsRealSourceShape 钉住。
+            let lookback = if (i > 600) { i - 600 } else { 0 }
+            var attrStart = lookback
+            var j = i - 1
+            while (j >= lookback) {
+                if (src[j] == 125) {
+                    attrStart = j + 1
+                    break
+                }
+                j -= 1
+            }
+            let attr = src[attrStart..i]
+            let cfg = lastCfgAttrOf(attr)
+            let brace = findFrom(src, "{", i)
+            if (brace >= 0) {
+                let (bs, be) = bodyRangeOf(src, brace)
+                let impl = FnImpl()
+                impl.isOhos = cfg.contains("ohos") && !cfg.contains("not(")
+                impl.body = src[bs..be]
+                impls.add(impl)
+            }
+        }
+        i = findFrom(src, needle, i + needle.size)
+    }
+    return impls
+}
+
+/**
+ * 这个命令在鸿蒙侧是不是**空壳**（= 降级方案没落地）。
+ *
+ * 三种都算空壳：没有鸿蒙分支（桌面实现直接被 cfg 掉，鸿蒙上根本没这功能）、
+ * 有鸿蒙分支但体是 `None`/`todo!()`、连函数都找不到。
+ */
+public func ohosImplStubOnly(src: String, fnName: String): Bool {
+    let impls = fnImplsOf(src, fnName)
+    var hasOhos = false
+    var allStub = true
+    for (im in impls) {
+        if (im.isOhos) {
+            hasOhos = true
+            if (!ohosStubOnly(im.body)) {
+                allStub = false
+            }
+        }
+    }
+    if (!hasOhos) {
+        return true
+    }
+    return allStub
+}
+
+/** 这个命令的**桌面实现**里有没有出现任一平台 API 名（= 它会碰到平台专有能力） */
+public func touchesAnyApi(src: String, fnName: String, apiNames: ArrayList<String>): Bool {
+    return firstApiHitIn(src, fnName, apiNames) != ""
+}
+
+/** 命中的**第一个**平台 API 名（没命中给 ""）——清单里点名用，别只写"命中平台 API" */
+public func firstApiHitIn(src: String, fnName: String, apiNames: ArrayList<String>): String {
+    for (im in fnImplsOf(src, fnName)) {
+        if (im.isOhos) {
+            continue
+        }
+        for (api in apiNames) {
+            if (api != "" && im.body.contains(api)) {
+                return api
+            }
+        }
+    }
+    return ""
 }
 
 /** 可用率统计（口径见文件头） */
@@ -101,7 +430,15 @@ public class VerifyStats {
     public var fail: Int64 = 0
     public var limit: Int64 = 0        // 平台限制（不计入分母）
     public var unknown: Int64 = 0      // 没证据（计入分母、不算通过）
-    /** 可用率 = pass / (total - limit)，分母为 0 时按 0 处理 */
+    /** 有结论的项数（pass + fail）——**这才是 A4 的分母** */
+    public var covered: Int64 = 0
+    /** 未测项数（unknown）：**不进分母**，但必须在报告与界面里显式写出来 */
+    public var notVerified: Int64 = 0
+    /** 分母的口径来源：`features`（核心功能清单）/ `gates-only`（没扫过，只能退回装配口径） */
+    public var scope: String = ""
+    /** 口径来源的人话解释（直接进报告，别让人猜这个百分比在算谁） */
+    public var scopeNote: String = ""
+    /** 可用率 = pass / covered；分母为 0 时按 0 处理（绝不"没数据就给 100"） */
     public var ratePercent: Int64 = 0
 
     public func toJson(): JsonObject {
@@ -111,6 +448,10 @@ public class VerifyStats {
         o.put("fail", JsonInt(this.fail))
         o.put("limit", JsonInt(this.limit))
         o.put("unknown", JsonInt(this.unknown))
+        o.put("covered", JsonInt(this.covered))
+        o.put("notVerified", JsonInt(this.notVerified))
+        o.put("scope", JsonString(this.scope))
+        o.put("scopeNote", JsonString(this.scopeNote))
         o.put("ratePercent", JsonInt(this.ratePercent))
         return o
     }
@@ -209,8 +550,39 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
     }
     items.add(hap)
 
-    // ④ IPC 命令通道：条数来自扫描；判定沿用启动那条（命令能不能用，只有真机能证明）
-    if (inp.commandCount > 0) {
+    // ④ 核心功能逐条（**A4 的分母**）：扫描到的每条命令一条
+    //   判定顺序固定：人测过 → 以人的结论为准；命中平台 API 且降级未落地 → fail；其余 → 未测
+    for (f in inp.features) {
+        let title = if (f.title != "") { f.title } else { f.commandName }
+        let it = CheckItem("feat:${f.commandName}", title)
+        it.kind = "feature"
+        if (f.degradedApi != "") {
+            it.evidence.add("命中平台 API：${f.degradedApi}")
+        }
+        if (f.fallbackLanded) {
+            it.evidence.add("鸿蒙侧有落地的替代实现（不是空壳分支）")
+        } else if (f.degradedApi != "") {
+            it.evidence.add("鸿蒙侧分支是空壳（只 return None / todo!()）→ 前端拿到 null 静默不做任何事")
+        }
+        if (f.humanVerdict == "fail") {
+            it.verdict = "fail"
+            it.note = "人工实测：真机上这项不可用"
+        } else if (f.humanVerdict == "pass") {
+            it.verdict = "pass"
+            it.note = "人工实测：真机上可用"
+        } else if (f.degradedApi != "" && !f.fallbackLanded) {
+            it.verdict = "fail"
+            it.note = "「${f.degradedApi}」在鸿蒙上没有等价物，降级方案未落地 → 真机上该功能不可用（这不是平台限制）"
+        } else {
+            it.verdict = "unknown"
+            it.note = "未测：需要真机交互证据（点了真的出结果）或人工确认；不进可用率分母，但计入未测项"
+        }
+        items.add(it)
+    }
+
+    // ⑤ 聚合的 IPC 项：只在**没有功能明细**（没扫过）时保留。
+    //   判据只剩"应用起来了"，一条命令都没调过 → 只能是 unknown（旧版判 pass，正是分母虚高的源头）。
+    if (inp.features.size == 0 && inp.commandCount > 0) {
         let cmd = CheckItem("ipc", "IPC 命令通道可用（共 ${inp.commandCount} 条命令）")
         if (inp.started) {
             cmd.evidence.add("aa start 成功；后端已加载能力清单")
@@ -218,10 +590,8 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
         if (inp.blockerCount > 0) {
             cmd.evidence.add("扫描发现 ${inp.blockerCount} 个阻塞项（见 ② 迁移画像）")
         }
-        cmd.verdict = if (inp.started && inp.hilogHealthy) { "pass" } else { "unknown" }
-        if (cmd.verdict == "unknown") {
-            cmd.note = "缺真机证据（起不来说明命令面还没验证）"
-        }
+        cmd.verdict = "unknown"
+        cmd.note = "只有「应用起来了」这条间接证据，一条命令都没真调过 → 未测（旧版据此判通过，可用率才虚高）"
         items.add(cmd)
     }
 
@@ -260,19 +630,58 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
         items.add(fe)
     }
 
-    // ⑧ 平台限制登记：扫描到平台 API 的，显式列为限制项（**不计入分母**）
-    if (inp.platformCount > 0) {
-        let lim = CheckItem("platform-api", "平台相关 API（${inp.platformCount} 处）按平台限制登记")
-        lim.verdict = "limit"
-        lim.note = "桌面专属能力在鸿蒙上没有等价物；已从可用率分母中剔除，逐条见报告"
+    // ⑧ 平台限制登记：**只有降级方案真的落地了**才允许记 limit（用户可以少算它），
+    //   否则这一处的功能在真机上就是不可用的，必须判 fail 并点名——不能靠"登记为平台限制"把它藏起来。
+    if (inp.platformCount > 0 || inp.platformItems.size > 0) {
+        let n = if (inp.platformItems.size > 0) { inp.platformItems.size } else { inp.platformCount }
+        let lim = CheckItem("platform-api", "平台限制（${n} 处）是否都有落地的降级方案")
+        var unlanded = ArrayList<String>()
+        for (p in inp.platformItems) {
+            if (!p.fallbackLanded) {
+                unlanded.add(p.name)
+            }
+        }
+        if (inp.platformItems.size == 0) {
+            lim.verdict = "unknown"
+            lim.note = "登记了 ${inp.platformCount} 处平台 API，但没有「降级方案是否落地」的证据 → 不能算平台限制"
+        } else if (unlanded.size > 0) {
+            lim.verdict = "fail"
+            lim.note = "${unlanded.size} 处没有落地的降级方案：${joinNames(unlanded)}" +
+                "（对应功能在真机上不可用，不许剔出分母）"
+        } else {
+            lim.verdict = "limit"
+            lim.note = "每一处都有落地的降级方案，按平台限制剔出可用率分母"
+        }
         lim.evidence.add("扫描口径：platform_apis=${inp.platformCount}")
+        for (p in inp.platformItems) {
+            if (p.note != "") {
+                lim.evidence.add("${p.name}：${p.note}")
+            }
+        }
         items.add(lim)
     }
 
     return items
 }
 
-/** 按口径统计可用率（见文件头三条） */
+/** 把名字拼成一行人话（`a、b、c`），报告里点名用 */
+func joinNames(names: ArrayList<String>): String {
+    var s = ""
+    for (x in names) {
+        if (s != "") {
+            s += "、"
+        }
+        s += x
+    }
+    return s
+}
+
+/**
+ * 按口径统计可用率（见文件头 ①②）。
+ *
+ * **分母优先取核心功能项**：只有一条功能明细都没有（没扫过）时，才退回装配口径，
+ * 而且在 `scope / scopeNote` 里写明"这不代表功能可用"——让人一眼看出这个百分比在算谁。
+ */
 public func computeStats(items: ArrayList<CheckItem>): VerifyStats {
     let s = VerifyStats()
     s.total = Int64(items.size)
@@ -287,9 +696,42 @@ public func computeStats(items: ArrayList<CheckItem>): VerifyStats {
             s.unknown += 1
         }
     }
-    let denom = s.total - s.limit
-    if (denom > 0) {
-        s.ratePercent = (s.pass * 100) / denom
+    // 核心功能面：只数功能项，limit 项照旧不进分母，未测的单列
+    var featureTotal: Int64 = 0
+    var fPass: Int64 = 0
+    var fCovered: Int64 = 0
+    var fNotVerified: Int64 = 0
+    for (it in items) {
+        if (it.kind != "feature") {
+            continue
+        }
+        featureTotal += 1
+        if (it.verdict == "pass") {
+            fPass += 1
+            fCovered += 1
+        } else if (it.verdict == "fail") {
+            fCovered += 1
+        } else if (it.verdict == "unknown") {
+            fNotVerified += 1
+        }
+    }
+    if (featureTotal > 0) {
+        s.scope = "features"
+        s.scopeNote = "分母 = 核心功能清单（${featureTotal} 条来自扫描的命令），通过 ${fPass} / 有结论 ${fCovered}；" +
+            "另有 ${fNotVerified} 项未测，不计入分母"
+        s.covered = fCovered
+        s.notVerified = fNotVerified
+        if (fCovered > 0) {
+            s.ratePercent = (fPass * 100) / fCovered
+        }
+    } else {
+        s.scope = "gates-only"
+        s.scopeNote = "没扫过核心功能清单 → 退回装配口径（编得过 / 装配过 / 起得来），**不代表功能可用**"
+        s.covered = s.pass + s.fail
+        s.notVerified = s.unknown
+        if (s.covered > 0) {
+            s.ratePercent = (s.pass * 100) / s.covered
+        }
     }
     return s
 }
@@ -320,8 +762,15 @@ public func renderMarkdown(ctx: ReportContext, items: ArrayList<CheckItem>, stat
     md += "- 生成时间：${ctx.generatedAt}\n\n"
 
     md += "## 一、做了什么\n\n"
-    md += "核心功能可用率 **${stats.ratePercent}%**（通过 ${stats.pass} / 计入分母 ${stats.total - stats.limit}；"
-    md += "平台限制 ${stats.limit} 项已剔除，未验证 ${stats.unknown} 项）\n\n"
+    md += "核心功能可用率 **${stats.ratePercent}%**（通过 ${stats.pass} / 有结论 ${stats.covered}）\n\n"
+    md += "- 口径：${stats.scopeNote}\n"
+    if (stats.notVerified > 0) {
+        md += "- 注意：有 ${stats.notVerified} 项**未测**（不计入分母）：这个百分比只代表已测的那部分\n"
+    }
+    if (stats.limit > 0) {
+        md += "- 平台限制 ${stats.limit} 项（降级方案已落地，已剔出分母）\n"
+    }
+    md += "\n"
     md += "| # | 功能项 | 判定 | 证据 |\n|---|---|---|---|\n"
     var i: Int64 = 1
     for (it in items) {
@@ -382,8 +831,14 @@ public func renderHtml(ctx: ReportContext, items: ArrayList<CheckItem>, stats: V
     h += "<li>生成时间：${esc(ctx.generatedAt)}</li>\n</ul>\n"
 
     h += "<h2>一、做了什么</h2>\n"
-    h += "<p>核心功能可用率 <b>${stats.ratePercent}%</b>（通过 ${stats.pass} / 计入分母 ${stats.total - stats.limit}；"
-    h += "平台限制 ${stats.limit} 项已剔除，未验证 ${stats.unknown} 项）</p>\n"
+    h += "<p>核心功能可用率 <b>${stats.ratePercent}%</b>（通过 ${stats.pass} / 有结论 ${stats.covered}）</p>\n"
+    h += "<p>口径：${esc(stats.scopeNote)}</p>\n"
+    if (stats.notVerified > 0) {
+        h += "<p>注意：有 ${stats.notVerified} 项<b>未测</b>（不计入分母）：这个百分比只代表已测的那部分</p>\n"
+    }
+    if (stats.limit > 0) {
+        h += "<p>平台限制 ${stats.limit} 项（降级方案已落地，已剔出分母）</p>\n"
+    }
     h += "<table><tr><th>#</th><th>功能项</th><th>判定</th><th>证据</th></tr>\n"
     var i: Int64 = 1
     for (it in items) {

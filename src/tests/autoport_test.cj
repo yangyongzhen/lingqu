@@ -464,3 +464,24 @@ public func testSignScopeDirectiveAlsoCarriesLoginPath(): Unit {
     // 半自动仍要"做完就停"
     @Assert(d.contains("做完停下"), true)
 }
+
+/*
+ * 0.39.91：tauri v2 的 `frontendDist` 嵌在 `build` 段里。
+ *
+ * 现场 rust-music-3：`{"build":{"frontendDist":"ui"}}`，旧实现按**顶层键**取 ⇒ 空串
+ * ⇒ distDir 回落成工程根的 `dist/`（该目录是空的）⇒ 指纹闸一路假红（§4-144）。
+ */
+@Test
+public func testJsonStringPathOfNested(): Unit {
+    let text = "{\"build\":{\"frontendDist\":\"ui\"}}"
+    @Assert(jsonStringPathOf(text, "build.frontendDist"), "ui")
+    // 顶层写法（v1／部分模板）也该认
+    @Assert(jsonStringPathOf("{\"frontendDist\":\"../ui\"}", "frontendDist"), "../ui")
+}
+
+@Test
+public func testJsonStringPathOfMissing(): Unit {
+    @Assert(jsonStringPathOf("{\"build\":{}}", "build.frontendDist"), "")
+    @Assert(jsonStringPathOf("[]", "build.frontendDist"), "")
+    @Assert(jsonStringPathOf("not json at all", "build.frontendDist"), "")
+}
