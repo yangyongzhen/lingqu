@@ -624,6 +624,251 @@ func spliceLines(lines: ArrayList<String>, at: Int64, count: Int64, block: Array
     return out
 }
 
+// ===== R2-PORT-016：reqwest 的 TLS 栈（0.39.99）=====
+//
+// 现象（note-gen-2 实测，2026-11-08）：
+//   cargo build --release --target aarch64-unknown-linux-ohos 报
+//     Could not find directory of OpenSSL installation
+//     pkg-config has not been configured to support cross-compilation
+//   紧随其后的 custom build command 是 openssl-sys。
+// 根因：`reqwest` 的**默认特性**含 `default-tls`（← native-tls ← openssl-sys），
+//   OHOS 上没有 OpenSSL 可链接。工程里写了 `features = [… "rustls-tls" …]`
+//   但**没关** `default-features` ⇒ rustls 与 native-tls 同时进依赖树，后者必失败。
+// 处置：`default-features = false` + 把原默认集合里与 TLS 无关的纯 Rust 项补回来
+//   （`charset` / `http2`，0.12 起还有 `system-proxy`），这样行为只差 TLS 后端，
+//   不是"顺手砍掉几个特性"。
+//
+// 为什么必须是**规则**而不是只在技能里写一句：技能只在 agent 去读时才起作用，
+//   而日志症状串（OpenSSL / pkg-config）与"reqwest 默认特性"之间没有字面联系，
+//   agent 会顺着"装 OpenSSL / 配 pkg-config"这条死路把整轮预算烧掉（§4-130 同族）。
+//   规则在这里是**确定性**的：重跑 `t2h:port` 自己就把它改好了。
+
+/** 取 `a.b[.c]` 版本串的第 idx 段（"0.12.22" 的 1 → 12）；解析不出返回 -1 */
+func versionSegmentOf(ver: String, idx: Int64): Int64 {
+    let parts = ver.split(".", -1)
+    if (idx >= parts.size) {
+        return -1
+    }
+    let seg = parts[idx]
+    var n: Int64 = 0
+    var sawDigit = false
+    for (b in seg.toArray()) {
+        if (b < 48 || b > 57) {
+            break
+        }
+        n = n * 10 + Int64(b) - 48
+        sawDigit = true
+    }
+    if (!sawDigit) {
+        return -1
+    }
+    return n
+}
+
+/** reqwest 版本主号（"0.12" → 0；解析不出 → -1） */
+public func reqwestMajorOf(ver: String): Int64 {
+    return versionSegmentOf(ver, 0)
+}
+
+/** reqwest 版本次号（"0.12.22" → 12；解析不出 → -1） */
+public func reqwestMinorOf(ver: String): Int64 {
+    return versionSegmentOf(ver, 1)
+}
+
+/**
+ * 关掉 `default-tls` 之后**必须补回**的纯 Rust 默认特性（保持行为只差 TLS 后端）。
+ * 0.11+ 的默认集合是 `["default-tls", "charset", "http2"]`，0.12 起加了 `system-proxy`；
+ * 0.10 及更早集合不同 ⇒ 返回空表，由调用方降 guide（不猜）。
+ */
+public func preservedDefaultFeatures(ver: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let major = reqwestMajorOf(ver)
+    let minor = reqwestMinorOf(ver)
+    if (major < 0 || minor < 0) {
+        return out
+    }
+    if (major == 0 && minor < 11) {
+        return out
+    }
+    out.add("charset")
+    out.add("http2")
+    if (major >= 1 || minor >= 12) {
+        out.add("system-proxy")
+    }
+    return out
+}
+
+/** 从依赖行里取版本串：`reqwest = "0.12"` 与 `reqwest = { version = "0.12", … }` 都认 */
+public func depVersionOf(line: String): String {
+    var from: Int64 = 0
+    let vi = indexOfOr(line, "version")
+    if (vi >= 0) {
+        from = vi
+    }
+    let head = line[from..]
+    let q1 = indexOfOr(head, "\"")
+    if (q1 < 0) {
+        return ""
+    }
+    let rest = head[(q1 + 1)..]
+    let q2 = indexOfOr(rest, "\"")
+    if (q2 < 0) {
+        return ""
+    }
+    return rest[0..q2]
+}
+
+/** 行尾 `# …` 注释（引号之外第一个 `#` 起，含 `#`）；没有返回 "" */
+public func trailingCommentOf(line: String): String {
+    let bytes = line.toArray()
+    var inQuote = false
+    var i: Int64 = 0
+    while (i < Int64(bytes.size)) {
+        let b = bytes[i]
+        if (b == 34) {
+            inQuote = !inQuote
+        } else if (b == 35 && !inQuote) {
+            return line[i..]
+        }
+        i += 1
+    }
+    return ""
+}
+
+/**
+ * R2-PORT-016：reqwest 关掉默认特性（default-tls 会拉 openssl-sys）+ 补 rustls-tls。
+ *
+ * 边界（都按"不猜、不静默改语义"）：
+ *   - 已 `default-features = false` 且带 `rustls-tls` → 幂等跳过；
+ *   - 显式要了 `native-tls` / `default-tls` / `default-features = true` → guide（换后端是语义变更）；
+ *   - features 多行数组 → guide（机械合并会留下续行，改坏文件；同 R2-PORT-002 的教训）；
+ *   - 版本 < 0.11 或取不到 version（git/path 依赖）→ guide（默认特性集合未知）；
+ *   - reqwest 只在 `[target.*]` / dev 段出现 → guide（不猜该改哪一段）。
+ */
+func ruleReqwestRustls(lines: ArrayList<String>, out: RuleOutcome): ArrayList<String> {
+    let depIdx = sectionIndex(lines, "[dependencies]")
+    if (depIdx < 0) {
+        out.note = "无 [dependencies] 段——跳过"
+        return lines
+    }
+    let end = sectionEnd(lines, depIdx)
+    var found: Int64 = -1
+    var i = depIdx + 1
+    while (i < end) {
+        let t = lines[i].trimAscii()
+        if (t.startsWith("reqwest =") || t.startsWith("reqwest=")) {
+            found = i
+            break
+        }
+        i += 1
+    }
+    if (found < 0) {
+        var elsewhere = false
+        for (j in 0..lines.size) {
+            let t = lines[j].trimAscii()
+            if (t.startsWith("reqwest =") || t.startsWith("reqwest=")) {
+                elsewhere = true
+                break
+            }
+        }
+        if (elsewhere) {
+            out.tier = T_GUIDE
+            out.note = "reqwest 不在 [dependencies] 段（target / dev-dependencies？）——不机械改，留人工"
+            out.after = "reqwest = { version = \"0.12\", default-features = false, features = [\"rustls-tls\", \"charset\", \"http2\", \"system-proxy\"] }"
+            return lines
+        }
+        out.note = "[dependencies] 里没有 reqwest——跳过（不用 HTTP 栈）"
+        return lines
+    }
+
+    let raw = lines[found]
+    let t = raw.trimAscii()
+    // 多行 features：本行有 `[` 但没有 `]` → 不碰（机械改会留下续行变语法错误）
+    let openBr = indexOfOr(t, "[")
+    if (openBr >= 0 && indexOfOr(t[openBr..], "]") < 0) {
+        out.tier = T_GUIDE
+        out.note = "reqwest 的 features 是多行数组——机械合并会改坏结构，留人工"
+        out.after = "reqwest = { version = \"…\", default-features = false, features = [原有 features…, \"rustls-tls\"] }"
+        return lines
+    }
+    let featsRaw = featuresInnerOf(t)
+    let compact = t.replace(" ", "")
+    if (compact.contains("default-features=false") && featsRaw.contains("rustls-tls")) {
+        out.note = "reqwest 已关默认特性且带 rustls-tls——跳过"
+        return lines
+    }
+    if (compact.contains("\"native-tls\"") || compact.contains("\"default-tls\"") ||
+        compact.contains("default-features=true")) {
+        out.tier = T_GUIDE
+        out.note = "reqwest 显式要了原生 TLS（native-tls / default-tls / default-features = true）——" +
+            "换成 rustls 会改语义（可能真在依赖宿主证书存储），留人工"
+        out.after = "reqwest = { version = \"…\", default-features = false, features = […, \"rustls-tls\"] }"
+        return lines
+    }
+    let ver = depVersionOf(t)
+    let minor = reqwestMinorOf(ver)
+    if (ver == "" || minor < 0) {
+        out.tier = T_GUIDE
+        out.note = "reqwest 没写 version（git / path 依赖？）——版本特性集合未知，留人工"
+        out.after = "reqwest 关掉 default-features 并补 rustls-tls（默认特性清单请查该版本的 Cargo.toml）"
+        return lines
+    }
+    if (reqwestMajorOf(ver) == 0 && minor < 11) {
+        out.tier = T_GUIDE
+        out.note = "reqwest ${ver} 的默认特性集合与 0.11+ 不同——不机械补，留人工"
+        out.after = "reqwest = { version = \"${ver}\", default-features = false, features = [原有 features…, \"rustls-tls\"] }"
+        return lines
+    }
+
+    var merged = ArrayList<String>()
+    if (featsRaw.trimAscii() != "") {
+        for (seg in featsRaw.split(",", -1)) {
+            let s = seg.trimAscii().replace("\"", "")
+            if (s != "" && !merged.contains(s)) {
+                merged.add(s)
+            }
+        }
+    }
+    if (!merged.contains("rustls-tls")) {
+        merged.add("rustls-tls")
+    }
+    for (f in preservedDefaultFeatures(ver)) {
+        if (!merged.contains(f)) {
+            merged.add(f)
+        }
+    }
+    var farr = ArrayList<String>()
+    for (f in merged) {
+        farr.add("\"${f}\"")
+    }
+    var joined = ""
+    for (j in 0..farr.size) {
+        if (j > 0) {
+            joined += ", "
+        }
+        joined += farr[j]
+    }
+    // 保留原行里除 version / features / default-features 之外的键与行尾注释
+    let extra = otherKeysOf(t, ["version", "features", "default-features"])
+    let indent = leadingIndentOf(raw)
+    var newline = "${indent}reqwest = { version = \"${ver}\", default-features = false, features = [${joined}]"
+    if (extra != "") {
+        newline += ", ${extra}"
+    }
+    newline += " }"
+    let comment = trailingCommentOf(t)
+    if (comment != "") {
+        newline += " ${comment}"
+    }
+    let marker = "${indent}# reqwest 关掉默认的 default-tls（它拉 openssl-sys，交叉编译必报 " +
+        "Could not find directory of OpenSSL），改 rustls —— lingqu R2-PORT-016"
+    out.applied = true
+    out.before = raw
+    out.after = "${marker}\n${newline}"
+    out.note = "reqwest 关默认特性 + 补 rustls-tls（含纯 Rust 默认项 ${preservedDefaultFeatures(ver).size} 个）"
+    return spliceLines(lines, found, 1, [marker, newline])
+}
+
 // ===== 规则执行器（T4-1 的"跑"半边）=====
 
 /** 对 Cargo.toml 文本按序执行六条规则；幂等——改过的文件再跑 applied 全 false */
@@ -663,6 +908,11 @@ public func applyCargoTomlRules(text: String): PortResult {
     var o6 = RuleOutcome("R2-PORT-006", false, "", "", "")
     lines = rulePatchSection(lines, o6)
     res.outcomes.add(o6)
+
+    // 016 reqwest TLS 栈（0.39.99：default-tls 拉 openssl-sys，交叉编译必失败）
+    var o16 = RuleOutcome("R2-PORT-016", false, "", "", "")
+    lines = ruleReqwestRustls(lines, o16)
+    res.outcomes.add(o16)
 
     // 拼回全文（保留原换行风格：统一 \n；以换行结尾的输入末尾也补回换行）
     var sb = ""

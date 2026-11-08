@@ -135,14 +135,28 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
         "改前端必须重编 .so 并核对 AssetKey 指纹（见 pitfalls.md 第 10 条）",
         "", PK_GUIDE))
 
+    // ---- 0.39.99：reqwest 默认特性拉 openssl-sys（note-gen-2 实测，2026-11-08）----
+    // 现场（note-gen-2/src-tauri/Cargo.toml:76）：
+    //   reqwest = { version="0.12", features=["json","multipart","stream","rustls-tls","socks"] }
+    // 写了 rustls-tls 却**没关 default-features** ⇒ 默认的 default-tls 仍在
+    //   ⇒ native-tls ⇒ openssl-sys，交叉编译到 OHOS 必然失败：
+    //     Could not find directory of OpenSSL installation, and this `-sys` crate cannot proceed …
+    //     pkg-config has not been configured to support cross-compilation.
+    // 要紧的是**这条与 FP-016 会同时命中**（openssl-sys 的 build script 也会打 pkg-config 那句），
+    // 而 FP-016 归因给 glib-sys/GTK。所以 FP-021 必须排在它前面：先给出正确的归因，
+    // 否则 agent 会顺着"GTK 链 → 重跑 port 就好"或"装 OpenSSL / 配 pkg-config"烧完一轮预算。
+    lib.add(Fingerprint("FP-021", "Could not find directory of OpenSSL installation",
+        "某个 -sys crate 的 C 依赖在交叉编译时找不到 OpenSSL；在 Tauri 工程上绝大多数是 **reqwest 没关默认特性**——默认的 default-tls → native-tls → openssl-sys 进了依赖树（即使 features 里已经写了 rustls-tls，两者会同时存在）",
+        "重跑 t2h:port：规则 R2-PORT-016 会给 reqwest 加 default-features = false 并补 rustls-tls（含 charset/http2/system-proxy 这些纯 Rust 默认项）。自查：`cargo tree --target aarch64-unknown-linux-ohos -i openssl-sys` 应为空。**别去装 OpenSSL、别配 pkg-config**——目标平台没有它，那条路走不通",
+        "R2-PORT-016", PK_RULE))
     // ---- 0.13.1 审核轮补：T5-1 首次真机交叉编译实测到的失败（不是凭空编的）----
     // 证据：habit-tree @ main 分支（未迁移）在 Windows 上
     //   cargo build --release --target aarch64-unknown-linux-ohos
     // 的首个失败就是 glib-sys 的 build script —— 根因是 wry/tao 仍是 registry 版本、
     // 拉进了 GTK/glib 桌面依赖链（未迁移工程的必经之路）。
     lib.add(Fingerprint("FP-016", "pkg-config has not been configured to support cross-compilation",
-        "某个 C 依赖的 build script 交叉编译时找不到 pkg-config 配置；在未迁移的 Tauri 工程上通常是 wry/tao 还是 registry 版本 → 拉进 GTK/glib 桌面依赖链（glib-sys）",
-        "先看紧随其后的 custom build command 是哪条 crate；若是 glib-sys/gtk 系，重跑 t2h:port（R2-PORT-006 patch 掉 wry/tao）即可根除",
+        "某个 C 依赖的 build script 交叉编译时找不到 pkg-config 配置。**先看紧随其后的 custom build command 是哪条 crate**：glib-sys/gtk 系 → 通常是 wry/tao 还是 registry 版本、拉进 GTK/glib 桌面依赖链；openssl-sys → 见 FP-021（那是 reqwest 默认特性，不是 GTK）",
+        "glib-sys/gtk 系：重跑 t2h:port（R2-PORT-006 patch 掉 wry/tao）即可根除；openssl-sys：走 FP-021 / R2-PORT-016。两者都**不要**去给交叉编译硬配 pkg-config",
         "R2-PORT-006", PK_RULE))
     lib.add(Fingerprint("FP-017", "failed to run custom build command for",
         "C 依赖 crate 的 build script 失败（交叉编译缺 sysroot / pkg-config / 目标平台不支持）",
@@ -251,6 +265,7 @@ public func patchProposalsFromDiagnosis(items: ArrayList<Diagnosis>): ArrayList<
             case "R2-PORT-006" => file = "src-tauri/Cargo.toml"
             case "R2-PORT-007" => file = "src-tauri/rust-toolchain.toml"
             case "R2-PORT-008" => file = "src-tauri/.cargo/config.toml"
+            case "R2-PORT-016" => file = "src-tauri/Cargo.toml"
             case "R2-PORT-009" => file = "src-tauri/src/lib.rs"
             case _ => file = ""
         }

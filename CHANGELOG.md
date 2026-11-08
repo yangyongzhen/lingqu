@@ -5,7 +5,67 @@
 
 ---
 
+## [0.39.99] - 2026-11-08
+
+**主题**：`reqwest` 忘了关默认特性 → 拉 openssl-sys，这条**由工具自己修**，不再指望 agent 记得住。
+
+现象（note-gen-2 实测）：`src-tauri/Cargo.toml:76` 明明写了
+`features = ["json","multipart","stream","rustls-tls","socks"]`，交叉编译到 OHOS 还是死在
+
+```
+error: failed to run custom build command for `openssl-sys v0.9.109`
+Could not find directory of OpenSSL installation …
+pkg-config has not been configured to support cross-compilation.
+```
+
+根因：`rustls-tls` 只是"多加一个后端"，`default-tls`（→ native-tls → openssl-sys）仍在**默认集合**里。
+
+**关键的一条判断**：这份知识**技能里早就写着**（`references/cargo-patches.md` 的依赖兼容性表，
+`reqwest` 那行就写着"`default-features=false`，禁 default，会拉进 openssl-sys"），
+agent 照样踩——因为日志症状串（OpenSSL / pkg-config）与"reqwest 默认特性"之间**没有字面联系**，
+而任务书「交叉编译的硬前置」那节又会把它引向"配 CC / pkg-config"。**写在技能里 ≠ agent 会读到、
+更 ≠ 它能把日志串对到那一条**。所以这轮把它做成四层，核心是确定性规则。
+
+### Added
+
+- **规则 `R2-PORT-016`**（`src/port/port.cj`）：`reqwest` 缺 `default-features = false` 时自动加，
+  并把与其无关、但属于默认集合的**纯 Rust** 项补回来——`charset` / `http2`（0.12 起还有
+  `system-proxy`）。**只关默认特性会顺手砍掉这几个特性 = 静默改行为**，所以补回来是规则的一半。
+  边界照旧"不猜"：已关+带 rustls-tls → 幂等跳过；显式要 `native-tls`/`default-tls`/
+  `default-features = true` → guide；features 多行数组 → guide（机械合并会留下续行，把
+  Cargo.toml 改坏，同 R2-PORT-002 的教训）；版本 < 0.11 或取不到 version（git/path 依赖）→ guide；
+  `reqwest` 只在 `[target.*]`/dev 段出现 → guide。原行的其它键与**行尾注释**都保留。
+- **指纹 `FP-021`**（`src/port/diagnose.cj`）：marker `Could not find directory of OpenSSL installation`，
+  归因「reqwest 没关默认特性」，修法指向 R2-PORT-016 + 自查命令。**刻意排在 FP-016 之前**：
+  现场这两串日志同时出现（openssl-sys 的 build script 也打 `pkg-config …` 那句），
+  而 FP-016 归因给 glib-sys/GTK——顺序错了 agent 就走偏。FP-016 的 rootCause/fix 同步补了分流。
+- **任务书「TLS 栈」小节**（`src/autoport.cj`）：症状串、根因、`port --apply` 即为修法、
+  自查命令 `cargo tree --target aarch64-unknown-linux-ohos -i openssl-sys`，
+  以及**明令禁止**的三条死路（装 OpenSSL / `PKG_CONFIG_ALLOW_CROSS` / `OPENSSL_DIR` 指宿主）。
+- `src/tests/port_tls_test.cj`（13 条）：规则主路径 / 幂等 / 多行数组 guide / 显式 native-tls guide /
+  老版本 guide / 简写形态 / 无 reqwest 不塞 / 行尾注释保留 / 按版本补默认项 / 版本与注释解析 /
+  **FP-021 命中且排在 FP-016 之前** / 任务书含 TLS 栈。
+
+### Changed
+
+- 技能沉淀（这条要落在**人与 agent 都读得到**的地方，不止代码）：
+  `skills/t2h-ohos-port/references/cargo-patches.md` 表行补症状串 + 新增「`reqwest` 忘了关默认特性
+  长什么样」整节（含 ✗/✓ 对照、默认集合、别走的路）；`references/pitfalls.md` 新增第 13 条
+  「`pkg-config … cross-compilation` 有两种归因：glib-sys vs openssl-sys」；`SKILL.md` 的
+  references 索引点出这两处，让 agent 按需读时能直接翻到。
+
+### Verified
+
+- 门禁六项全绿：build 0 warning / test **499 PASSED、FAILED=0、ERROR=0**（原 486，+13）/
+  `cj-tauri check` / 页面脚本语法 / `targets/desktop` build 0 warning / `cli` build 0 warning。
+- 规则未在**真实 note-gen-2 工程**上跑过 apply（那要用户工程在场）：本轮验证到的是
+  「同样的 Cargo.toml 行 → 产出 `default-features = false` + 完整 features 且幂等」，
+  端到端（改完 `cargo tree -i openssl-sys` 为空）**未验证**，按 §1 第 4 条如实标注。
+
+---
+
 ## [0.39.98] - 2026-11-08
+
 
 **主题**：⑦ 迁移报告屏按落档回读——agent 跑过 `lingqu-cli report`，屏上不许再显示「从没生成过」。
 0.39.87 给 ⑤ 构建 / ⑥ 验证两屏补了 `action:"load"`，**⑦ 屏漏在外面**：note-gen-2 的

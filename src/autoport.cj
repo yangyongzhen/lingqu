@@ -328,6 +328,26 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "- 回滚改造时别只回滚 `Cargo.toml`：`.cargo/config.toml` 与 `rust-toolchain.toml` 是交叉编译的地基，"
     d += "把它们回滚掉等于把 build 打回失败态。\n\n"
 
+    // 0.39.99（note-gen-2 实测，2026-11-08）：技能 references 里**早就写了**「reqwest 要
+    // default-features = false + rustls-tls」，agent 照样踩——因为日志症状串（OpenSSL /
+    // pkg-config）与"reqwest 的默认特性"之间没有字面联系，而上面「硬前置」那节又把它
+    // 引向"配 CC / pkg-config"。所以这条必须进任务书（agent 唯一必读的入口），
+    // 规则 R2-PORT-016 是兜底（重跑 port 就改好了）。
+    d += "## TLS 栈（reqwest 拉 openssl-sys 在 OHOS 上是必死项）\n"
+    d += "- 症状（两串常同时出现）：`Could not find directory of OpenSSL installation`、"
+    d += "`pkg-config has not been configured to support cross-compilation`；"
+    d += "紧随其后的 custom build command 是 `openssl-sys`。\n"
+    d += "- 根因：`reqwest` 的**默认特性**含 `default-tls`（→ native-tls → openssl-sys）。"
+    d += "工程里写了 `features = [… \"rustls-tls\" …]` **不等于**关掉了它，两个后端会同时进依赖树。\n"
+    d += "- 处置：`t2h:port` 的 **R2-PORT-016** 已经自动改——加 `default-features = false`、"
+    d += "补 `rustls-tls`，并把 `charset` / `http2` / `system-proxy` 这些**纯 Rust 的默认项补回来**"
+    d += "（否则是顺手砍特性、改行为）。**先重跑 `port --path . --apply`**，不要手改；"
+    d += "它转 guide 说明是 git/path 依赖或 reqwest < 0.11，那时按 `after` 里的模板改。\n"
+    d += "- 自查（改完这条应为空）：`cargo tree --target aarch64-unknown-linux-ohos -i openssl-sys`。\n"
+    d += "- **死路，别走**：去装 OpenSSL、给 pkg-config 配 `PKG_CONFIG_ALLOW_CROSS`、"
+    d += "把 `OPENSSL_DIR` 指到宿主的 OpenSSL——目标平台根本没有它，只会白烧轮次。"
+    d += "同理依赖树里出现 `native-tls` / `openssl` crate，都该换成 `rustls`。\n\n"
+
     // 2026-11-07 实测：任务书**只写了 `sign --path .`**，没写 CLI 早就有的 `--login` / `--auto`，
     // agent 于是在签名这一步自己开浏览器登录 AGC 网页——拿不到本机回调的 tempToken、也不注册设备，
     // 白花一次人工介入，签名照样没过。凡"工具明明有能力、任务书没写"的缺口，都按这个补法：

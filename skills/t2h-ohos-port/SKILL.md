@@ -159,8 +159,8 @@ command -v devecocli                      # 有就直接用
 
 | 文件 | 什么时候读 |
 |---|---|
-| [cargo-patches.md](references/cargo-patches.md) | 动 Cargo.toml 之前；为什么用 [patch] 不用 path 依赖、为什么必须钉精确版本 |
+| [cargo-patches.md](references/cargo-patches.md) | 动 Cargo.toml 之前；为什么用 [patch] 不用 path 依赖、为什么必须钉精确版本；**`reqwest` 忘了关默认特性 → 拉 openssl-sys** 的样子与自查命令（症状串 `Could not find directory of OpenSSL installation`） |
 | [toolchain.md](references/toolchain.md) | 配交叉编译链接器之前；gnullvm 与 NDK clang 的两平台差异 |
 | [arkweb-shims.md](references/arkweb-shims.md) | 前端适配三坑；polyfill 完整代码与"为什么必须 remove() 而不能 display:none" |
 | [signing.md](references/signing.md) | **真机装不上（9568322）时第一个读**：三条签名路径对比、复用本机自动签名材料的 6 步配方、失败码表、什么时候才真需要账号 |
-| [pitfalls.md](references/pitfalls.md) | 部署/真机阶段按报错原文索引；hdc 目录坑、锁屏、验证清单 |
+| [pitfalls.md](references/pitfalls.md) | 部署/真机阶段按报错原文索引；hdc 目录坑、锁屏、验证清单；**构建期 `pkg-config … cross-compilation` 的两种归因（glib-sys vs openssl-sys）见第 13 条** |

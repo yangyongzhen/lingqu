@@ -2,7 +2,7 @@
 
 > 语料：habit-tree《真机部署踩坑记录》（2026-08-22 真机复测沉淀）、《移植实录》5 类坑、
 > lingqu `AGENTS.md` §4。**按报错原文/现象索引**；每条都有真机取证。
-> 构建期的问题先查本表第 1-4 条，部署期查 5-9，验证查 10-12。
+> 构建期的问题先查本表第 1-4 条 + 第 13 条，部署期查 5-9，验证查 10-12。
 
 ## 构建期
 
@@ -86,3 +86,17 @@
 3. **hilog**：系统侧（ArkTS/ability 生命周期）有效；Rust 侧无效。
 4. **白屏**：先查 `custom-protocol` feature（缺了加载 devUrl localhost:5173），
    再查 AssetKey 指纹（.so 旧），再查 withGlobalTauri。
+
+## 构建期补充（日志串对号，别猜）
+
+### 13. `pkg-config has not been configured to support cross-compilation` 有两种归因
+- **现象**：交叉编译死在某个 `-sys` crate 的 build script。**这一句本身不告诉你是谁**。
+- **判据**：看**紧随其后的 `failed to run custom build command for \`<crate> v<ver>\``**：
+  - `glib-sys` / `gtk-sys` / 其它 GTK 系 → wry/tao 还是 registry 版本，拉进了桌面依赖链
+    → 重跑 `t2h:port`（R2-PORT-006 patch 掉 wry/tao）即根除；
+  - `openssl-sys` → **不是 GTK 问题**。根因是 `reqwest` 没关默认特性（`default-tls` → native-tls）。
+    修法见 `cargo-patches.md` 的「`reqwest` 忘了关默认特性长什么样」，工具侧是
+    **R2-PORT-016**（重跑 `t2h:port` 自动改）+ 指纹 **FP-021**。
+- **别做的事**：给交叉编译配 `PKG_CONFIG_ALLOW_CROSS`、装宿主 OpenSSL、`OPENSSL_DIR` 指过去——
+  目标平台没有 OpenSSL。这条死路会白烧整轮预算（2026-11-08 note-gen-2 实测）。
+- **自查**：`cargo tree --target aarch64-unknown-linux-ohos -i openssl-sys` 应为空。
