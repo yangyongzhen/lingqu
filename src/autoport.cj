@@ -362,6 +362,15 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "工程本来就有 `ohos` 分支或已提交的 `gen/ohos` 时，从那里取回，别重新 init。\n"
     d += "- **别删掉整个 `gen/ohos` 再 init**：签名材料与 `bundleName` 都挂在 `build-profile.json5` 上，"
     d += "重生成等于把它们清掉，`hap` 会改报签名类错误（下一节）。要么在它上面改，要么先备份。\n"
+    // 0.39.100（note-gen-2 实测）：脚手架是**后生成**的，而 `port --apply` 跑在它还不存在的时候
+    // ⇒ R2-PORT-015 无文件可改 ⇒ 新 hvigorfile.ts 带着 tauri 钩子，hap 直接死在 00308018。
+    // 生成类命令会把你做过的改造覆盖回去，**顺序必须写死**。
+    d += "- **脚手架就位后必须重跑一次改造**：`port --path . --apply`（幂等，带标记即跳过）。"
+    d += "它在注掉 `gen/ohos/entry/hvigorfile.ts` 里的 tauri Rust 钩子（规则 R2-PORT-015）——"
+    d += "那条钩子跑 `cargo tauri ohos dev-eco-studio-script`，要读 dev server 的 addr 文件，"
+    d += "非 dev 场景必 panic ⇒ hvigor `00308018 Unknown Error`。\n"
+    d += "  判据：看 `hvigorfile.ts` 里 `afterRun(buildRustCode)` 那行**还在不在**、同目录有没有 `.bak`"
+    d += "与 `lingqu: R2-PORT-015` 标记；**「规则存在」不等于「已经注过」**。\n"
     d += "- 「有脚手架」≠「能装配」：通过只看 `hap` 落档的 `built` 与 `gates.failures`；"
     d += "`built=true` 之后还要点名 `libs/arm64-v8a/lib<模块名>.so` 在不在。\n\n"
 

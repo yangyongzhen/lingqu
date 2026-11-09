@@ -45,6 +45,12 @@ failures = ["鸿蒙产物闸：编译成功但没产出 libtauri_app_lib.so—�
 
 ### Added
 
+- 任务书再补一条**顺序**：「脚手架就位后必须重跑 `port --path . --apply`」（`src/autoport.cj`）。起因是
+  note-gen-2 的 `gen/ohos` 是 2026-11-09 才 `cargo tauri ohos init --ci` 生成的，而上一轮 `port --apply`
+  跑在**脚手架还不存在**的时候 ⇒ R2-PORT-015 无文件可改 ⇒ 新生成的 `entry/hvigorfile.ts` 带着
+  tauri Rust 钩子进 hvigor ⇒ `00308018 Unknown Error`（钩子要读 dev server 的 addr 文件，非 dev 必 panic）。
+  判据写死：看 `afterRun(buildRustCode)` 那行**还在不在**、同目录有没有 `.bak` 与 `lingqu: R2-PORT-015` 标记
+  ——**「规则存在」不等于「已经注过」**。
 - 单测 `testSoCandidateRelsPutsExpectedArtifactFirst`（`src/tests/ohos_artifact_test.cj`），
   用例直接照抄 note-gen-2 现场这三项 artifact 的顺序——先红后绿的复现样本。
 - 任务书补「**装配 HAP 前：鸿蒙脚手架必须先生成**」（`src/autoport.cj`）：判据只有一处
@@ -60,9 +66,13 @@ failures = ["鸿蒙产物闸：编译成功但没产出 libtauri_app_lib.so—�
 - 修后重跑 `t2h:build --path note-gen-2`：`exitCode=0`、`gates.passed=true`、`soPath` 有值、
   `assetDiff.matched=12`（12 个前端键真的比上了，此前一个都没比）、`staleInSo=0`、`missingInSo=0`。
   **⑤ 构建这一步在 note-gen-2 上第一次整条通过**（含前端指纹闸）。
+- 生成脚手架（`cargo tauri ohos init --ci`）→ **重跑 `port --apply`** → `t2h:hap`：
+  `built=true`、`errorCount=0`、**HAP 34,457,633 B**、`entries` 里 `libentry.so` 与
+  `libtauri_app_lib.so` 齐、`gates.passed=true`。**⑥ 装配第一次通过**（此前从 0.39.99 起一直没跑到）。
+  产物是 `entry-default-unsigned.hap`——签名是下一步。
+- 签名体检（`lingqu-cli sign --path .`）：`ok=false`，工程包名 `com.codexu.NoteGen` 与本机 8 份材料的
+  包名**全不一致** ⇒ 要 `sign --login`（人登录 AGC 一次）+ `sign --auto`；这是 A3 人工介入点，未做。
 - 五道闸全绿：`cjpm test` **TOTAL=500 / FAILED=0 / ERROR=0**（0.39.99 的 499 + 本次 1 条）。
-- `t2h:hap` 仍停在"找不到鸿蒙工程脚手架 `src-tauri/gen/ohos`"——note-gen-2 的脚手架还没生成
-  （要 `cargo tauri ohos init --ci`），这是下一步，不是本轮回归。
 
 ---
 
