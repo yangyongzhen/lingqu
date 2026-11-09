@@ -70,8 +70,16 @@ failures = ["鸿蒙产物闸：编译成功但没产出 libtauri_app_lib.so—�
   `built=true`、`errorCount=0`、**HAP 34,457,633 B**、`entries` 里 `libentry.so` 与
   `libtauri_app_lib.so` 齐、`gates.passed=true`。**⑥ 装配第一次通过**（此前从 0.39.99 起一直没跑到）。
   产物是 `entry-default-unsigned.hap`——签名是下一步。
-- 签名体检（`lingqu-cli sign --path .`）：`ok=false`，工程包名 `com.codexu.NoteGen` 与本机 8 份材料的
-  包名**全不一致** ⇒ 要 `sign --login`（人登录 AGC 一次）+ `sign --auto`；这是 A3 人工介入点，未做。
+- **签名 → 部署 → 验证 → 报告 同一晚跑通（人只登录 AGC 一次）**：`sign --login` → `ok=true`；
+  首次 `sign --auto` 死在「复用现有 p12 但工程里没有可沿用的口令密文」（§4-85），核实该材料无工程引用
+  且 `--newKeys` 是改名不删后，`sign --auto --newKeys` 成功（新证书 + 含 UDID 的 profile +
+  `signingConfigs` 写回，原文件备份 `.lingqu-autosign.bak`）；`hap` 出签名产物
+  **34,792,315 B / `signed=true`**；`deploy` 真机（`5VFUN26310G06052`）`installed=true / started=true /
+  hilogHealthy=true`；`verify` → **`ratePercent=0`**（`featurePass=0 / covered=11`，另 169 项未测，
+  12 项 fail 里 11 项是 `app_data_dir` 降级方案没落地——真问题，不是口径错）；
+  `report` → 「8 步完成 7/8（87%），可用率 0%，3 处人工介入」。
+  **缺的那一步是 `port`，而它其实跑过了**：证据在 `.lingqu/port/note-gen-2/decisions.json` 的
+  `portRun`（`apply=true, applied=2`），报告的八步观测没认这份落档（§4-58 第三次漏网，属观测缺口）。
 - 五道闸全绿：`cjpm test` **TOTAL=500 / FAILED=0 / ERROR=0**（0.39.99 的 499 + 本次 1 条）。
 
 ---
