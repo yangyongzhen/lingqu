@@ -312,7 +312,8 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "- **禁止全盘搜索**（`find /`、`dir /s C:\\`、`Get-ChildItem -Recurse` 扫盘符根都算）：\n"
     d += "  命令一律在**本工程目录内**执行（工作目录就是工程根，用相对路径或 `.` 即可）；\n"
     d += "  要找脚手架只有两处：`<工程>/gen/ohos` 与 `<工程>/src-tauri/gen/ohos`；"
-    d += "两处都没有就**如实报告缺脚手架**（并写明生成命令），不要满盘搜、不要换个盘再搜；\n"
+    d += "两处都没有就**如实报告缺脚手架**，并写明生成命令是 `cargo tauri ohos init --ci`"
+    d += "（见「装配 HAP 前：鸿蒙脚手架必须先生成」），不要满盘搜、不要换个盘再搜；\n"
     d += "- 单条命令要能自己结束：别写会长时间挂住的扫描/交互式命令；"
     d += "估算超过 2 分钟的命令先说明理由再跑。\n\n"
 
@@ -347,6 +348,22 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "- **死路，别走**：去装 OpenSSL、给 pkg-config 配 `PKG_CONFIG_ALLOW_CROSS`、"
     d += "把 `OPENSSL_DIR` 指到宿主的 OpenSSL——目标平台根本没有它，只会白烧轮次。"
     d += "同理依赖树里出现 `native-tls` / `openssl` crate，都该换成 `rustls`。\n\n"
+
+    // 0.39.100（note-gen-2 实测，2026-11-09）：⑤ build 过了接 ⑥ hap，工具如实报
+    // 「找不到鸿蒙工程脚手架 <src-tauri>/gen/ohos/build-profile.json5 —— 先用 cargo tauri ohos init --ci 生成」，
+    // 可任务书与技能 references 里**一次都没提 init**（技能只有 `cargo tauri ohos build`）⇒ agent 到这一步
+    // 只会撞墙，或去全盘搜 ohos 目录（2026-11-07 那次为找 gen/ohos 全盘扫描、挂死 565s）。
+    // 与 §4-130 同一个补法：能力/命令必须进任务书，并写清「哪一步之前必须有它」。
+    d += "## 装配 HAP 前：鸿蒙脚手架必须先生成\n"
+    d += "- 判据只有一处：`<工程>/src-tauri/gen/ohos/build-profile.json5` 存在"
+    d += "（扁平布局工程就是 `<工程>/gen/ohos/build-profile.json5`）。没有它，`hap` 会在前置检查里"
+    d += "**1 秒内**如实报「找不到鸿蒙工程脚手架」，根本不会进 hvigor —— 看到这句就补脚手架，别去查签名或 SDK。\n"
+    d += "- 生成：在 `src-tauri` 目录下跑 `cargo tauri ohos init --ci`（需要 tauri-cli 的 OHOS 分支）；"
+    d += "工程本来就有 `ohos` 分支或已提交的 `gen/ohos` 时，从那里取回，别重新 init。\n"
+    d += "- **别删掉整个 `gen/ohos` 再 init**：签名材料与 `bundleName` 都挂在 `build-profile.json5` 上，"
+    d += "重生成等于把它们清掉，`hap` 会改报签名类错误（下一节）。要么在它上面改，要么先备份。\n"
+    d += "- 「有脚手架」≠「能装配」：通过只看 `hap` 落档的 `built` 与 `gates.failures`；"
+    d += "`built=true` 之后还要点名 `libs/arm64-v8a/lib<模块名>.so` 在不在。\n\n"
 
     // 2026-11-07 实测：任务书**只写了 `sign --path .`**，没写 CLI 早就有的 `--login` / `--auto`，
     // agent 于是在签名这一步自己开浏览器登录 AGC 网页——拿不到本机回调的 tempToken、也不注册设备，

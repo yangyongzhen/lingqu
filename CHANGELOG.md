@@ -47,6 +47,13 @@ failures = ["鸿蒙产物闸：编译成功但没产出 libtauri_app_lib.so—�
 
 - 单测 `testSoCandidateRelsPutsExpectedArtifactFirst`（`src/tests/ohos_artifact_test.cj`），
   用例直接照抄 note-gen-2 现场这三项 artifact 的顺序——先红后绿的复现样本。
+- 任务书补「**装配 HAP 前：鸿蒙脚手架必须先生成**」（`src/autoport.cj`）：判据只有一处
+  （`<工程>/src-tauri/gen/ohos/build-profile.json5`）、生成命令 `cargo tauri ohos init --ci`、
+  以及「别删整个 `gen/ohos` 再 init」（签名材料与 `bundleName` 都挂在 `build-profile.json5` 上）；
+  「纪律」里那条「如实报告缺脚手架」也补上了具体命令。技能 `references/toolchain.md` 同步同一段
+  ——**同一份知识不许只写在一条分支里**（§4-130 判据②）。起因是 0.39.99 整改时发现：工具在 `hap`
+  会如实说「先用 `cargo tauri ohos init --ci` 生成」，而任务书从头到尾**一次都没提 init**，
+  agent 到这一步只能撞墙（2026-11-07 还为找 `gen/ohos` 全盘扫描挂死 565s）。
 
 ### 验证
 

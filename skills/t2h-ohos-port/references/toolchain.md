@@ -20,6 +20,16 @@ targets = ["aarch64-unknown-linux-ohos"]
   gnullvm 基于 lld + compiler-rt，无需 libgcc。
 - `cargo tauri ohos build` 内部调用的 cargo 同样遵循此文件。
 
+### 脚手架：`cargo tauri ohos init --ci`（装配 HAP 的前置）
+
+`t2h:hap` 只认 `<工程>/src-tauri/gen/ohos/build-profile.json5`（扁平布局为 `<工程>/gen/ohos/…`）。
+没有它就直接报「找不到鸿蒙工程脚手架」，连 hvigor 都不进——**这不是签名/SDK 问题**。
+
+- 生成（在 `src-tauri` 下）：`cargo tauri ohos init --ci`，需要 tauri-cli 的 OHOS 分支；
+- 工程已有 `ohos` 分支或已提交的 `gen/ohos`：直接取回，别重新 init；
+- **别删整个 `gen/ohos` 再 init**：签名材料与 `bundleName` 挂在 `build-profile.json5` 上，
+  重生成会把它们清掉，`hap` 随即改报签名类错误。
+
 ### Linux 宿主：默认 GNU 即可
 
 ```toml
