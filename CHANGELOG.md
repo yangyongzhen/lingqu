@@ -5,6 +5,60 @@
 
 ---
 
+## [0.39.100] - 2026-11-09
+
+**主题**：`.so` **就在盘上**，闸却报"没产出"——"第一个 `.so`"不是"应用自己的 `.so`"。
+
+现象（note-gen-2 实测，2026-11-09 20:27 那一轮）：`t2h:build` 报
+
+```
+gates.passed = false
+failures = ["鸿蒙产物闸：编译成功但没产出 libtauri_app_lib.so——没有 .so 就装不进 HAP"]
+```
+
+而同一时刻 `src-tauri/target/aarch64-unknown-linux-ohos/release/libtauri_app_lib.so`
+是 **33,012,312 B、刚编出来的**（mtime 就是这一轮），`artifacts` 里也明明白白列着
+`libtauri_app_lib.so`。更隐蔽的一半：`assetDiff` 的 `matched/staleInSo/missingInSo`
+**三组全是空数组**——前端指纹闸压根没跑，却看着像"没问题"。
+
+根因：cargo `--message-format=json` 报的 artifact **顺序不保证应用自己的排在前面**，
+现场是
+
+```
+["libpdf_inspector-dfd192e6df9e9eb4.so", "libtauri_app_lib.a", "libtauri_app_lib.so"]
+```
+
+第一项是 **deps 里的 hash 中间产物**。旧 `findSoArtifactOf` 取"第一个 `.so`"，
+拼成 `release/libpdf_inspector-dfd192e6df9e9eb4.so`——它其实在 `release/deps/` 下，
+`exists()` 为假 ⇒ 返回空串 ⇒ 产物闸假红 + 指纹闸被跳过。**"没找到 .so"与".so 就在盘上"同时成立**，
+最坏的后果是 agent 顺着假红去怀疑 cdylib 声明/编译参数，白烧轮次。
+
+### Fixed
+
+- `findSoArtifactOf` 改为**期望名优先**：先按 `expectedLibNameOf` 算出的 `lib<name>.so`
+  （HAP 真正加载的那个）找，再逐个试 `release/` 与 `deps/`；`expectedSo` 的算点
+  **提到找 `.so` 之前**（闸的输入算得比闸晚，是漏判的常见来源）。
+- cargo 一条 artifact 都没报（增量编译全 Fresh）时按磁盘兜底——**"这条命令没输出"不等于"没有产物"**；
+  编译失败时闸仍先短路，不会把"没编出来"变成通过。
+- 新增纯函数 `soCandidateRelsOf`（`src/port/gates.cj`）：候选顺序可单测，
+  与 `expectedLibNameOf` / `hasCdylibCrateType` 同处一族。
+
+### Added
+
+- 单测 `testSoCandidateRelsPutsExpectedArtifactFirst`（`src/tests/ohos_artifact_test.cj`），
+  用例直接照抄 note-gen-2 现场这三项 artifact 的顺序——先红后绿的复现样本。
+
+### 验证
+
+- 修后重跑 `t2h:build --path note-gen-2`：`exitCode=0`、`gates.passed=true`、`soPath` 有值、
+  `assetDiff.matched=12`（12 个前端键真的比上了，此前一个都没比）、`staleInSo=0`、`missingInSo=0`。
+  **⑤ 构建这一步在 note-gen-2 上第一次整条通过**（含前端指纹闸）。
+- 五道闸全绿：`cjpm test` **TOTAL=500 / FAILED=0 / ERROR=0**（0.39.99 的 499 + 本次 1 条）。
+- `t2h:hap` 仍停在"找不到鸿蒙工程脚手架 `src-tauri/gen/ohos`"——note-gen-2 的脚手架还没生成
+  （要 `cargo tauri ohos init --ci`），这是下一步，不是本轮回归。
+
+---
+
 ## [0.39.99] - 2026-11-08
 
 **主题**：`reqwest` 忘了关默认特性 → 拉 openssl-sys，这条**由工具自己修**，不再指望 agent 记得住。

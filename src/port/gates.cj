@@ -398,6 +398,38 @@ public func hasCdylibCrateType(cargoToml: String): Bool {
 }
 
 /**
+ * 找 `.so` 的候选相对路径（纯函数，按优先级，相对 `target/<target>/release/`）。
+ *
+ * 0.39.100 实测（note-gen-2）：cargo 报的 artifact 列表**不是"应用自己的产物排在前面"**，
+ * 现场是 `["libpdf_inspector-<hash>.so", "libtauri_app_lib.a", "libtauri_app_lib.so"]`。
+ * 旧实现取「第一个 `.so`」拿到 deps 里的 `libpdf_inspector-<hash>.so`，拼成
+ * `release/libpdf_inspector-<hash>.so`（不存在）⇒ 返回空串 ⇒ 产物闸假红
+ * 「编译成功但没产出 libtauri_app_lib.so」，前端指纹闸也一并被跳过（AGENTS §4-151）。
+ *
+ * 顺序：① 期望名（`expectedLibNameOf` 算出的 `lib<name>.so`，HAP 真正要加载的那个）；
+ * ② artifacts 里每个 `.so`：先 `release/` 再看 `deps/`（带 hash 的中间产物落在 deps）。
+ */
+public func soCandidateRelsOf(artifacts: ArrayList<String>, expectedSo: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    if (expectedSo != "") {
+        out.add(expectedSo)
+    }
+    for (a in artifacts) {
+        if (!a.endsWith(".so")) {
+            continue
+        }
+        if (a != expectedSo) {
+            out.add(a)
+        }
+        let dep = "deps/${a}"
+        if (dep != expectedSo) {
+            out.add(dep)
+        }
+    }
+    return out
+}
+
+/**
  * 鸿蒙产物闸：编译成功就必须看到 `lib<name>.so`。
  *
  * 编译本身没过时**不重复报**（那是编译闸/回归闸的事，两条失败其实是同一件事）。

@@ -78,3 +78,45 @@ public func testTomlValueOfLineHandlesQuotesAndComments(): Unit {
     @Assert(tomlValueOfLine("version = \"0.1.0\"", "name"), "")
     @Assert(tomlValueOfLine("name", "name"), "")
 }
+
+/*
+ * 复现 0.39.100 的假红（note-gen-2 现场，2026-11-09 实测）：
+ * cargo 报的 artifact 顺序是 ["libpdf_inspector-<hash>.so", "libtauri_app_lib.a", "libtauri_app_lib.so"]，
+ * 按「第一个 `.so`」取会拿 deps 里的 hash 中间产物，拼成 release/libpdf_inspector-<hash>.so
+ * （不存在）⇒ 定位为空 ⇒ 产物闸报「编译成功但没产出 libtauri_app_lib.so」，前端指纹闸也被跳过。
+ */
+@Test
+public func testSoCandidateRelsPutsExpectedArtifactFirst(): Unit {
+    let arts = ArrayList<String>()
+    arts.add("libpdf_inspector-dfd192e6df9e9eb4.so")
+    arts.add("libtauri_app_lib.a")
+    arts.add("libtauri_app_lib.so")
+    let rels = soCandidateRelsOf(arts, "libtauri_app_lib.so")
+    // 期望名排第一：这就是 HAP 真正要加载的那个
+    @Assert(rels.size > 0, true)
+    @Assert(rels[0], "libtauri_app_lib.so")
+    // 不该把不带 hash 的期望名塞进 deps（它不在那儿）
+    @Assert(rels[0] != "deps/libtauri_app_lib.so", true)
+    // 其它 .so 仍作为兜底候选，且同时给出 deps 形态（hash 产物落在 deps 里）
+    var hasDep = false
+    for (r in rels) {
+        if (r == "deps/libpdf_inspector-dfd192e6df9e9eb4.so") {
+            hasDep = true
+        }
+    }
+    @Assert(hasDep, true)
+    // 期望名与 artifacts 重名时不重复列（只出现一次，避免无意义的重复 stat）
+    let dup = ArrayList<String>()
+    dup.add("libgrove_lib.so")
+    let rels2 = soCandidateRelsOf(dup, "libgrove_lib.so")
+    @Assert(rels2[0], "libgrove_lib.so")
+    @Assert(rels2[1], "deps/libgrove_lib.so")
+    @Assert(rels2.size, 2)
+    // 没有产物名（拿不到 [lib]/包名）时只按 artifacts 罗列，不瞎猜
+    let none = soCandidateRelsOf(arts, "")
+    @Assert(none[0], "libpdf_inspector-dfd192e6df9e9eb4.so")
+    // 一条 .so 都没有：空列表（调用方据此让闸如实报"没产出"）
+    let empty = soCandidateRelsOf(ArrayList<String>(), "libx.so")
+    @Assert(empty.size, 1)
+    @Assert(empty[0], "libx.so")
+}

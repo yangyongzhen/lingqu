@@ -2512,7 +2512,12 @@ public class BuildCommand <: CommandHandler {
 
         // ---- T5-2 前端指纹校验：`.so` 内嵌 AssetKey ↔ dist/ 实际产物 ----
         // 只在"编译成功且产出了 .so"时才有得比；失败构建天然没有 .so，闸会如实说"没扫到"。
-        let soPath = findSoArtifactOf(srcDir, target, parsed.artifacts)
+        // 0.39.100：期望产物名要**先**算出来——cargo 的 artifact 顺序不保证应用自己的排在前面，
+        // 靠"第一个 .so"取会拿到 deps 里的 hash 中间产物（§4-151）。
+        // 鸿蒙产物闸的输入（0.39.81）：库名与 cdylib 声明决定"期望的产物叫什么"
+        let cargoTomlText = readTextOrEmpty("${srcDir}/Cargo.toml")
+        let expectedSo = expectedLibNameOf(cargoTomlText, projectNameOf(path))
+        let soPath = findSoArtifactOf(srcDir, target, parsed.artifacts, expectedSo)
         // verifyOnly 模式下没有 cargo 输出，直接从磁盘上找最近产出的 .so
         let soPathFinal = if (soPath != "") { soPath } else if (verifyOnly) { findSoOnDisk(srcDir, target) } else { "" }
         var distDir = resolveDistDirOf(path, srcDir)
@@ -2547,9 +2552,6 @@ public class BuildCommand <: CommandHandler {
         // 真实 diff 由 t2h:port 幂等重跑产生），拿 0/0 去撞"空补丁"闸只会造出假失败（实测撞到过）。
         let gateReports = ArrayList<GateReport>()
         let baselineErrors = if (verifyOnly) { -1 } else { lastBuildErrorCountOf(path) }
-        // 鸿蒙产物闸的输入（0.39.81）：库名与 cdylib 声明决定"期望的产物叫什么"
-        let cargoTomlText = readTextOrEmpty("${srcDir}/Cargo.toml")
-        let expectedSo = expectedLibNameOf(cargoTomlText, projectNameOf(path))
         if (!verifyOnly) {
             gateReports.add(checkCompileGate(exitCode, effectiveErrors))
             gateReports.add(checkRegressionGate(baselineErrors, effectiveErrors))
@@ -2668,21 +2670,26 @@ func resolveCargoBin(): String {
     return ""
 }
 
-/** 找 cargo 产出的 .so 绝对路径：优先按 artifacts 里的文件名去 target 目录拼 */
-func findSoArtifactOf(srcDir: String, target: String, artifacts: ArrayList<String>): String {
-    var soName = ""
-    for (a in artifacts) {
-        if (a.endsWith(".so")) {
-            soName = a
-            break
+/**
+ * 找 cargo 产出的 .so 绝对路径：期望名优先 → artifacts 逐个试 `release/` 与 `deps/` → 磁盘兜底。
+ *
+ * 0.39.100：按「artifacts 第一个 `.so`」取会拿到 deps 里的 hash 中间产物（note-gen-2 现场），
+ * 拼出的路径不存在 ⇒ 整条链被判"没产出 .so"（§4-151）。候选顺序由纯函数
+ * `soCandidateRelsOf` 决定，可单测。
+ */
+func findSoArtifactOf(srcDir: String, target: String, artifacts: ArrayList<String>,
+    expectedSo: String): String {
+    let rel = "${srcDir}/target/${target}/release"
+    for (c in soCandidateRelsOf(artifacts, expectedSo)) {
+        let p = "${rel}/${c}"
+        if (exists(Path(p))) {
+            return p
         }
     }
-    if (soName == "") {
-        return ""
-    }
-    let p = "${srcDir}/target/${target}/release/${soName}"
-    if (exists(Path(p))) {
-        return p
+    // cargo 一条 artifact 都没报（增量编译全是 Fresh）⇒ 只能按磁盘兜底，别报假红。
+    // 编译失败时闸会先短路，这里不会把"没编出来"变成通过。
+    if (artifacts.size == 0) {
+        return findSoOnDisk(srcDir, target)
     }
     return ""
 }

@@ -305,6 +305,10 @@ src/ + assets/         业务包：一份业务代码，两端各编各的产物
 
 
 
+| 151 | `t2h:build` 在 note-gen-2 上报「鸿蒙产物闸：编译成功但没产出 `libtauri_app_lib.so`」，可那个 `.so` **明明就在盘上**（33,012,312 B，就是这次编出来的）；同时 `assetDiff` 三组全是空数组——指纹闸压根没跑 | **"第一个 `.so`"不等于"应用自己的那个 `.so`"**：cargo `--message-format=json` 报的 artifact 顺序是 `["libpdf_inspector-<hash>.so", "libtauri_app_lib.a", "libtauri_app_lib.so"]`——**deps 里的 hash 中间产物排在前面**。旧 `findSoArtifactOf` 取"第一个 `.so`"就拼成 `release/libpdf_inspector-<hash>.so`（它在 `deps/` 下，不在 `release/` 下），`exists()` 为假 ⇒ 返回空串 ⇒ 产物闸假红、前端指纹闸被一起跳过。于是"没找到 .so"与".so 就在盘上"同时成立，agent 会去怀疑 cdylib 声明/编译参数。处置：候选顺序收成**纯函数** `soCandidateRelsOf`（**期望名优先**，即 `expectedLibNameOf` 算出的 `lib<name>.so`——HAP 真正加载的就是它；再逐个试 `release/` 与 `deps/`），并把 `expectedSo` 的算点**提到找 .so 之前**；cargo 一条 artifact 都没报（增量全 Fresh）时按磁盘兜底——**"这条命令没输出"不等于"没有产物"**。实测修后 `gates.passed=true`、`soPath` 有值、`assetDiff.matched=12`（此前 12 个前端键一个都没比）。**三条判据**：① 凡是"从一堆产物里挑一个"，都要能说出**为什么是它**——按名字点名的优先于"列表里第一个"（§4-46 同族：别用"至少有一个 .so"这种弱判据）；② 判"没产出"之前先分清**产物不存在**与**我们找错了位置**，后者会把已经成功的步骤整片判假红；③ 闸的输入（期望产物名）算得比闸**晚**，是漏判的常见来源——先算期望，再定位，再判（0.39.100） |
+| 152 | 门禁第 ② 闸 `[FAIL] cjpm test exit=1（FAILED=0 ERROR=0）`，输出里只有一句 `Created process failed, errMessage: "Access is denied."`，看不出哪条用例挂了 | **那是安全软件拦了"进程创建"，不是用例失败**（360 安全卫士实测）。判据：`FAILED=0 / ERROR=0` 与 exit=1 同时出现 ⇒ 先怀疑**起不来**而不是**跑挂了**；绕过门禁脚本直接跑 `target/release/unittest_bin/lingqu.tests.exe`，若它自己回 `TOTAL/PASSED/FAILED` 全绿就证明确是用例全过。处置：放行/白名单该测试可执行文件后重跑门禁即绿（本次实测放行后 `TOTAL=500，FAILED=0，ERROR=0`）。**别在这种红面前去改用例**——§4-15 是同一族（门禁必须打印日志尾部），这次补一条：**看到 `Access is denied` 先问"谁在拦进程"，别问"哪条用例错了"**（2026-11-09） |
+
+
 **一边做一边沉淀**：每轮改动完成时，同批更新
 
 1. `CHANGELOG.md` —— 该版本做了什么（Keep a Changelog 风格，按 Added / Changed / Fixed 分组）
