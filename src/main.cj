@@ -630,7 +630,9 @@ func verifyRecordOf(res: JsonObject, root: JsonValue, shots: Int64, projPath: St
         }
         case None => ()
     }
-    for (k in ["total", "pass", "fail", "limit", "unknown", "covered", "notVerified", "ratePercent", "featurePass"]) {
+    for (k in ["total", "pass", "fail", "limit", "unknown", "covered", "notVerified", "ratePercent",
+               "featurePass", "transplantTotal", "transplantNotVerified",
+               "businessTotal", "businessTested", "businessPass"]) {
         res.put(k, JsonInt(argInt(stats, k, -1)))
     }
     res.put("scope", JsonString(argStr(stats, "scope", "")))
@@ -2220,7 +2222,7 @@ public class UiReportCommand <: CommandHandler {
         o.put("verifyTotal", JsonInt(argInt(args, "verifyTotal", 0)))
         o.put("verifyLimit", JsonInt(argInt(args, "verifyLimit", 0)))
         o.put("verifyUnknown", JsonInt(argInt(args, "verifyUnknown", 0)))
-        // 核心功能口径（0.39.89）：分母 = 有结论的项，未测单列
+        // 通过率口径（D-020，0.39.103）：分母=移植验收项里有结论的条数，业务功能不进分母、未测单列
         o.put("verifyCovered", JsonInt(argInt(args, "verifyCovered", -1)))
         o.put("verifyNotVerified", JsonInt(argInt(args, "verifyNotVerified", -1)))
         o.put("verifyScope", JsonString(argStr(args, "verifyScope", "")))
@@ -2230,6 +2232,22 @@ public class UiReportCommand <: CommandHandler {
         o.put("verifyRows", JsonInt(argInt(args, "verifyRows", 0)))
         o.put("verifyOverflow", JsonInt(argInt(args, "verifyOverflow", 0)))
         o.put("verifyRowH", JsonInt(argInt(args, "verifyRowH", 0)))
+        // 分节折叠（D-020，0.39.104）：移植项与业务功能分节，业务那节默认折叠。
+        // 这些读数只回答"屏幕上分了几节、折叠了几条"，不参与判定（§4-60：字段要两处一起加）
+        o.put("verifySections", JsonInt(argInt(args, "verifySections", 0)))
+        o.put("verifyMainRows", JsonInt(argInt(args, "verifyMainRows", 0)))
+        o.put("verifyBizRows", JsonInt(argInt(args, "verifyBizRows", 0)))
+        o.put("verifyBizOpen", JsonInt(argInt(args, "verifyBizOpen", -1)))
+        o.put("verifyBizText", JsonString(argStr(args, "verifyBizText", "")))
+        o.put("verifyNoteText", JsonString(argStr(args, "verifyNoteText", "")))
+        o.put("verifyListH", JsonInt(argInt(args, "verifyListH", 0)))
+        // 口径字段有没有被界面接住（0.39.104 实测：VERIFY 重建时漏取 businessTotal，
+        // 于是 verNote 里那句「业务功能 N 条…不计入」永远是空的一支）
+        o.put("verifyBusinessTotal", JsonInt(argInt(args, "verifyBusinessTotal", -1)))
+        o.put("verifyTransplantTotal", JsonInt(argInt(args, "verifyTransplantTotal", -1)))
+        // 折叠分节自检结论（LINGQU_UI_PROBE=verifysections）：1=通过，0=没跑或不通过
+        o.put("verifyProbe", JsonInt(argInt(args, "verifyProbe", 0)))
+        o.put("verifyProbeFail", JsonString(argStr(args, "verifyProbeFail", "")))
         // T6-5 断点续迁（t2h:resume 回投）：next 是"从哪一步继续"，percent 是完成度
         o.put("resumeOk", JsonBool(argBool(args, "resumeOk", false)))
         o.put("resumeNext", JsonString(argStr(args, "resumeNext", "")))
@@ -4109,6 +4127,12 @@ public class VerifyCommand <: CommandHandler {
         // 只显示一个百分比就等于把"测了 2 项全过"说成"全都可用"。
         res.put("covered", JsonInt(stats.covered))
         res.put("notVerified", JsonInt(stats.notVerified))
+        // D-020：分母只认移植验收项；业务功能单列回投，界面据此写"属原应用职责、不计入"
+        res.put("transplantTotal", JsonInt(stats.transplantTotal))
+        res.put("transplantNotVerified", JsonInt(stats.transplantNotVerified))
+        res.put("businessTotal", JsonInt(stats.businessTotal))
+        res.put("businessTested", JsonInt(stats.businessTested))
+        res.put("businessPass", JsonInt(stats.businessPass))
         res.put("scope", JsonString(stats.scope))
         res.put("scopeNote", JsonString(stats.scopeNote))
         res.put("ratePercent", JsonInt(stats.ratePercent))
@@ -4857,7 +4881,7 @@ public class BatchCommand <: CommandHandler {
             ro.put("verifyPass", JsonInt(r.verifyPass))
             ro.put("verifyTotal", JsonInt(r.verifyTotal))
             ro.put("verifyLimit", JsonInt(r.verifyLimit))
-            // 分母 = 有结论的核心功能项（0.39.89）；老落档没 covered → 回落 total−limit
+            // 分母 = 有结论的移植验收项（D-020）；老落档没 covered → 回落 total−limit
             let vDenom = if (r.verifyCovered > 0) { r.verifyCovered } else { r.verifyTotal - r.verifyLimit }
             ro.put("verifyDenom", JsonInt(vDenom))
             ro.put("verifyCovered", JsonInt(r.verifyCovered))

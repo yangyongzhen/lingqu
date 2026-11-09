@@ -12,10 +12,11 @@ import stdx.encoding.json.*
  *     读前面几轮落档的 scan / build / hap / deploy 结果，喂给本层，最后落盘。
  *
  * 三条口径先钉死，避免"数字好看但站不住"：
- *   ① **分母 = 核心功能清单**（0.39.89 改）：扫描到的每条 IPC 命令就是一条核心功能，
- *      可用率 = 其中**有结论的**（pass + fail）里通过的比例。不许拿"装得上 / 编得过 / 起得来"
- *      这类**装配步骤**冒充功能可用性——用户真机实测过：⑥ 屏报 100%，
- *      而「选择文件」「保存目录」两个按钮点了**完全没反应**。
+ *   ① **分母 = 移植验收项**（0.39.103 改，D-020）：装得上 / 起得来 / 渲染得出 / 前端资源进包 /
+ *      IPC 与事件通道 / 平台能力有落地等价物。**原应用自己的业务功能不进分母**——
+ *      逐条点永远点不完，缺网/缺配置也必然过不了，那不属移植职责。
+ *      早先（0.39.89~0.39.102）曾把扫描到的每条 IPC 命令都当"核心功能"塞进分母，
+ *      结果 note-gen-2 算出 4/16 = 25%，分母还挂着 169 项未测——**分母做不完，≥80% 就永远悬着**。
  *   ② **未测记未测**：`unknown` **不进分母**，但必须显式计数（`notVerified`）并写进报告与界面。
  *      少了这个数，"只测了 2 项、通过 2 项 = 100%"就会被读成"全都可用"。
  *   ③ **平台限制要拿"降级落地"换**：一处平台 API 只有在**工程里真的写了替代实现**时，
@@ -30,10 +31,23 @@ public class CheckItem {
     public var id: String = ""
     public var title: String = ""
     /**
-     * 条目类别：`gate`（装配步骤：编得过 / 装配过 / 起得来）或 `feature`（核心功能）。
+     * 条目类别：`gate`（装配步骤：编得过 / 装配过 / 起得来）或 `feature`（功能项明细）。
      * 可用率的分母只认 `feature`——这是 0.39.89 的口径修正点。
      */
     public var kind: String = "gate"
+    /**
+     * 责任分类（D-020，0.39.103）：**A4 的分母只认 `transplant`**。
+     *
+     * - `transplant`：移植该负责的事——装得上 / 起得来 / 渲染得出 / 前端资源进包 / IPC 通道通 /
+     *   平台 API 有落地的等价实现 / 插件与事件登记清楚；
+     * - `business`：**原应用自己的业务功能**（`feat:<IPC 命令>`，如 start_download、ai_json_request）。
+     *   这类逐条点永远点不完，缺网/缺配置也必然过不了，**不属移植职责**，只统计条数；
+     * - `smoke`：业务功能的真机冒烟点按（`feat:probe:*`），单列，**不计入移植通过率**。
+     *
+     * 为什么必须分开：把业务功能塞进分母，等于替原应用的 bug 背锅，而且分母永远做不完
+     * （见 D-020 与 §4-63 第三态）。
+     */
+    public var category: String = "transplant"
     /** 判定：pass / fail / limit（平台限制）/ unknown（证据没采到） */
     public var verdict: String = ""
     /** 挂在这条上的证据（截图 / hilog / 落档文件 / 命令返回） */
@@ -58,6 +72,10 @@ public class CheckItem {
         var o = JsonObject()
         o.put("id", JsonString(this.id))
         o.put("title", JsonString(this.title))
+        // D-020：classified 必须落档——界面要靠它把"移植验收项 / 业务功能 / 冒烟"分开显示，
+        // 缺了这个字段，回读落档就只能靠 id 前缀猜，迟早猜错（§4-60 的同类坑：字段没写=静默丢证据）
+        o.put("kind", JsonString(this.kind))
+        o.put("category", JsonString(this.category))
         o.put("verdict", JsonString(this.verdict))
         o.put("note", JsonString(this.note))
         var e = JsonArray()
@@ -113,10 +131,12 @@ public class ChecklistInput {
 }
 
 /**
- * 一条**核心功能**（A4 的分母）。来源：scan 落档的 `items.commands`——每条 IPC 命令就是一个功能。
+ * 一条**原应用的业务功能**（D-020：**不进 A4 分母**，只统计条数、供真机冒烟选点）。
+ * 来源：scan 落档的 `items.commands`——每条 IPC 命令就是一个业务功能。
  *
- * 为什么不能拿"装配步骤"当分母（0.39.89 用户真机实测）：⑥ 屏报「核心功能可用率 100%」，
- * 而「选择文件」「保存目录」两个按钮在真机上**点了完全没反应**——装得上 ≠ 功能能用。
+ * 为什么不能拿业务功能当分母（0.39.103 用户指正）：每个应用上百条命令逐条点，永远验不完；
+ * 没配网络、没配密钥、没登录，这些功能本来就跑不起来——**那不说明移植坏了**。
+ * 分母只认移植验收项（装得上/起得来/渲染/通道/平台能力），见 D-020。
  */
 public class FeatureInput {
     /** IPC 命令名（`pick_folder` / `start_download` …），也是清单项 id 的后半段 */
@@ -447,17 +467,34 @@ public class VerifyStats {
     /** 未测项数（unknown）：**不进分母**，但必须在报告与界面里显式写出来 */
     public var notVerified: Int64 = 0
     /**
-     * **核心功能**里的通过条数（`kind == "feature"` 且 verdict=pass）。
+     * **移植验收项**里的通过条数（`category == "transplant"` 且 verdict=pass）。
      *
-     * 为什么不复用 `pass`：`pass` 含 launch/build/hap/frontend 这些装配项，而 `covered` 只数功能项。
+     * 为什么不复用 `pass`：`pass` 含 launch/build/hap/frontend 这些装配项，而 `covered` 只数移植项。
      * 两者相除就是用户实测看到的「可用率 0%（**4/3 项有结论**）」——分子比分母还大（0.39.93）。
      */
     public var featurePass: Int64 = 0
-    /** 分母的口径来源：`features`（核心功能清单）/ `gates-only`（没扫过，只能退回装配口径） */
+    /**
+     * 移植验收项总数（D-020：**A4 的分母只认这一类**）。
+     *
+     * 业务功能（`category == "business"`，即 `feat:<IPC 命令>`）**不进这个数**——
+     * 逐条点永远点不完，缺网/缺配置也必然过不了，那不属移植职责。
+     */
+    public var transplantTotal: Int64 = 0
+    /** 移植项里没证据的条数（不进分母，但必须在报告与界面里写出来） */
+    public var transplantNotVerified: Int64 = 0
+    /** 业务功能条数（只统计"扫到多少"，**不要求逐条有结论**） */
+    public var businessTotal: Int64 = 0
+    /** 业务功能里真机冒烟点过的条数（单列，不计分） */
+    public var businessTested: Int64 = 0
+    /** 业务冒烟里通过的条数（同样不计分，只作参考） */
+    public var businessPass: Int64 = 0
+    /** 移植项里**来自真机实测**的条数（口径说明要能说清来源） */
+    public var probeFeatures: Int64 = 0
+    /** 分母的口径来源：`transplant`（移植验收项）/ `gates-only`（没扫过，只能退回装配口径） */
     public var scope: String = ""
     /** 口径来源的人话解释（直接进报告，别让人猜这个百分比在算谁） */
     public var scopeNote: String = ""
-    /** 可用率 = pass / covered；分母为 0 时按 0 处理（绝不"没数据就给 100"） */
+    /** 可用率 = transplantPass / transplantCovered；分母为 0 时按 0 处理（绝不"没数据就给 100"） */
     public var ratePercent: Int64 = 0
 
     public func toJson(): JsonObject {
@@ -470,6 +507,12 @@ public class VerifyStats {
         o.put("covered", JsonInt(this.covered))
         o.put("notVerified", JsonInt(this.notVerified))
         o.put("featurePass", JsonInt(this.featurePass))
+        o.put("transplantTotal", JsonInt(this.transplantTotal))
+        o.put("transplantNotVerified", JsonInt(this.transplantNotVerified))
+        o.put("businessTotal", JsonInt(this.businessTotal))
+        o.put("businessTested", JsonInt(this.businessTested))
+        o.put("businessPass", JsonInt(this.businessPass))
+        o.put("probeFeatures", JsonInt(this.probeFeatures))
         o.put("scope", JsonString(this.scope))
         o.put("scopeNote", JsonString(this.scopeNote))
         o.put("ratePercent", JsonInt(this.ratePercent))
@@ -570,12 +613,16 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
     }
     items.add(hap)
 
-    // ④ 核心功能逐条（**A4 的分母**）：扫描到的每条命令一条
-    //   判定顺序固定：人测过 → 以人的结论为准；命中平台 API 且降级未落地 → fail；其余 → 未测
+    // ④ 原应用业务功能逐条（D-020：**不进 A4 分母**，只统计条数 + 供真机冒烟）
+    //   判定顺序固定：人测过 → 以人的结论为准；命中平台 API 且降级未落地 → fail（说明这个平台能力没接上）；
+    //   其余 → 未测（不是"不可用"，是"没人验过"）
     for (f in inp.features) {
         let title = if (f.title != "") { f.title } else { f.commandName }
         let it = CheckItem("feat:${f.commandName}", title)
         it.kind = "feature"
+        // D-020：扫描出来的 IPC 命令是**原应用自己的业务功能**，不进移植验收分母、也不判 fail；
+        // `probe:` 前缀的是真机冒烟点按，单独归 smoke（同样不计入通过率）
+        it.category = if (f.commandName.startsWith("probe:")) { "smoke" } else { "business" }
         if (f.degradedApi != "") {
             it.evidence.add("命中平台 API：${f.degradedApi}")
         }
@@ -599,8 +646,12 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
             it.verdict = "pass"
             it.note = "人工实测：真机上可用"
         } else if (f.degradedApi != "" && !f.fallbackLanded) {
-            it.verdict = "fail"
-            it.note = "「${f.degradedApi}」在鸿蒙上没有等价物，降级方案未落地 → 真机上该功能不可用（这不是平台限制）"
+            // D-020：平台 API 空壳是**移植项**（platform-api）该记的账，那里已经判 fail 了；
+            // 业务功能本身没人实测过 → 只能记未测。否则同一件事扣两次，还会让业务清单
+            // 出现一片红色 fail，看着像"原应用全崩"——那是误报，不是移植结论。
+            it.verdict = "unknown"
+            it.note = "未实测；它依赖的「${f.degradedApi}」在鸿蒙侧是空壳（这条已由移植项 platform-api 记 fail），" +
+                "业务功能本身不计分"
         } else {
             it.verdict = "unknown"
             it.note = "未测：需要真机交互证据（点了真的出结果）或人工确认；不进可用率分母，但计入未测项"
@@ -705,60 +756,97 @@ func joinNames(names: ArrayList<String>): String {
 }
 
 /**
- * 按口径统计可用率（见文件头 ①②）。
+ * 按口径统计通过率（见文件头 ①②，D-020）。
  *
- * **分母优先取核心功能项**：只有一条功能明细都没有（没扫过）时，才退回装配口径，
- * 而且在 `scope / scopeNote` 里写明"这不代表功能可用"——让人一眼看出这个百分比在算谁。
+ * **分母只认移植验收项**（`category=transplant`）：装得上/起得来/渲染/前端资源/通道/平台能力。
+ * 原应用的业务功能（`business`）与真机冒烟（`smoke`）**单独计数、不进分母**——逐条点永远点不完。
+ * 一条移植项都没有（没跑过 verify）时退回装配口径，并在 `scope / scopeNote` 里写明
+ * "这不代表功能可用"——让人一眼看出这个百分比在算谁。
  */
 public func computeStats(items: ArrayList<CheckItem>): VerifyStats {
     let s = VerifyStats()
-    s.total = Int64(items.size)
+    // 全局计数（total/pass/fail/limit/unknown）**只覆盖移植项**：界面顶栏拿它显示
+    // 「通过 5/6」「失败 2」，若把冒烟项也算进来，一条业务功能点不亮就会被读成移植失败。
+    // 业务功能与冒烟各自单独计数（businessTotal/…/probeFeatures），见下面的分支。
+    // 口径（D-020）：**分母只认 `category=transplant`**——移植该负责的事。
+    // 业务功能（`feat:<IPC 命令>`）与真机冒烟单独计数：逐条点永远点不完，缺网/缺配置也必然过不了，
+    // 那不属移植职责，塞进分母就是替原应用的 bug 背锅（§4-63 第三态）。
+    var tTotal: Int64 = 0
+    var tPass: Int64 = 0
+    var tCovered: Int64 = 0
+    var tNotVerified: Int64 = 0
+    var bTotal: Int64 = 0
+    var bTested: Int64 = 0
+    var bPass: Int64 = 0
+    var sSmoke: Int64 = 0
     for (it in items) {
+        if (it.category == "business") {
+            bTotal += 1
+            if (it.verdict == "pass") {
+                bTested += 1
+                bPass += 1
+            } else if (it.verdict == "fail") {
+                bTested += 1
+            }
+            continue
+        }
+        if (it.category == "smoke") {
+            sSmoke += 1
+            if (it.verdict == "pass") {
+                bTested += 1
+                bPass += 1
+            } else if (it.verdict == "fail") {
+                bTested += 1
+            }
+            continue
+        }
+        // transplant：平台限制项照旧不进分母（但计入 total 与 limit，让人看得见"有限制"）
+        s.total += 1
         if (it.verdict == "pass") {
             s.pass += 1
-        } else if (it.verdict == "limit") {
-            s.limit += 1
         } else if (it.verdict == "fail") {
             s.fail += 1
+        } else if (it.verdict == "limit") {
+            s.limit += 1
         } else {
             s.unknown += 1
         }
-    }
-    // 核心功能面：只数功能项，limit 项照旧不进分母，未测的单列
-    var featureTotal: Int64 = 0
-    var fPass: Int64 = 0
-    var fCovered: Int64 = 0
-    var fNotVerified: Int64 = 0
-    for (it in items) {
-        if (it.kind != "feature") {
+        if (it.verdict == "limit") {
             continue
         }
-        featureTotal += 1
+        tTotal += 1
         if (it.verdict == "pass") {
-            fPass += 1
-            fCovered += 1
+            tPass += 1
+            tCovered += 1
         } else if (it.verdict == "fail") {
-            fCovered += 1
+            tCovered += 1
         } else if (it.verdict == "unknown") {
-            fNotVerified += 1
+            tNotVerified += 1
         }
     }
-    if (featureTotal > 0) {
-        s.scope = "features"
-        s.scopeNote = "分母 = 核心功能清单（${featureTotal} 条来自扫描的命令），通过 ${fPass} / 有结论 ${fCovered}；" +
-            "另有 ${fNotVerified} 项未测，不计入分母"
-        s.covered = fCovered
-        s.notVerified = fNotVerified
-        s.featurePass = fPass
-        if (fCovered > 0) {
-            s.ratePercent = (fPass * 100) / fCovered
+    s.transplantTotal = tTotal
+    s.transplantNotVerified = tNotVerified
+    s.businessTotal = bTotal
+    s.businessTested = bTested
+    s.businessPass = bPass
+    s.probeFeatures = sSmoke
+    if (tTotal > 0) {
+        s.scope = "transplant"
+        let unmeasured = if (tNotVerified > 0) { "；另有 ${tNotVerified} 项未测" } else { "" }
+        s.scopeNote = "分母 = 移植验收项 ${tTotal} 条（装得上/起得来/渲染得出/前端资源进包/IPC 与事件通道/" +
+            "平台能力有落地等价物），通过 ${tPass} / 有结论 ${tCovered}${unmeasured}" +
+            "。业务功能 ${bTotal} 条只作冒烟记录（实测 ${bTested} 条，通过 ${bPass} 条），属原应用职责，不计入移植验收"
+        s.covered = tCovered
+        s.notVerified = tNotVerified
+        s.featurePass = tPass
+        if (tCovered > 0) {
+            s.ratePercent = (tPass * 100) / tCovered
         }
     } else {
         s.scope = "gates-only"
-        s.scopeNote = "没扫过核心功能清单 → 退回装配口径（编得过 / 装配过 / 起得来），**不代表功能可用**"
+        s.scopeNote = "没有任何移植验收项 → 退回装配口径（编得过 / 装配过 / 起得来），**不等于可用**"
         s.covered = s.pass + s.fail
         s.notVerified = s.unknown
-        // 装配口径下分子分母同源，就是全局 pass（没有功能项可数）
         s.featurePass = s.pass
         if (s.covered > 0) {
             s.ratePercent = (s.pass * 100) / s.covered
@@ -793,8 +881,12 @@ public func renderMarkdown(ctx: ReportContext, items: ArrayList<CheckItem>, stat
     md += "- 生成时间：${ctx.generatedAt}\n\n"
 
     md += "## 一、做了什么\n\n"
-    md += "核心功能可用率 **${stats.ratePercent}%**（通过 ${stats.pass} / 有结论 ${stats.covered}）\n\n"
+    md += "移植验收通过率 **${stats.ratePercent}%**（通过 ${stats.featurePass} / 有结论 ${stats.covered}）\n\n"
     md += "- 口径：${stats.scopeNote}\n"
+    if (stats.businessTotal > 0) {
+        md += "- 业务功能 ${stats.businessTotal} 条属**原应用职责**，未逐条验证" +
+            "（真机冒烟 ${stats.businessTested} 条，通过 ${stats.businessPass} 条）——不计入上面的百分比\n"
+    }
     if (stats.notVerified > 0) {
         md += "- 注意：有 ${stats.notVerified} 项**未测**（不计入分母）：这个百分比只代表已测的那部分\n"
     }
@@ -862,8 +954,12 @@ public func renderHtml(ctx: ReportContext, items: ArrayList<CheckItem>, stats: V
     h += "<li>生成时间：${esc(ctx.generatedAt)}</li>\n</ul>\n"
 
     h += "<h2>一、做了什么</h2>\n"
-    h += "<p>核心功能可用率 <b>${stats.ratePercent}%</b>（通过 ${stats.pass} / 有结论 ${stats.covered}）</p>\n"
+    h += "<p>移植验收通过率 <b>${stats.ratePercent}%</b>（通过 ${stats.featurePass} / 有结论 ${stats.covered}）</p>\n"
     h += "<p>口径：${esc(stats.scopeNote)}</p>\n"
+    if (stats.businessTotal > 0) {
+        h += "<p>业务功能 ${stats.businessTotal} 条属<b>原应用职责</b>，未逐条验证" +
+            "（真机冒烟 ${stats.businessTested} 条，通过 ${stats.businessPass} 条）——不计入上面的百分比</p>\n"
+    }
     if (stats.notVerified > 0) {
         h += "<p>注意：有 ${stats.notVerified} 项<b>未测</b>（不计入分母）：这个百分比只代表已测的那部分</p>\n"
     }

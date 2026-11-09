@@ -5,6 +5,193 @@
 
 ---
 
+## [0.39.104] - 2026-11-09
+
+**主题**：⑥ 验证屏的**分节折叠**第一次被自动断言住——顺带揪出两个「界面没接住后端」的真缺陷。
+
+### 现象
+
+用户要求「起一轮探针看下 ⑥ 验证屏的分节折叠读数」。探针能跑，但**没有任何字段能证明折叠生效**：
+`verifyRows` 数的是 `#verList .evi`，把 `<details>` 折叠体内的行也一起数了，折叠与不折叠读数一模一样。
+
+### 根因
+
+三条一起看：
+
+1. **读数缺位**：折叠节（`<details>` + `<summary>`）没有任何回投字段 ⇒「180 条业务功能有没有被折起来」「默认是不是收起」「摘要把职责说清没有」全靠肉眼。
+2. **字段漏取（真 bug）**：`renderVerify` 重建 `VERIFY` 对象时没取 `businessTotal` / `businessTested`，而 `verNote` 的 biz 分支读的正是 `VERIFY.businessTotal` ⇒ 恒 `undefined > 0` = false ⇒
+   「业务功能 180 条属原应用职责，不计入」这句**永远不会出现**。后端 `main.cj` 一直在回投这两个键，回读白名单里也有 ⇒ 不是后端没给，是界面没接。
+3. **回读顶掉口径文案（真 bug）**：`fillStepFromRecord('verify','enter')` 成功时无条件把 `verNote` 改写成「已按落档回读：路径」，把 `renderVerify` 刚算好的「移植验收通过率 X%（分母 N 项有结论…）」整段盖掉 ⇒
+   用户进 ⑥ 屏读到的第一句是文件路径，不是通过率口径（§4-135 同族：回读通道把渲染结果顶掉）。
+
+### 处置
+
+- `renderVerify` 补齐 `businessTotal / businessTested / transplantTotal / transplantNotVerified` 四个字段；
+- `fillStepFromRecord` 成功分支对 `verify` 步**只追加后缀**「（按落档回读，未重新验证）」，不许顶掉口径文案；
+- `t2h:ui_report` 新增 `verifySections / verifyMainRows / verifyBizRows / verifyBizOpen / verifyBizText /
+  verifyNoteText / verifyListH / verifyBusinessTotal / verifyTransplantTotal / verifyProbe / verifyProbeFail`
+  （`index.html` 的 `reportUi` 与 `main.cj` 的白名单**两处一起加**，§4-60）；
+- 新增自检序列 `LINGQU_UI_PROBE=verifysections`：进 ⑥ 屏 → 判默认态 → 展开 → 收回并复查。
+  前提不成立（当前工程没有 verify 落档）时如实报 `no-record`，不许假绿（§4-136）。
+
+### 证据（note-gen-2 真机，2026-11-09 23:00）
+
+| 读数 | 值 |
+|---|---|
+| `verifySections` | **2**（移植项一节 + 业务功能折叠节） |
+| `verifyMainRows` | **7** |
+| `verifyBizRows` | **180** |
+| `verifyBizOpen` | **0**（默认收起）→ **1**（展开）→ **0**（收回） |
+| `verifyBizText` | 「业务功能 180 条 —— 属原应用职责，不计入移植通过率（实测 0 条：通 0 / 未过 0）」 |
+| `verifyBusinessTotal` | **180**（修复前恒 `undefined`） |
+| `verifyNoteText` | 「移植验收通过率 0%（分母 2 项有结论：0 通过 / 2 未过），另有 5 项未测；业务功能 180 条属原应用职责，不计入（冒烟 0 条）　（按落档回读，未重新验证）」 |
+| `verifyProbe / verifyProbeFail` | **1 / 空** |
+
+修复前同一探针报 `note-no-scope`（`verNote` 里只剩「已按落档回读：路径」），修后通过——判据确实抓到了缺陷，不是摆设。
+
+### 说明
+
+这轮 `verifyRate = 0%` **不是**移植质量问题：`note-gen-2/.lingqu` 在 22:44 被整体归档到 `_archive-*`，
+`scan/build/hap/deploy` 落档同时被挪走 ⇒ 分母只剩 2 项有结论。重跑 `lingqu-cli scan` + `lingqu-cli verify` 后
+清单恢复 187 项（180 业务 + 7 移植），折叠节才重新出现。
+
+---
+
+## [0.39.103] - 2026-11-09
+
+**主题**：A4 的**分母只认移植验收项**——原应用的业务功能降为冒烟记录，不再算移植的账。
+
+### 现象
+
+note-gen-2 真机跑出「核心功能可用率 **4/16 = 25%**」，可用率长期压在 0~25%。
+逐条核对分母：清单 192 项里 **180 项是 note-gen-2 自己的 IPC 命令**
+（`ai_json_request` / `start_download` / `pick_folder`…）。用户当场点破：
+「每个软件都这么验要验到什么时候？没配网、没配参数，有些功能必然过不了——移植不是给作者测业务功能」。
+
+### 根因
+
+把「原应用的职责」当成了「移植该证明的事」，两个后果同时成立：
+
+- 分母没有上界（每个应用上百条命令），"≥80%" 变成永远悬着的数；
+- 缺网 / 缺密钥 / 没登录时这些功能本来就跑不起来，失败与移植质量无关，却被算成移植不达标。
+
+### 处置
+
+- **分类**：`CheckItem` 新增 `category`（`transplant` / `business` / `smoke`）。移植项 = 装得上、
+  起得来、渲染得出、前端资源进包、IPC 与事件通道、平台能力有落地等价物；业务功能只统计条数。
+- **统计**：`VerifyStats` 新增 `transplantTotal` / `transplantNotVerified` / `businessTotal` /
+  `businessTested` / `businessPass` / `probeFeatures`；**分母与通过率只算 transplant**；
+  全局 `total/pass/fail/unknown` 也只覆盖移植项（否则一条冒烟失败会让界面报「失败 2 项」）。
+- **不双重计账**：平台 API 空壳的账记在移植项 `platform-api` 上；业务功能没人实测就只记 `unknown`，
+  不再因静态推断判 `fail`（早先写法让业务清单一片红，看着像"原应用全崩"）。
+- **落档**：`CheckItem.toJson()` 补 `kind` / `category`——少了它，回读时只能靠 id 前缀猜分类。
+- **文案统一**：报告头 / 矩阵 / 界面 ⑥ 屏 / agent 任务书一律改「移植验收通过率」，
+  业务功能单列并注明不参与验收；任务书里"把功能清单逐条点完"改成"点按属可选冒烟"。
+- **界面**：⑥ 屏清单按口径分节，业务功能默认折叠成一行摘要（180 条铺开会把移植项埋掉）。
+
+### 证据
+
+- note-gen-2 真机（`5VFUN26310G06052`）重算：`total=7 / pass=5 / fail=1 / unknown=1`，
+  `covered=6`、`ratePercent=83`、`scope=transplant`；`businessTotal=180`、`businessTested=5`、`businessPass=4`。
+  同一份落档里业务侧 **0 条 fail**（改前 11 条）。
+- 单测 514 通过 / FAILED 0 / ERROR 0；五道闸（build-biz / test / check / js-syntax / build-app / build-cli）全绿。
+- 口径决策见 `docs/设计决策记录.md` **D-020**；踩坑见 `AGENTS.md` §4-158。
+
+---
+
+## [0.39.102] - 2026-11-09
+
+**主题**：自动探针**别在错的地方点**——候选按当前版面重新枚举，前台不是应用就一条都不点。
+
+现象（本轮实跑，note-gen-2 真机 `5VFUN26310G06052`）：0.39.101 加的 `probe --auto --max 8`
+第一次真机跑完只拿到 **1 条 pass**，另外 7 条全是「点前版面树里找不到「X」」。
+`--max 4` 那一轮更糟：4 条全判 **fail**，而版面上根本是锁屏的日期文本（`11月9日`、`星期一`、`十月初一`）。
+
+根因（两层，第二层是"谎报"级别的）：
+
+1. **候选清单只枚举一次**：`runProbeAuto` 从首份版面 dump 里挑 `max` 条文本后就照着点，
+   而点一次现场就变一层（点「文本」弹出记录框 ⇒ 其余「插图/链接/文件/待办」全不在这一屏了）。
+   注释里写着「每条都单独 dump 一次点前版面」，实现却只 dump 不比候选——7/8 白花。
+2. **没有任何"这是不是我们的应用"的判据**：设备锁屏时版面上是桌面（`com.ohos.sceneboard`）的
+   日期文本，自动枚举照样点、照样落档，于是 4 条"点日期没反应"被记成功能 **fail**——
+   **拿桌面冒充功能**，还会顺着 `verify_feed` 变成 `probe:11月9日` 这类假功能项，把 A4 分母也带脏。
+
+处置：
+
+- `firstUntriedOf(cands, tried)` + 循环重枚举：**每轮按当前版面重新挑候选**，`tried` 账去重，
+  点完再 dump 下一次。落档新增 `tried` 计数。
+- `foregroundBundleOf(layoutJson)`：从 `uitest dumpLayout` 原文取**第一个非空** `bundleName`
+  （根节点那几个是空串，不跳过就永远取到空）。
+- `foregroundGateOf(foreground, expect)` 三档纯函数：期望包名已知 → 对不上就拦；
+  未知 → 只拦 `com.ohos.*` 系统界面；版面里没包名 → 不拦。
+- `probeExpectBundleOf(projName, projPath)`：先读 deploy 落档，再回退 `AppScope/app.json5`
+  （含扁平布局的 `gen/ohos/`、`src-tauri/gen/ohos/`）。闸不过就 `ok=false` + 说清原因，**一条都不落档**。
+- 单测新增 6 条（重枚举 2 + 前台闸 2 + 实质文本 2），`cjpm test` **512 / 512**。
+
+跑到应用真正在前台之后，又暴露**两处判据缺陷**（都是"凭噪声下结论"）：
+
+3. **纯数字/标点被当成"版面变化"⇒ 假 pass**：点「保存到」冒出「09、:、48」（时钟）、点「添加」冒出
+   「, ? !」（编辑器标点）都判了 **pass**。加 `hasWordContent()`（含 ASCII 字母或非 ASCII 字节才算有内容），
+   `newTextsOf` 跳过无实质内容的文本。
+4. **"点了没反应"被判 fail ⇒ 假失败**：工具分不清"没点中"（ArkWeb 文本节点 bounds 未必准）与
+   "功能真无响应"，判 fail 会让可用率凭观测缺陷**下降**（与假 pass 对称的谎报）⇒ 改成 `unknown`，
+   note 明写「可能是没点中，不据此判不可用」。候选清单也接 `hasWordContent`——
+   实测混进过 `09, :, 52` 这种时钟拼串，纯符号连起来的东西不是按钮。
+
+证据（真机实测，note-gen-2 / `5VFUN26310G06052`）：
+
+| 轮次 | 候选 | 结论 |
+|---|---|---|
+| 修复前 | 8 | 1 pass + 7「找不到节点」；`--max 4` 那轮 4 条全 fail（点的是锁屏日期） |
+| 只修重枚举 + 前台闸 | 7 | pass 由噪声撑起（`保存到` 因时钟、`添加` 因标点），其余 fail |
+| 三处判据都修完 | 7 | **「文本」/「新建标签」pass**（点后真多出「添加、取消」），其余 6 条如实 unknown |
+
+闸的实测证据（设备在桌面时）：`{"ok":false,"foreground":"com.ohos.sceneboard","expectBundle":"com.codexu.NoteGen"}`，
+落档条目数**未增加**。清掉上一轮写坏的 12 条假/废条目后重跑，
+`total=192 / covered=16 / featurePass=4 / probeFeatures=5 / ratePercent=25`，
+`scopeNote`=「分母 = 核心功能清单（185 条：扫描命令 180 条 + 真机实测 5 条），通过 4 / 有结论 16；另有 169 项未测」
+（分子分母**同源**）。报告侧 `verifyRate=25`、结论「8 步完成 8/8（100%），核心功能可用率 25%（4/16 项有结论，另 169 项未测）」。
+门禁五道闸全绿（`TOTAL=512 / FAILED=0 / ERROR=0`，六项 PASS）。
+
+## [0.39.101] - 2026-11-09
+
+**主题**：验证这件事**不该等人**——`probe` 能自动枚举点击，实测结论也不再被统计丢掉。
+
+现象（用户实测，桌面 UI 重跑一键迁移后）：界面进度 **100%**，报告却写
+「核心功能可用率 0%（5/3 项有结论，另 169 项未测）」。一查 `.lingqu/verify/note-gen-2.probe.json`：
+真机探针确实自动跑了 3 项（`new_note` pass / `new_canvas` pass / `global_search` unknown），
+**一条人工都没要**，但这些结论在清单里一条都没出现。
+
+根因（两个洞，各自都能让"自动验证"失效）：
+
+1. **接口要求"每条都由人/你先知道按钮叫什么"**：`probe` 只收 `--feature <命令名> --click-file <按钮文本>`，
+   于是 agent 探了 3 项就没词了 —— 剩下 169 项永远停在"未测"，覆盖推不动；
+2. **对不上号就被静默丢弃**：`verify_feed.cj` 只把实测结论挂到**同名 IPC 命令**上，
+   而界面语义名（`new_note`）与清单里的命令名（`ai_json_request`）天然对不上 ⇒ 两条真机 `pass`
+   在落档里躺着，分母里没有它们（与 §4-135 / §4-140「干活的一方写了、显示的一方没读」同族）。
+
+处置（三处，缺一条闭环都推不动）：
+
+- **Added `lingqu-cli probe --auto [--max N]`**：不用谁知道按钮叫什么，自己去 `uitest dumpLayout`
+  的版面树里枚举能点的文本，逐个点、逐个比对、逐条落档。判据收成纯函数：
+  `nonButtonText`（时钟「12:34」/日期/纯数字不是按钮——现场实测过点完只有时钟 35→34 在变）、
+  `riskyClickText`（删除/卸载/清空/登录… 默认跳过：自动点按跑在**真实用户的工程**上）、
+  `clickableTextsOf`（先收 `clickable=true`，再收"不可点但文本短"的——ArkWeb 里整片按钮没有该标记）。
+  **每条都重新 dump 一次点前版面**（点完现场就变了，复用同一份 before 会把后面几条全判 fail）。
+- **Fixed 实测结论不再被丢弃**：`collectChecklistInput` 记下被命令清单吸收的实测名，
+  余下的以 `FeatureInput("probe:<名>")` 进清单，条目 note 明写「真机实测」，
+  `VerifyStats.probeFeatures` 单列条数，`scopeNote` 改成「扫描命令 N 条 + 真机实测 M 条」。
+- **Changed 任务书**：新增「自动验证闭环」段——先 `probe --auto`，再对 `verdict=unknown` 的项点名探，
+  **目标是「每一项都有结论」**，探不到要写清缺什么现场，别探 2~3 项就收工。
+
+验证：`cjpm build` 零警告；`cjpm test` **TOTAL 505 / PASSED 505 / FAILED 0 / ERROR 0**
+（新增 `src/tests/probe_auto_test.cj` 5 条：时钟与纯数字、危险词、长度阈值、
+可点优先与去重、`--max` 边界）。
+**未验证**：`probe --auto` 尚未在真机上实跑一轮（下一轮迁移才会用上），
+真机侧效果以 `.lingqu/verify/<工程>.probe.json` 的条目数 + 报告 `probeFeatures` 为准。
+
+---
+
 ## [0.39.100] - 2026-11-09
 
 **主题**：`.so` **就在盘上**，闸却报"没产出"——"第一个 `.so`"不是"应用自己的 `.so`"。

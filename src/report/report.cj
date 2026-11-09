@@ -208,22 +208,21 @@ public func assessRisks(facts: MigrationFacts): ReportRisk {
         }
     }
 
-    // ④ 功能清单三类：失败（高）> 未验证（中）> 平台限制（中，但不算失败）
+    // ④ 移植验收项三类：失败（高）> 未验证（中）> 平台限制（中，但不算失败）
+    //    D-020：**业务功能的失败不进这张表**——缺网/缺配置/没登录本来就跑不起来，那不属移植职责。
+    //    `failedItems` 收集时已按 category 过滤，这里只认移植项。
     if (facts.failedItems.size > 0) {
-        risk.add(RiskItem("${facts.failedItems.size} 项核心功能验证失败（${briefTitles(facts.failedItems)}）",
-            RISK_HIGH, "这些功能在鸿蒙上不可用，可用率因此不达标",
-            "处理完再采一次证据：⑥ 屏「采集证据并算可用率」"))
-    } else if (facts.verifyFail > 0) {
-        risk.add(RiskItem("${facts.verifyFail} 项核心功能验证失败", RISK_HIGH,
-            "这些功能在鸿蒙上不可用，可用率因此不达标", "看 .lingqu/verify 落档的 items 明细"))
+        risk.add(RiskItem("${facts.failedItems.size} 项移植验收项未通过（${briefTitles(facts.failedItems)}）",
+            RISK_HIGH, "这些是移植该负责的事（装得上/起得来/渲染得出/通道与平台能力），没通过就说明移植还没做完",
+            "看 .lingqu/verify 落档里这些项的 note 与证据，再跑 ⑥ 屏「采集证据并算可用率」"))
     }
     if (facts.unknownItems.size > 0) {
-        risk.add(RiskItem("${facts.unknownItems.size} 项功能未验证（${briefTitles(facts.unknownItems)}）",
+        risk.add(RiskItem("${facts.unknownItems.size} 项移植验收项未验证（${briefTitles(facts.unknownItems)}）",
             RISK_MID, "没有证据就不算可用（未验证 ≠ 通过）",
             "补验证：采到证据后才会从「未验证」变成通过"))
     }
     if (facts.limitItems.size > 0) {
-        risk.add(RiskItem("${facts.limitItems.size} 项功能受平台限制（${briefTitles(facts.limitItems)}）",
+        risk.add(RiskItem("${facts.limitItems.size} 项移植验收项受平台限制（${briefTitles(facts.limitItems)}）",
             RISK_MID, "这些能力在鸿蒙上降级或不可用（已登记，不算失败）",
             "确认产品上可接受；必要时改交互方案"))
     }
@@ -363,11 +362,23 @@ public class MigrationFacts {
     /** 未测项数：不进分母，但报告与界面必须写出来 */
     public var verifyNotVerified: Int64 = 0
     /**
-     * **核心功能**通过条数（不等于 `verifyPass`：后者含 launch/build/hap/frontend 装配项）。
+     * **移植验收项**通过条数（不等于 `verifyPass`：后者含 launch/build/hap/frontend 装配项）。
      * 结论句的分子必须用它，否则会出现「可用率 0%（4/3 项有结论）」这种分子比分母大的假数字（0.39.93）。
      */
     public var verifyFeaturePass: Int64 = 0
-    /** 分母口径来源：`features`（核心功能清单）/ `gates-only`（没扫过，退回装配口径） */
+    /**
+     * 移植验收项总数（D-020：**A4 的分母**）。`-1` = 老落档没有这个字段。
+     *
+     * 业务功能（原应用的 IPC 命令）**不在这个数里**：缺网/缺配置就必然过不了，那不属移植职责。
+     */
+    public var verifyTransplantTotal: Int64 = -1
+    /** 业务功能条数（只统计扫到多少，**不要求逐条有结论**） */
+    public var verifyBusinessTotal: Int64 = 0
+    /** 业务功能里真机冒烟点过的条数（单列，不计分） */
+    public var verifyBusinessTested: Int64 = 0
+    /** 业务冒烟里通过的条数（单列，不计分） */
+    public var verifyBusinessPass: Int64 = 0
+    /** 分母口径来源：`transplant`（移植验收项）/ `features`（0.39.102 及更早的老落档）/ `gates-only`（没扫过，退回装配口径） */
     public var verifyScope: String = ""
     public var verifyRate: Int64 = -1
     public var limitItems: ArrayList<String> = ArrayList<String>()
@@ -504,8 +515,12 @@ public func buildReport(facts: MigrationFacts): ReportDoc {
     if (facts.lessonCount > 0 && facts.lessonsLine != "") {
         did.lines.add(facts.lessonsLine)
     }
-    if (facts.verifyPass > 0 || facts.verifyCovered > 0) {
-        did.lines.add("核心功能清单通过 ${facts.verifyPass}/${facts.verifyCovered} 项（分母只算有结论的项）")
+    if (facts.verifyCovered > 0) {
+        did.lines.add("移植验收项通过 ${facts.verifyFeaturePass}/${facts.verifyCovered} 项（分母只算有结论的移植项）")
+    }
+    if (facts.verifyBusinessTotal > 0) {
+        did.lines.add("业务功能 ${facts.verifyBusinessTotal} 条属原应用职责，未逐条验证" +
+            "（真机冒烟 ${facts.verifyBusinessTested} 条，通过 ${facts.verifyBusinessPass} 条）——不计入移植验收")
     }
     if (facts.verifyNotVerified > 0) {
         did.lines.add("还有 ${facts.verifyNotVerified} 项没测（不计入分母：别把上面的百分比读成「全都可用」）")
@@ -522,7 +537,7 @@ public func buildReport(facts: MigrationFacts): ReportDoc {
         undone.lines.add("未验证（没有证据就不算通过）：${t}")
     }
     for (t in facts.failedItems) {
-        undone.lines.add("验证失败：${t}")
+        undone.lines.add("移植验收项未通过：${t}")
     }
     if (facts.decisionsNote != "") {
         undone.lines.add(facts.decisionsNote)
@@ -588,15 +603,16 @@ public func buildReport(facts: MigrationFacts): ReportDoc {
     return doc
 }
 
-/** 一句话结论：8 步进度 + 可用率 + 人工介入数（A3/A4 两个验收指标都在这一句里） */
+/** 一句话结论：8 步进度 + 移植验收通过率 + 人工介入数（A3/A4 两个验收指标都在这一句里） */
 public func reportConclusion(facts: MigrationFacts): String {
     var rateText = "尚未验证"
     if (facts.verifyRate >= 0) {
         rateText = "${facts.verifyRate}%"
         if (facts.verifyCovered > 0) {
-            // 分子分母必须同源（0.39.93）：features 口径用"功能通过数"，否则拿装配 pass（含 launch/build/hap/frontend）
-            // 去除以功能分母，就会写出「可用率 0%（4/3 项有结论）」——分子比分母还大。
-            let num = if (facts.verifyScope == "features") { facts.verifyFeaturePass } else { facts.verifyPass }
+            // 分子分母必须同源（0.39.93）：移植口径用"移植项通过数"，否则拿装配 pass（含 launch/build/hap/frontend）
+            // 去除以移植分母，就会写出「可用率 0%（4/3 项有结论）」——分子比分母还大。
+            // 0.39.103（D-020）：老落档的 `features` 口径按同一套处理（那时它数的也是移植项的超集）。
+            let num = if (facts.verifyScope == "gates-only") { facts.verifyPass } else { facts.verifyFeaturePass }
             rateText += "（${num}/${facts.verifyCovered} 项有结论"
             if (facts.verifyNotVerified > 0) {
                 rateText += "，另 ${facts.verifyNotVerified} 项未测"
@@ -604,8 +620,14 @@ public func reportConclusion(facts: MigrationFacts): String {
             rateText += "）"
         }
     }
+    // D-020：业务功能单列，且**明说它不参与验收**——否则读的人会拿它当移植质量
+    var bizText = ""
+    if (facts.verifyBusinessTotal > 0) {
+        bizText = "；业务功能 ${facts.verifyBusinessTotal} 条属原应用职责，未逐条验证" +
+            if (facts.verifyBusinessTested > 0) { "（冒烟 ${facts.verifyBusinessTested} 条，通过 ${facts.verifyBusinessPass} 条）" } else { "" }
+    }
     return "${facts.project}：8 步完成 ${facts.stepDone}/${facts.stepTotal}" +
-        "（${facts.stepPercent}%），核心功能可用率 ${rateText}，" +
+        "（${facts.stepPercent}%），移植验收通过率 ${rateText}${bizText}，" +
         "${facts.humanAccepted} 处人工介入"
 }
 

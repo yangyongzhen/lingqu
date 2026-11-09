@@ -110,7 +110,7 @@ public func testRiskFailedChecklistIsHigh(): Unit {
     @Assert(risk.overallLevel(), RISK_HIGH)
     @Assert(risk.countOf(RISK_HIGH), 1)
     let text = riskText(risk)
-    @Assert(text.contains("2 项核心功能验证失败"), true)
+    @Assert(text.contains("2 项移植验收项未通过"), true)
     @Assert(text.contains("配置列表加载"), true)
     @Assert(riskSummaryLine(risk).contains("总体：高"), true)
 }

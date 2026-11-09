@@ -69,9 +69,11 @@ public func testChecklistGreenPathAllPassOrLimit(): Unit {
 
 @Test
 public func testStatsExcludeLimitsFromDenominator(): Unit {
-    // 没有功能明细时退回装配口径：分母 = 有结论的项，limit 与未测都剔出
+    // 分母 = 有结论的移植验收项，limit 与未测都剔出
+    // （D-020 起 gate 项本身就是 transplant 类，所以这里不再有 gates-only；
+    //   gates-only 只剩"一条移植项都没有"的兜底）
     let s = computeStats(buildChecklist(greenInput()))
-    @Assert(s.scope, "gates-only")
+    @Assert(s.scope, "transplant")
     @Assert(s.limit, 0)
     // 手工造：1 通过 + 1 限制 → 分母 1、可用率 100
     let items2 = ArrayList<CheckItem>()
@@ -356,16 +358,18 @@ func itemOf(items: ArrayList<CheckItem>, id: String): CheckItem {
 @Test
 public func testFeatureWithoutFallbackIsFailNotLimit(): Unit {
     // 现场形态：pick_m3u8_file 命中 rfd::FileDialog，OHOS 分支 return None，前端无兜底
+    // D-020 后行为变了：**平台空壳的账记在移植项 platform-api 上**，业务功能本身没人实测 → unknown。
+    // （早先这里判 fail，结果同一件事扣两次，业务清单还一片红，看着像"原应用全崩"）
     let i = greenInput()
     i.features.add(featOf("pick_m3u8_file", "选择本地 m3u8 文件", "rfd::FileDialog", false))
     i.features.add(featOf("pick_folder", "选择保存目录", "rfd::FileDialog", false))
     let items = buildChecklist(i)
     for (id in ["feat:pick_m3u8_file", "feat:pick_folder"]) {
         let it = itemOf(items, id)
-        // 修之前：清单里根本没有这一项（分母是装配步骤），可用率照样 100%
-        @Assert(it.verdict, "fail")
+        @Assert(it.category, "business")          // 不是移植项，不进分母
+        @Assert(it.verdict, "unknown")            // 没实测过就只能记未测
         @Assert(it.note.contains("rfd::FileDialog"), true)
-        @Assert(it.note.contains("降级"), true)
+        @Assert(it.note.contains("platform-api"), true)   // 说清这笔账记在哪儿
     }
 }
 
@@ -559,16 +563,81 @@ public func testProbeEvidenceLandsInChecklistItem(): Unit {
 
 @Test
 public func testStatsExposeFeaturePassSeparately(): Unit {
-    // 用户看到的现场：装配 4 项 pass + 3 项功能 fail → 报告那句「4/3 项有结论」
+    // 用户看到的现场：装配 5 项 pass + 3 条业务功能判 fail（平台 API 没落地）
+    // D-020 之后：业务功能**不进分母**，所以这里验的是"它们被单独计数、且不污染通过率"
     let i = greenInput()
     i.features.add(featOf("pick_folder", "选择目录", "rfd::FileDialog", false))
     i.features.add(featOf("pick_m3u8_file", "选择文件", "rfd::FileDialog", false))
     i.features.add(featOf("open_in_explorer", "打开所在目录", "std::process::Command", false))
     let s = computeStats(buildChecklist(i))
-    @Assert(s.scope, "features")
-    // 全局 pass 含装配项 → 绝不能拿它当功能分子
-    @Assert(s.pass > s.featurePass, true)
-    @Assert(s.featurePass, 0)
-    @Assert(s.covered, 3)
-    @Assert(s.ratePercent, 0)
+    @Assert(s.scope, "transplant")
+    // 分母构成必须自洽：transplantTotal = 有结论 + 未测（limit 已被剔出）
+    @Assert(s.transplantTotal, s.covered + s.transplantNotVerified)
+    @Assert(s.featurePass, 5)
+    @Assert(s.covered, 5)
+    @Assert(s.ratePercent, 100)
+    // 业务功能：这 3 条只有静态推断（平台 API 空壳），没人实测 → 一条都不能算"测过"
+    @Assert(s.businessTotal, 3)
+    @Assert(s.businessTested, 0)
+    @Assert(s.businessPass, 0)
+}
+
+@Test
+public func testBusinessFeaturesAreNotInDenominator(): Unit {
+    // 核心回归（D-020）：业务功能**无论通过还是失败**，都不许改变移植通过率。
+    let items = ArrayList<CheckItem>()
+    let t1 = CheckItem("launch", "应用启动")
+    t1.verdict = "pass"
+    items.add(t1)
+    let t2 = CheckItem("hap", "HAP 装配")
+    t2.verdict = "pass"
+    items.add(t2)
+    // 三条原应用业务功能：一条过、两条挂
+    let b1 = CheckItem("feat:start_download", "下载")
+    b1.kind = "feature"
+    b1.category = "business"
+    b1.verdict = "pass"
+    let b2 = CheckItem("feat:ai_json_request", "AI 请求")
+    b2.kind = "feature"
+    b2.category = "business"
+    b2.verdict = "fail"
+    let b3 = CheckItem("feat:cancel_ai_request", "取消 AI 请求")
+    b3.kind = "feature"
+    b3.category = "business"
+    b3.verdict = "fail"
+    items.add(b1)
+    items.add(b2)
+    items.add(b3)
+    let s = computeStats(items)
+    @Assert(s.scope, "transplant")
+    @Assert(s.transplantTotal, 2)
+    @Assert(s.covered, 2)
+    @Assert(s.ratePercent, 100)   // ← 业务功能全挂也照样 100：那是原应用的账，不是移植的
+    @Assert(s.businessTotal, 3)
+    @Assert(s.businessTested, 3)
+    @Assert(s.businessPass, 1)
+}
+
+@Test
+public func testSmokeDoesNotAffectTransplantRate(): Unit {
+    // 真机冒烟（smoke）只作参考：挂了一条也不许把移植通过率拉下去
+    let items = ArrayList<CheckItem>()
+    let a = CheckItem("launch", "应用启动")
+    a.verdict = "pass"
+    let b = CheckItem("hap", "HAP 装配")
+    b.verdict = "fail"
+    items.add(a)
+    items.add(b)
+    let before = computeStats(items)
+    @Assert(before.ratePercent, 50)   // 1/2
+    let smoke = CheckItem("feat:probe:选择文件", "选择文件（冒烟）")
+    smoke.kind = "feature"
+    smoke.category = "smoke"
+    smoke.verdict = "fail"
+    items.add(smoke)
+    let after = computeStats(items)
+    @Assert(after.ratePercent, 50)    // 冒烟失败不改变移植通过率
+    @Assert(after.covered, 2)         // 也不进分母
+    @Assert(after.probeFeatures, 1)   // 但"实测过几条"要能数出来
+    @Assert(after.businessTested, 1)
 }

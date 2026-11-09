@@ -219,10 +219,13 @@ func readProjectSrc(projPath: String, rel: String): String {
 }
 
 /**
- * scan 落档 → **核心功能清单**（每条 IPC 命令一项）+ **平台 API 落地情况**。
+ * scan 落档 → **原应用业务功能清单**（每条 IPC 命令一项）+ **平台 API 落地情况**。
+ *
+ * D-020：这些业务功能**不进 A4 分母**（属原应用职责，缺网/缺配置就必然过不了），
+ * 但"命中的平台 API 有没有落地等价实现"仍是**移植该负责的事**——所以照旧要读源码判降级。
  *
  * 为什么要读源码：scan 只记了"这条命令在哪一行"和"这里用了 rfd::FileDialog"，
- * 而 A4 新口径要的是"降级方案**落地了没有**"——那必须看 `#[cfg(target_env = "ohos")]`
+ * 而判据要的是"降级方案**落地了没有**"——那必须看 `#[cfg(target_env = "ohos")]`
  * 那一套实现里到底写了什么（现场是 `None`，等于没落地）。
  * 判定本体是 `verify.cj` 里的纯函数（`ohosImplStubOnly` / `firstApiHitIn`），这里只负责取数。
  *
@@ -281,6 +284,7 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
 
     // 逐条命令：命中哪处平台 API / 鸿蒙侧是不是空壳 / 人测过没有
     let cmdArr = objFieldOf(items, "commands")
+    var matchedProbe = ArrayList<String>()
     match (cmdArr.kind()) {
         case JsonKind.JsArray =>
             let a = cmdArr.asArray()
@@ -303,6 +307,7 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                             if (pv == "pass" || pv == "fail") {
                                 f.probeVerdict = pv
                                 f.probeNote = jsonStrField(pr, "note")
+                                matchedProbe.add(nm)
                                 let pe = jsonStrField(pr, "evidence")
                                 if (pe != "") {
                                     f.probeEvidence.add(pe)
@@ -315,6 +320,28 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                 k += 1
             }
         case _ => ()
+    }
+
+    // 真机实测过、但扫描的命令清单里没有同名项的功能——**不许静默丢**。
+    // 实测现场（note-gen-2 2026-11-09）：探针点的是界面语义名（new_note / new_canvas / global_search），
+    // 而清单是 IPC 命令名（ai_json_request …），对不上号 ⇒ 两条真机 pass 被丢掉，报告照旧写 0%。
+    // 证据强度上，点过就是事实（高于任何静态推断），所以单独成项进清单，标题里写明来源。
+    for ((pk, pv) in probeFeatures.getFields()) {
+        if (matchedProbe.contains(pk)) {
+            continue
+        }
+        let pvd = jsonStrField(pv, "verdict")
+        if (pvd != "pass" && pvd != "fail") {
+            continue
+        }
+        let pf = FeatureInput("probe:${pk}", "真机实测（未对应到扫描命令）：${pk}")
+        pf.probeVerdict = pvd
+        pf.probeNote = jsonStrField(pv, "note")
+        let pev = jsonStrField(pv, "evidence")
+        if (pev != "") {
+            pf.probeEvidence.add(pev)
+        }
+        features.add(pf)
     }
 
     // 每处平台 API：碰它的命令在鸿蒙侧都落地了，才算"有降级方案"

@@ -70,6 +70,7 @@ lingqu-cli verify --path .                   # 采证 + 功能清单 + 可用率
 lingqu-cli report --path .                   # 三段式迁移报告
 lingqu-cli resume --path .                   # 8 步断点板（下一步是哪步）
 lingqu-cli batch  --samples "a|b|c"          # 多工程矩阵
+lingqu-cli probe  --path . --auto --max 8    # 自动验证：自己枚举版面里能点的文本逐个点
 lingqu-cli probe  --path . --feature <名> --click-file <按钮文本文件>   # 真机点一下再判定
 ```
 

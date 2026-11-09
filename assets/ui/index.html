@@ -1006,7 +1006,7 @@ body.ai-hidden .ai-show{display:block}
           <div class="sethint" id="depNote">点「安装并启动」跑 `hdc list targets` → `hdc install -r` → `aa start` → 抓 hilog 尾部。三段分开报：装得上不等于界面出来（装了但启动失败多半是 ability/bundle 名不对）。</div>
         </div>
         <div class="grid4">
-          <div class="stat"><div class="k">核心功能可用率</div><div class="v" id="verRate">—<small>%</small></div></div>
+          <div class="stat"><div class="k">移植验收通过率</div><div class="v" id="verRate">—<small>%</small></div></div>
           <div class="stat"><div class="k">通过</div><div class="v" id="verPass">—</div></div>
           <div class="stat"><div class="k">平台限制（剔除分母）</div><div class="v" id="verLimit" style="font-size:18px">—</div></div>
           <div class="stat"><div class="k">未验证 / 失败</div><div class="v" id="verUnknown" style="font-size:18px">—</div></div>
@@ -1053,7 +1053,7 @@ body.ai-hidden .ai-show{display:block}
           <div class="stat"><div class="k">工程</div><div class="v" style="font-size:15px" id="rpProject">—</div></div>
           <div class="stat"><div class="k">8 步进度</div><div class="v" id="rpSteps">—</div></div>
           <div class="stat"><div class="k">人工介入（A3 ≤5）</div><div class="v" style="color:var(--warn)" id="rpHuman">—</div></div>
-          <div class="stat"><div class="k">核心功能可用率（A4 ≥80%）</div><div class="v" id="rpRate">—</div></div>
+          <div class="stat"><div class="k">移植验收通过率（A4 ≥80%）</div><div class="v" id="rpRate">—</div></div>
         </div>
         <div class="sethint" id="rpNote" style="margin-top:10px">点「生成迁移报告」按落档出报告。段内每一条都来自 `.lingqu` 下的证据；没跑过的步骤会明确写「还没跑」，不会编。</div>
         <div class="grid3" style="margin-top:13px">
@@ -6735,7 +6735,7 @@ withBridge(function(tauri){
 
 
   /* ===== ⑥ 屏 验证与报告（P6）：清单 + 可用率 + 导出 ===== */
-  var VERIFY = { ok: false, rate: -1, pass: 0, total: 0, limit: 0, unknown: 0, covered: 0, notVerified: 0, scope: "", shots: 0, md: "", error: "" };
+  var VERIFY = { ok: false, rate: -1, pass: 0, total: 0, limit: 0, unknown: 0, covered: 0, notVerified: 0, scope: "", shots: 0, md: "", error: "", businessTotal: -1, businessTested: -1, transplantTotal: -1, transplantNotVerified: -1 };
   var VERDICT_CHIP = { pass: 'pill ok', fail: 'pill err', limit: 'pill warn', unknown: 'pill' };
   var VERDICT_TEXT = { pass: '通过', fail: '失败', limit: '平台限制', unknown: '未验证' };
   function renderVerify(r){
@@ -6753,6 +6753,12 @@ withBridge(function(tauri){
       covered: (typeof r.covered === 'number' && r.covered > 0) ? r.covered : -1,
       notVerified: (typeof r.notVerified === 'number') ? r.notVerified : -1,
       scope: String(r.scope || ''),
+      // 业务功能条数（0.39.104）：后端一直回投，但重建对象时漏取 ⇒ 下面那句
+      // 「业务功能 N 条属原应用职责，不计入」的 biz 分支恒不成立（§4-60 同族，字段漏一处）
+      businessTotal: (typeof r.businessTotal === 'number') ? r.businessTotal : -1,
+      businessTested: (typeof r.businessTested === 'number') ? r.businessTested : -1,
+      transplantTotal: (typeof r.transplantTotal === 'number') ? r.transplantTotal : -1,
+      transplantNotVerified: (typeof r.transplantNotVerified === 'number') ? r.transplantNotVerified : -1,
       shots: (typeof r.screenshots === 'number') ? r.screenshots : 0,
       md: String(r.md || ''),
       error: String(r.error || '')
@@ -6772,34 +6778,51 @@ withBridge(function(tauri){
     if (!VERIFY.ok) {
       $('verNote').textContent = VERIFY.error || '尚未验证';
     } else if (legacy) {
-      $('verNote').textContent = '可用率 ' + VERIFY.rate + '%（旧口径：分母 ' + denom + '，平台限制已剔除）——重跑一次即可换成核心功能口径';
+      $('verNote').textContent = '通过率 ' + VERIFY.rate + '%（旧口径：分母 ' + denom + '，平台限制已剔除）——重跑一次即可换成移植验收口径';
     } else {
-      $('verNote').textContent = '可用率 ' + VERIFY.rate + '%（分母 ' + denom + ' 项有结论：'
+      // D-020：分母只算移植验收项；业务功能单列且明说不参与验收，别让人拿它当移植质量
+      var biz = (VERIFY.businessTotal > 0)
+        ? '；业务功能 ' + VERIFY.businessTotal + ' 条属原应用职责，不计入（冒烟 ' + (VERIFY.businessTested || 0) + ' 条）'
+        : '';
+      $('verNote').textContent = '移植验收通过率 ' + VERIFY.rate + '%（分母 ' + denom + ' 项有结论：'
         + num + ' 通过 / ' + Math.max(denom - num, 0) + ' 未过），另有 ' + notVer + ' 项未测'
-        + (VERIFY.scope ? ' · 口径 ' + VERIFY.scope : '');
+        + biz;
     }
     // 清单逐条渲染：判定 → 颜色标签；证据 → 一行文本；note 作 title
     var list = $('verList');
     list.innerHTML = '';
     var items = (r.items && r.items.length) ? r.items : [];
     if (!items.length) {
-      list.innerHTML = '<span class="muted">还没有清单（先跑「采集证据并算可用率」）</span>';
+      list.innerHTML = '<span class="muted">还没有清单（先跑「采集证据并算通过率」）</span>';
     }
-    items.forEach(function(it, i){
+    // D-020：清单里绝大多数是**原应用自己的业务功能**（一个样本 180 条），铺开会把移植项埋掉。
+    // 移植项与冒烟逐条显示，业务功能折叠成一行——不是藏起来，是"默认不干扰判断"。
+    function verRowHtml(it, i){
       var v = String(it.verdict || 'unknown');
       var evTxt = (it.evidence && it.evidence.length) ? it.evidence.join('；') : '无证据';
-      // 三列布局：勾选 / 标题+证据（.t 是 flex:1，长文本在这里换行，不会把行挤成竖排）/ 判定 pill
-      // 单行三列：勾选 | 标题（可截断） | 判定；证据与说明进 tooltip，别把行撑成竖排
-      list.insertAdjacentHTML('beforeend',
-        '<div class="evi">'
+      return '<div class="evi">'
         + '<span class="chk ' + (v === 'pass' ? 'on' : (v === 'limit' ? 'na' : '')) + '">'
         + (v === 'pass' ? '✓' : (v === 'limit' ? '–' : (v === 'fail' ? '×' : '?'))) + '</span>'
         + '<span class="t" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'
         + esc(evTxt + (it.note ? '\n' + String(it.note) : '')) + '">'
         + (i + 1) + '. ' + esc(String(it.title || '')) + '</span>'
         + '<span class="chips"><span class="' + (VERDICT_CHIP[v] || 'pill') + '">' + (VERDICT_TEXT[v] || '未验证') + '</span></span>'
-        + '</div>');
-    });
+        + '</div>';
+    }
+    var mainItems = [], bizItems = [];
+    items.forEach(function(it){ ((String(it.category || 'transplant') === 'business') ? bizItems : mainItems).push(it); });
+    mainItems.forEach(function(it, i){ list.insertAdjacentHTML('beforeend', verRowHtml(it, i)); });
+    if (bizItems.length) {
+      var bizPass = bizItems.filter(function(x){ return x.verdict === 'pass'; }).length;
+      var bizFail = bizItems.filter(function(x){ return x.verdict === 'fail'; }).length;
+      var det = document.createElement('details');
+      det.style.cssText = 'margin-top:10px';
+      det.innerHTML = '<summary class="muted" style="cursor:pointer">业务功能 ' + bizItems.length
+        + ' 条 —— 属原应用职责，不计入移植通过率（实测 ' + (bizPass + bizFail) + ' 条：通 ' + bizPass
+        + ' / 未过 ' + bizFail + '）</summary>'
+        + bizItems.map(function(it, i){ return verRowHtml(it, mainItems.length + i); }).join('');
+      list.appendChild(det);
+    }
     var paths = $('verPaths');
     if (VERIFY.md) {
       paths.innerHTML = '报告已生成：<br><span class="mono">' + esc(r.md) + '</span><br><span class="mono">'
@@ -7309,7 +7332,7 @@ withBridge(function(tauri){
       tb.innerHTML = '<tr><td colspan="12" class="muted">还没有数据——填样本路径后点「生成矩阵」。</td></tr>';
     }
     BATCH.rows.forEach(function(x){
-      // 分母由后端算好（有结论的核心功能项，未测项不计入），前端不再自己推——避免两处口径不一致
+      // 分母由后端算好（有结论的移植验收项，业务功能与未测项都不进），前端不再自己推——避免两处口径不一致
       var rateTxt = x.hasVerify
         ? (x.verifyRate + '%（' + x.verifyPass + '/' + x.verifyDenom + '）')
         : '未跑';
@@ -7640,8 +7663,16 @@ withBridge(function(tauri){
         STEP_FILL.n += 1;
         STEP_FILL.last = step + '@' + (why || '');
         if (noteEl) {
-          noteEl.textContent = '已按落档回读：' + String(r.out || r.outJson || '')
+          var fillTxt = '已按落档回读：' + String(r.out || r.outJson || '')
             + (why === 'ai' ? '（AI 刚跑完这一步）' : '（进屏按落档回填，不是重新扫描）');
+          if (step === 'verify') {
+            // renderVerify 刚往 verNote 写了「移植验收通过率 X%（分母 N 项有结论…）」——
+            // 那是用户真正要读的口径说明。回读来源只作后缀补一句，不许把它整段顶掉
+            // （0.39.104 实测：探针只读到「已按落档回读：路径」，通过率口径整个不见了，§4-135 同族）
+            noteEl.textContent = String(noteEl.textContent || '') + '　（按落档回读，未重新验证）';
+          } else {
+            noteEl.textContent = fillTxt;
+          }
         }
         reportUi('step-fill:' + step);
         // 回读改了「这份数属于哪个工程」，顶栏胶囊得跟着重算（0.39.88：原来只有进 ① 屏才回读，
@@ -8348,6 +8379,39 @@ withBridge(function(tauri){
         var r = document.querySelector("#verList .evi");
         return r ? Math.round(r.getBoundingClientRect().height) : 0;
       })(),
+      // 分节折叠（D-020，0.39.104）：移植项逐条显示、业务功能折成一行摘要（<details> 默认关着）。
+      // 这些只回答「屏幕上分了几节、折叠了几条、折叠节是不是默认收起」，不参与判定。
+      // 注意 verifyRows 数的是 `#verList .evi`（连折叠体内的行一起数），所以它证明不了折叠——
+      // 要分节读数就得用 >（直接子元素）与 details 两条路分开数。
+      verifySections: (function(){
+        var n = (document.querySelectorAll("#verList > .evi").length > 0) ? 1 : 0;
+        if (document.querySelector("#verList details")) { n += 1; }
+        return n;
+      })(),
+      verifyMainRows: (function(){ return document.querySelectorAll("#verList > .evi").length; })(),
+      verifyBizRows: (function(){ return document.querySelectorAll("#verList details .evi").length; })(),
+      verifyBizOpen: (function(){
+        var d = document.querySelector("#verList details");
+        return d ? ((d.open === true) ? 1 : 0) : -1;
+      })(),
+      verifyBizText: (function(){
+        var s = document.querySelector("#verList details > summary");
+        return s ? String(s.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      })(),
+      verifyNoteText: (function(){
+        var n = document.getElementById('verNote');
+        return n ? String(n.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      })(),
+      verifyListH: (function(){
+        var l = document.getElementById('verList');
+        return l ? Math.round(l.getBoundingClientRect().height) : 0;
+      })(),
+      // 计数字段有没有被接住（0.39.104：重建 VERIFY 时漏取 businessTotal，那句话永远不会出现）
+      verifyBusinessTotal: (typeof VERIFY.businessTotal === "number") ? VERIFY.businessTotal : -1,
+      verifyTransplantTotal: (typeof VERIFY.transplantTotal === "number") ? VERIFY.transplantTotal : -1,
+      // 折叠分节自检结论（LINGQU_UI_PROBE=verifysections）：1=通过 / 0=没跑或不通过，原因见 verifyProbeFail
+      verifyProbe: (typeof window.__verifyProbe === 'object' && window.__verifyProbe) ? (window.__verifyProbe.ok ? 1 : 0) : 0,
+      verifyProbeFail: (typeof window.__verifyProbe === 'object' && window.__verifyProbe) ? String(window.__verifyProbe.fail || '') : '',
       // T6-5 断点续迁：断点在哪 / 完成度 / 会话 id（+ 版面指标：行数与行高）
       resumeOk: RESUME.ok === true,
       resumeNext: RESUME.next || '',
@@ -8533,6 +8597,31 @@ withBridge(function(tauri){
   }
   // 外层作用域（⚙ 按钮那段）不能直接调本函数（AGENTS §4-107），统一走这条桥（0.39.62）
   window.__aiSettingsOpen = openSettings;
+
+  // ⑥ 屏分节折叠判据（LINGQU_UI_PROBE=verifysections，0.39.104，D-020）。
+  // 答案只从 DOM 与 VERIFY 里取，不造假数；**前提不成立就如实报 fail**——
+  // 当前工程没有 verify 落档时返回 no-record，绝不允许"什么都没测到"被当成通过（§4-136）。
+  function judgeVerifySectionsNow(){
+    if (VERIFY.ok !== true) { return { ok: false, fail: 'no-record' }; }
+    var mainN = document.querySelectorAll('#verList > .evi').length;
+    var det = document.querySelector('#verList details');
+    var bizN = document.querySelectorAll('#verList details .evi').length;
+    if (mainN < 1) { return { ok: false, fail: 'no-main-rows' }; }
+    if (!det) { return { ok: false, fail: 'no-biz-section' }; }
+    if (bizN < 1) { return { ok: false, fail: 'no-biz-rows' }; }
+    if (det.open === true) { return { ok: false, fail: 'biz-open-by-default' }; }
+    // 断语义不断字节顺序（§4-65）：这里只问"摘要里有没有说清这是谁的职责、算不算移植分"
+    var sum = det.querySelector('summary');
+    var bt = sum ? String(sum.textContent || '') : '';
+    if (bt.indexOf('属原应用职责') < 0) { return { ok: false, fail: 'biz-summary-who' }; }
+    if (bt.indexOf('不计入移植通过率') < 0) { return { ok: false, fail: 'biz-summary-scope' }; }
+    var ne = document.getElementById('verNote');
+    var note = ne ? String(ne.textContent || '') : '';
+    if (note.indexOf('移植验收通过率') < 0) { return { ok: false, fail: 'note-no-scope' }; }
+    // 专治 0.39.104 的漏取：businessTotal 没被接住时 biz 分支恒不成立，这句话根本不会出现
+    if (VERIFY.businessTotal > 0 && note.indexOf('业务功能') < 0) { return { ok: false, fail: 'note-no-business' }; }
+    return { ok: true, fail: '' };
+  }
 
   /* ===== 界面自检序列（LINGQU_UI_PROBE=1 时由页面自己跑）=====
    * 三步：① 初始版面 → ② 打开模型设置（会真的去读 /api/models）→ ③ 折叠 / 展开。
@@ -8747,6 +8836,40 @@ withBridge(function(tauri){
       setTimeout(function(){ runReport(''); }, 1600);
       setTimeout(function(){ reportUi('risk-generated'); }, 4200);
       setTimeout(function(){ reportUi('risk-after'); }, 7000);
+      return;
+    }
+    // ⑥ 屏分节折叠自检（LINGQU_UI_PROBE=verifysections，0.39.104，D-020）：
+    // 验的是「移植项逐条显示 / 业务功能折成一行摘要」真的生效，而不是"源码里写了就算"。
+    // 默认态判据：verifySections=2、verifyMainRows≥1、verifyBizRows≥1、verifyBizOpen=0（收起）、
+    //   verifyBizText 含「属原应用职责」+「不计入移植通过率」、verifyNoteText 含「移植验收通过率」、
+    //   有业务项时 verifyNoteText 还必须含「业务功能」（那条专治 businessTotal 漏取）；
+    // 再展开 details → verifyBizOpen 必须变 1（证明真能展开），然后收回默认态并复查。
+    // **前提**：当前工程要有 verify 落档（进屏 action:'load' 回读）。没有就报 no-record，
+    // 不许因为"什么都没测到"而算通过（§4-136）。
+    if (mode === 'verifysections') {
+      setTimeout(function(){ try { switchScreen('verify'); } catch (e) {} }, 1000);
+      // 进屏会回读落档 + 渲染，给足时间（纯读盘，但要看 hdc/落档响应）
+      setTimeout(function(){ reportUi('verifysections-enter'); }, 4500);
+      setTimeout(function(){
+        window.__verifyProbe = judgeVerifySectionsNow();
+        reportUi('verifysections-default');
+      }, 5600);
+      setTimeout(function(){
+        var d = document.querySelector('#verList details');
+        if (d) { d.open = true; }
+        reportUi('verifysections-opened');
+      }, 6800);
+      setTimeout(function(){
+        var d = document.querySelector('#verList details');
+        var prev = (window.__verifyProbe && window.__verifyProbe.ok === true);
+        var prevFail = String((window.__verifyProbe && window.__verifyProbe.fail) || 'unknown');
+        if (d) { d.open = false; }
+        var restored = d ? (d.open === false) : true;
+        window.__verifyProbe = prev
+          ? (restored ? { ok: true, fail: '' } : { ok: false, fail: 'restore-failed' })
+          : { ok: false, fail: prevFail };
+        reportUi('verifysections-restored');
+      }, 8000);
       return;
     }
     // 报告与落档同代自检（LINGQU_UI_PROBE=reportstale，0.39.85，§4-133）：

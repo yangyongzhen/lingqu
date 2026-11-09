@@ -121,8 +121,10 @@ public func testTimeTextDetection(): Unit {
 }
 
 @Test
-public func testProbeFailsWhenOnlyClockChanges(): Unit {
+public func testProbeUnknownWhenOnlyClockChanges(): Unit {
     // 现场真值（m3u8dl-tauri 点「选择文件」）：节点 35→34，只有时钟文本变了
+    // 口径（0.39.102）：**unknown 不是 fail**——工具分不清"没点中"与"真无响应"，
+    // 判 fail 会让可用率凭观测缺陷下降（与假 pass 对称的谎报）。
     let before = ArrayList<LayoutNode>()
     before.add(nodeOf("15:35:01", "[900,10][1000,60]", false))
     before.add(nodeOf("开始下载", "[100,200][400,300]", true))
@@ -130,9 +132,31 @@ public func testProbeFailsWhenOnlyClockChanges(): Unit {
     after.add(nodeOf("15:35:24", "[900,10][1000,60]", false))
     after.add(nodeOf("开始下载", "[100,200][400,300]", true))
     let v = judgeProbe(before, after, "", "")
-    @Assert(v.verdict, "fail")
-    // note 必须说清"没有新东西"，不能让读的人以为测过了
+    @Assert(v.verdict, "unknown")
+    // note 必须说清"点了没反应、不据此判不可用"，不能让读的人以为测过了
     @Assert(v.note.contains("新增"), false)
+    @Assert(v.note.contains("没点中"), true)
+}
+
+@Test
+public func testProbeIgnoresPunctuationAndDigitsAsChange(): Unit {
+    // 实测 note-gen-2：点「保存到」冒出「09、:、48」、点「添加」冒出「, ? !」都被判过 pass
+    // ——纯数字/半角标点的版面变化不算"点了有反应"
+    let before = ArrayList<LayoutNode>()
+    before.add(nodeOf("保存到", "[100,200][400,300]", true))
+    let after = ArrayList<LayoutNode>()
+    after.add(nodeOf("保存到", "[100,200][400,300]", true))
+    after.add(nodeOf("," , "[0,0][10,10]", false))
+    after.add(nodeOf("?", "[0,0][10,10]", false))
+    after.add(nodeOf("! " , "[0,0][10,10]", false))
+    after.add(nodeOf("48", "[900,10][1000,60]", false))
+    let v = judgeProbe(before, after, "", "")
+    @Assert(v.verdict, "unknown")
+    // 换成真正的新文本，就该判 pass
+    let after2 = ArrayList<LayoutNode>()
+    after2.add(nodeOf("保存到", "[100,200][400,300]", true))
+    after2.add(nodeOf("选择文件夹", "[0,0][10,10]", false))
+    @Assert(judgeProbe(before, after2, "", "").verdict, "pass")
 }
 
 @Test

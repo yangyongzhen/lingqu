@@ -84,7 +84,7 @@ public func testReportSeparatesLimitFromFailure(): Unit {
     }
     // 平台限制必须标注"不算失败"，且与真正的失败项分开表述
     @Assert(text.contains("平台限制（不算失败"), true)
-    @Assert(text.contains("验证失败：配置列表加载"), true)
+    @Assert(text.contains("移植验收项未通过：配置列表加载"), true)
     @Assert(text.contains("未验证（没有证据就不算通过）"), true)
     // 需要你做：未验证项要给出补验证动作，失败项要给出处理动作
     let need = doc.linesOf("need")
@@ -275,7 +275,7 @@ public func testBareLqRelStripsLingquPrefix(): Unit {
     let f = satisfiedFacts()
     f.project = "demo"
     f.verifyRate = 100
-    @Assert(reportConclusion(f).contains("可用率 100%"), true)
+    @Assert(reportConclusion(f).contains("移植验收通过率 100%"), true)
     f.verifyRate = -1
     @Assert(reportConclusion(f).contains("尚未验证"), true)
 }

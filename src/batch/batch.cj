@@ -197,7 +197,7 @@ public func batchHeaders(): ArrayList<String> {
     out.add("装配")
     out.add("签名态")
     out.add("部署")
-    out.add("可用率（通过/分母）")
+    out.add("移植验收通过率（通过/分母）")
     out.add("8 步")
     out.add("人工介入")
     out.add("判定")
@@ -215,7 +215,7 @@ public func summaryLine(batch: BatchMatrix): String {
         "—"
     }
     return "样本 ${s.samples} 个（已验证 ${s.verified} 个）｜平均评分 ${scoreText}｜" +
-        "平均可用率 ${rateText}｜人工介入 ${humanText}"
+        "平均移植验收通过率 ${rateText}｜人工介入 ${humanText}"
 }
 
 /** Markdown 矩阵（给报告/命令行看） */
@@ -243,7 +243,8 @@ public func renderMatrixMarkdown(batch: BatchMatrix): String {
         text += "\n"
     }
     text += "\n> 口径：没有落档的样本显示「未跑」，不参与平均（未验证 ≠ 0 分，也 ≠ 通过）；" +
-        "可用率 = 通过 ÷ 有结论的核心功能项（未测项不进分母，矩阵里单列「未测 N」）。\n"
+        "移植验收通过率 = 通过 ÷ 有结论的移植验收项（装得上/起得来/渲染得出/通道与平台能力）。" +
+        "**业务功能不进分母**——缺网/缺配置就必然过不了，属原应用职责；未测项不进分母，矩阵里单列「未测 N」。\n"
     return text
 }
 
@@ -300,8 +301,8 @@ public func renderMatrixHtml(batch: BatchMatrix): String {
     }
     text += "</tbody></table>\n"
     text += "<p class=\"foot\">生成时间：${escHtml(batch.generatedAt)}。口径：没有落档的样本显示「未跑」，" +
-        "不参与平均（未验证 ≠ 0 分，也 ≠ 通过）；可用率 = 通过 ÷ 有结论的核心功能项" +
-        "（未测项不进分母，矩阵里单列「未测 N」）。</p>\n"
+        "不参与平均（未验证 ≠ 0 分，也 ≠ 通过）；移植验收通过率 = 通过 ÷ 有结论的移植验收项。" +
+        "业务功能不进分母（缺网/缺配置就过不了，属原应用职责）；未测项不进分母，矩阵里单列「未测 N」。</p>\n"
     text += "</body></html>\n"
     return text
 }

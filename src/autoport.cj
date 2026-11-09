@@ -224,6 +224,8 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
             inp.cliPath + " sign   --login      # AGC 登录（浏览器授权一次，必须人配合）\n" +
             inp.cliPath + " sign   --auto --path .  # 自动签发：注册设备→证书→profile→写回 build-profile\n" +
             inp.cliPath + " deploy --path .     # 真机装启 + hilog\n" +
+            inp.cliPath + " probe  --path . --auto --max 8   # " +
+            "**自动验证**：自己去版面枚举能点的文本，逐个点、逐个比对、逐个落档\n" +
             inp.cliPath + " probe  --path . --feature <功能名> --click-file <按钮文本文件>   # " +
             "真机点一下再判定（写 .lingqu/verify/<工程>.probe.json）\n" +
             inp.cliPath + " verify --path .     # 采证 + 功能清单 + 可用率（会优先采用 probe 的结论）\n" +
@@ -276,25 +278,28 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "## 真机：" + (if (inp.device) { "在线 —— `deploy` / `verify` / `probe` 都要跑，装不上先看签名态\n" }
         else { "**不在线** —— 跳过 deploy/verify/probe（落档会是\"未跑\"，如实报告即可，别当成失败）\n" }) + "\n"
     if (inp.device) {
-        // A4「核心功能可用率」的分母是核心功能清单，而清单里每一项都要有**真机上的结论**。
-        // 光跑 verify 只能采证（数崩溃、读截图），点不点得动它一概不知道 —— 实测就是这么把
-        // 两个空壳命令放过成"未测"的（AGENTS §4-48：进程在跑 ≠ 界面正常）。
-        d += "### 功能是**点**出来的，不是看出来的\n"
-        d += "「装上了 / 进程在跑 / 日志没报错 / 截图看着像」都不能算功能可用。要判定某一项，"
-        d += "就在真机上点它一下，再对比点了之后发生了什么 —— 这件事你自己能做，也应当你做：\n"
+        // D-020：**A4 的分母是移植验收项**（装得上/起得来/渲染得出/前端资源进包/通道通/平台能力有落地），
+        // 不是原应用那上百条业务功能。逐条点业务功能永远点不完，缺网/缺配置也必然过不了，
+        // 那不属移植职责——所以这里只要求**移植项有结论**，业务功能点按降为可选冒烟。
+        d += "### 先证「移植做完了」，再谈业务功能（别把时间花在替原作者点按钮上）\n"
+        d += "移植该负责的事只有这几类：**装得上、起得来、界面渲染得出、前端资源进包、IPC 与事件通道通、"
+        d += "命中的平台 API 有落地的等价实现**。这些都在 `.lingqu/verify/<工程>.json` 里（`category=transplant`），"
+        d += "**它们才进 A4 分母**。\n"
+        d += "**原应用自己的业务功能（`category=business`，如 start_download / ai_json_request）不要求逐条验证**："
+        d += "没有网络、没有密钥、没有登录，它们本来就跑不起来，那说明不了移植好坏。\n\n"
+        d += "### 业务功能冒烟（可选，`--max` 给 3 就够）\n"
+        d += "想确认壳没接错，可以顺手点几个，但**不要为它烧轮次**：\n"
         d += "```bash\n"
-        d += "printf '选择文件' > .lingqu/click.txt      # 中文一律写文件，别写进命令行参数（Windows argv 过不了非 ASCII）\n"
-        d += inp.cliPath + " probe --path . --feature pick_file --click-file .lingqu/click.txt\n"
-        d += inp.cliPath + " probe --path . --feature start_download --click-file .lingqu/start.txt " +
-            "--expect-log-file .lingqu/expect.txt\n"
+        d += inp.cliPath + " probe --path . --auto --max 3    # 自动点 3 个候选，结论落 .probe.json（单列，不计分）\n"
         d += "```\n"
-        d += "- 判据是**版面变化**：点后冒出新的文本 → `pass`；版面一字不差 → `fail`（说明这个按钮是死的）；"
-        d += "日志命中 `--expect-log` 也算 `pass`；\n"
-        d += "- 结论自动落进 `.lingqu/verify/<工程>.probe.json`，`verify` 会**优先**采用它；"
-        d += "你**不用**手写这个文件；\n"
+        d += "- 判据是**版面变化**：点后冒出新的实质文本 → `pass`；点了没动静 → 记 `unknown`（分不清没点中还是真无响应，"
+        d += "不许直接判 fail 拉低数字）；\n"
+        d += "- 结论写进 `.lingqu/verify/<工程>.probe.json` 的 `smoke` 单列，**不进移植通过率**，你**不用**手写这个文件；\n"
         d += "- 探针是你在做实验，**不计人工介入**（A3）；\n"
-        d += "- 判不了就如实记「未测」，别凑：需要前置现场的（例：取消下载要先有\"下载进行中\"）、"
-        d += "需要滚动或跨窗口才看得见的节点，都算未测，写清缺什么现场。\n"
+        d += "- 想点名探某一个，用 `--feature <命令名> --click-file <含中文按钮文本的文件>`"
+        d += "（中文一律写文件，别塞命令行参数——Windows argv 过不了非 ASCII）；\n"
+        d += "- **别为凑数硬点**：需要前置现场（例：取消下载要先有\"下载进行中\"）、需要滚动或跨窗口才看得见的节点，"
+        d += "如实记「未测」并写清缺什么现场；一轮 3~8 个候选足够说明壳接没接上；\n"
         d += "- 点不动先分清是**壳没接**（该命令在 OHOS 分支是空实现）还是**真崩了**："
         d += "看源码里那条命令的 OHOS 分支，别反复试点。\n\n"
     }

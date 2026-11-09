@@ -169,6 +169,8 @@ public func cliUsage(): String {
     text += "  lingqu-cli sign --auto --path E:/work/habit-tree   # 自动签名全流程（设备/证书/profile/写回）\n"
     text += "  lingqu-cli resume --path E:/work/habit-tree\n"
     text += "  lingqu-cli verify --path E:/work/habit-tree\n"
+    text += "  lingqu-cli probe --path E:/work/habit-tree --auto --max 8\n" +
+        "                                         # 自动验证：不用先知道按钮叫什么，自己枚举版面里能点的文本逐个点\n"
     text += "  lingqu-cli probe --path E:/work/habit-tree --feature pick_m3u8_file --click-file ./pick.txt\n"
     text += "                                         # 真机上点一下再判定：版面冒出新内容/日志命中期望行=pass，什么都没变=fail\n"
     text += "                                         # --click-file / --expect-log-file：中文文本一律走 UTF-8 文件（argv 传中文会崩，§4-119）\n"
@@ -461,7 +463,11 @@ func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcCont
         return VerifyCommand().handle(fullName, args, ctx)
     }
     if (cmd == "probe") {
-        // 真机点按探针：没有 GUI 入口（它是 agent 的手），直接走实现，不注册 IPC 命令
+        // 真机点按探针：没有 GUI 入口（它是 agent 的手），直接走实现，不注册 IPC 命令。
+        // `--auto`：不用谁知道按钮叫什么，自己去版面里枚举能点的文本逐个点（自动验证的入口）。
+        if (argBool(args, "auto", false)) {
+            return runProbeAuto(args)
+        }
         return runProbe(args)
     }
     if (cmd == "report") {

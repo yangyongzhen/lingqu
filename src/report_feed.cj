@@ -64,6 +64,31 @@ func collectDecisionValues(projName: String, projPath: String): ArrayList<String
 }
 
 /** 把 verify 清单里某一判定的标题收集起来（limit / unknown / fail 三类各取一份） */
+/**
+ * 只收 `category` 不是 business / smoke 的项（老落档没有 category 字段 → 按移植项处理）。
+ *
+ * D-020：报告的风险清单**不许把原应用的业务功能说成"移植失败"**——
+ * 业务功能缺网、缺配置、缺登录就会失败，那是原软件的使用前提，不是移植的锅。
+ */
+func collectTransplantTitles(verifyRoot: JsonValue, verdict: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let arr = objFieldOf(verifyRoot, "items")
+    match (arr.kind()) {
+        case JsonKind.JsArray =>
+            var i: Int64 = 0
+            while (i < arr.asArray().size()) {
+                let it = arr.asArray()[i]
+                let cat = jsonStrField(it, "category")
+                if (cat != "business" && cat != "smoke" && jsonStrField(it, "verdict") == verdict) {
+                    out.add(jsonStrField(it, "title"))
+                }
+                i += 1
+            }
+        case _ => ()
+    }
+    return out
+}
+
 func collectVerdictTitles(verifyRoot: JsonValue, verdict: String): ArrayList<String> {
     let out = ArrayList<String>()
     let arr = objFieldOf(verifyRoot, "items")
@@ -180,9 +205,14 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
             let fPass = intFieldOf(stats, "featurePass", -1)
             facts.verifyFeaturePass = if (fPass >= 0) { fPass } else if (facts.verifyScope == "features") { 0 } else { facts.verifyPass }
             facts.verifyRate = intFieldOf(stats, "ratePercent", -1)
-            facts.limitItems = collectVerdictTitles(root, "limit")
-            facts.unknownItems = collectVerdictTitles(root, "unknown")
-            facts.failedItems = collectVerdictTitles(root, "fail")
+            // D-020：业务功能单列，只作参考——不进风险清单、不进分母
+            facts.verifyTransplantTotal = intFieldOf(stats, "transplantTotal", -1)
+            facts.verifyBusinessTotal = intFieldOf(stats, "businessTotal", 0)
+            facts.verifyBusinessTested = intFieldOf(stats, "businessTested", 0)
+            facts.verifyBusinessPass = intFieldOf(stats, "businessPass", 0)
+            facts.limitItems = collectTransplantTitles(root, "limit")
+            facts.unknownItems = collectTransplantTitles(root, "unknown")
+            facts.failedItems = collectTransplantTitles(root, "fail")
             facts.bundleName = jsonStrField(root, "bundleName")
         case None => ()
     }
