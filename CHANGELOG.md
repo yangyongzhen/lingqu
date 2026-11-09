@@ -5,6 +5,42 @@
 
 ---
 
+## [0.39.105] - 2026-11-09
+
+**主题**：⑥ 验证屏把**真机冒烟项**从移植主行挪回折叠节，并给折叠探针补上「展开必须为 1」的断言——一条是口径漏网，一条是假绿。
+
+### 现象
+
+按实测流程重跑一轮迁移（8 步 8/8、移植验收 83%）后起 `LINGQU_UI_PROBE=verifysections`，读数出现两处自相矛盾：
+
+- `verifyMainRows=9`，而落档里移植验收项只有 **7** 条；
+- 折叠摘要写「实测 **0** 条」，同一屏的 `verNote` 却写「冒烟 **2** 条」。
+
+### 根因
+
+1. **分流只认 `business`**（`renderVerify` 里 `category === 'business' ? 折叠 : 主行`）——真机冒烟项 `category='smoke'`（`feat:probe:*`，`verify.cj` 明写"单列、不计入通过率"）顺着 `else` 掉进主行，于是 7 条移植项变 9 条，冒烟被当成移植验收项展示。
+2. **摘要只统计 `bizItems` 里的 `business`**，而实测的 2 条是 `smoke`、已被算进主行 ⇒ 摘要永远「实测 0 条」，与 `verNote`（用后端 `businessTested=2`）打架（§4-139 同族：同一屏两处对同一件事说法不同）。
+3. **探针假绿**：序列注释写着「再展开 details → `verifyBizOpen` 必须变 1（证明真能展开）」，但 6800ms 那步**只 `reportUi` 不断言** ⇒ 展开失效时探针照样 `verifyProbe=1`（§4-136 假绿：长得跟通过一模一样）。
+
+### 处置
+
+- `business` 与 `smoke` 一并归折叠节，**主行恒等于移植验收项**；
+- 摘要拆开数：`业务功能 N 条 + 真机冒烟 M 条 …（冒烟实测 X 条：通 Y / 未过 Z）`，与 `verNote` 同源；
+- 探针展开后复查 `details.open === true`，失败记 `open-not-applied` / `no-biz-section`；收回阶段 `d == null` 不再回落成"收回成功"，改判 `restore-failed`（同属假绿）。
+
+### 证据（探针 `LINGQU_UI_PROBE=verifysections`）
+
+| 阶段 | `verifyBizOpen` | `verifyMainRows` | `verifyBizRows` | `verifyListH` |
+|---|---|---|---|---|
+| enter | 0 | **7** | **182** | 367 |
+| default | 0 | 7 | 182 | 367 |
+| opened | **1** | 7 | 182 | **8482** |
+| restored | **0** | 7 | 182 | 367 |
+
+`verifyProbe=1`、`verifyProbeFail=''`；`verifyBizText` =「业务功能 180 条 + 真机冒烟 2 条 —— 属原应用职责，不计入移植通过率（冒烟实测 2 条：通 2 / 未过 0）」，与 `verNote` 的「冒烟 2 条」一致。
+
+---
+
 ## [0.39.104] - 2026-11-09
 
 **主题**：⑥ 验证屏的**分节折叠**第一次被自动断言住——顺带揪出两个「界面没接住后端」的真缺陷。

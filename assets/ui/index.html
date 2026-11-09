@@ -6810,15 +6810,28 @@ withBridge(function(tauri){
         + '</div>';
     }
     var mainItems = [], bizItems = [];
-    items.forEach(function(it){ ((String(it.category || 'transplant') === 'business') ? bizItems : mainItems).push(it); });
+    // 0.39.105（D-020 口径补漏）：主行只放**移植验收项**。分流原来只认 `business`，
+    // 而真机冒烟项（`feat:probe:*`，`category='smoke'`，verify.cj 明写"单列、不计入通过率"）
+    // 顺着 else 掉进了主行 ⇒ 主行 7 条变 9 条，冒烟被当成移植验收项显示；
+    // 同时折叠摘要只数 `business`，于是同屏出现「实测 0 条」与 note 的「冒烟 2 条」两句打架（§4-139）。
+    // 现在 business 与 smoke 都归折叠节（都是"原应用职责"），主行恒等于移植验收项。
+    items.forEach(function(it){
+      var cat = String(it.category || 'transplant');
+      ((cat === 'business' || cat === 'smoke') ? bizItems : mainItems).push(it);
+    });
     mainItems.forEach(function(it, i){ list.insertAdjacentHTML('beforeend', verRowHtml(it, i)); });
     if (bizItems.length) {
+      // 0.39.105：条数要拆开数——`bizItems` 现在同时装 business 与 smoke，
+      // 直接写 bizItems.length 会把冒烟算成"业务功能"，读出来是「业务功能 182 条」而落档是 180 条。
+      var bizOnly = bizItems.filter(function(x){ return String(x.category || '') === 'business'; }).length;
+      var smokeOnly = bizItems.length - bizOnly;
       var bizPass = bizItems.filter(function(x){ return x.verdict === 'pass'; }).length;
       var bizFail = bizItems.filter(function(x){ return x.verdict === 'fail'; }).length;
       var det = document.createElement('details');
       det.style.cssText = 'margin-top:10px';
-      det.innerHTML = '<summary class="muted" style="cursor:pointer">业务功能 ' + bizItems.length
-        + ' 条 —— 属原应用职责，不计入移植通过率（实测 ' + (bizPass + bizFail) + ' 条：通 ' + bizPass
+      det.innerHTML = '<summary class="muted" style="cursor:pointer">业务功能 ' + bizOnly + ' 条'
+        + (smokeOnly > 0 ? ' + 真机冒烟 ' + smokeOnly + ' 条' : '')
+        + ' —— 属原应用职责，不计入移植通过率（冒烟实测 ' + (bizPass + bizFail) + ' 条：通 ' + bizPass
         + ' / 未过 ' + bizFail + '）</summary>'
         + bizItems.map(function(it, i){ return verRowHtml(it, mainItems.length + i); }).join('');
       list.appendChild(det);
@@ -8858,13 +8871,25 @@ withBridge(function(tauri){
         var d = document.querySelector('#verList details');
         if (d) { d.open = true; }
         reportUi('verifysections-opened');
+        // 0.39.105（§4-136 假绿）：上面那段注释一直承诺「再展开 details → verifyBizOpen 必须变 1」，
+        // 但这里原来只回投、**不断言** ⇒ 展开失效时探针照样报通过，长得跟通过一模一样。
+        // 现在展开后复查一次：拿不到 details 或 open 没变成 true，直接判 fail。
+        var prev = (window.__verifyProbe && window.__verifyProbe.ok === true);
+        var prevFail = String((window.__verifyProbe && window.__verifyProbe.fail) || 'unknown');
+        if (!prev) {
+          window.__verifyProbe = { ok: false, fail: prevFail };
+        } else if (!(d && d.open === true)) {
+          window.__verifyProbe = { ok: false, fail: (d ? 'open-not-applied' : 'no-biz-section') };
+        }
       }, 6800);
       setTimeout(function(){
         var d = document.querySelector('#verList details');
         var prev = (window.__verifyProbe && window.__verifyProbe.ok === true);
         var prevFail = String((window.__verifyProbe && window.__verifyProbe.fail) || 'unknown');
         if (d) { d.open = false; }
-        var restored = d ? (d.open === false) : true;
+        // 原来 `d ? (d.open === false) : true` —— 没有折叠节时回落"收回成功"，同属假绿；
+        // 没有 details 一律按失败处理（那种情况 judgeVerifySectionsNow 早已报 no-biz-section）。
+        var restored = d ? (d.open === false) : false;
         window.__verifyProbe = prev
           ? (restored ? { ok: true, fail: '' } : { ok: false, fail: 'restore-failed' })
           : { ok: false, fail: prevFail };
