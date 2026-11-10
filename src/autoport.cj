@@ -419,8 +419,13 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
         "（应用界面的「华为账号登录」按钮，或 `sign --login`）/ 本机 UDID 是多少**；说完停下等人，别绕圈。\n"
     d += "报错对照（先对号，别乱改代码）：\n"
     d += "- `9568320 no signature file` → 压根没签上，走上面第 2、3 步；\n"
-    d += "- `9568322 signature verification failed due to not trusted app source` → 两种：" +
-        "**release profile 不含 device-ids（正常，别修）**；或 debug 材料里没有本机 UDID（用 `--auto` 注册设备）；\n"
+    d += "- `9568322 signature verification failed due to not trusted app source` → 三种，先分清是哪种：" +
+        "① **release profile 不含 device-ids（正常，别修）**；" +
+        "② debug 材料里没有本机 UDID（用 `--auto` 注册设备）；" +
+        "③ **签 HAP 用的证书 ≠ profile 里绑的证书**（复用云端同名证书时本地 `.cer` 还是更早那张，" +
+        "`sign --auto` 现在会自检并重下；重下后仍报就说明 `.p12` 与证书不是一把钥匙 → " +
+        "`sign --auto --newKeys` 换一套材料）；" +
+        "**注意「设备上装着同包名的另一套签名」报的是 `9568332`（见下一条），别混**；\n"
     d += "- `00303074 … bundleName … does not match` → 包名与 profile 不一致：**新包名只能去 DevEco 自动签名一次**" +
         "（计一次人工介入）；**不许改 `bundleName` 去蹭别人签发的 profile**；\n"
     d += "- `00303242` / `GCM tag mismatch` → `.p12` 口令解不开（材料多半是拷来的），用 `sign --newKeys` 重生成材料；\n"

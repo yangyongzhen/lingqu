@@ -5,6 +5,58 @@
 
 ---
 
+## [0.39.110] - 2026-11-10
+
+### 现象
+
+重签之后装机仍被拒：`deploy` 回 `9568322 signature verification failed due to not trusted app source`。
+可每一份落档都说"好"——`sign` 落档 `ok=true`、`mode.canInstallDevice=true`、设备 UDID 就在 profile 的
+`bundle-info.device-ids` 里、HAP `signed=true` 8.3 MB、`libm3u8dl_tauri_lib.so` 已装配。
+连"设备上装着同包名的旧签名版本"这条也排掉了（`bm uninstall` 之后再装，照样 `9568322`）。
+
+### 根因
+
+**签 HAP 用的证书，和 profile 里绑的证书不是同一张**——两层，第二层会在第一层修好后暴露：
+
+1. `sign --auto` 第 ⑤ 步复用云端同名证书（`auto_debug_40574614.cer`）时，判据是
+   `if (freshCert || !exists(cerPath))`——**只要本地 `.cer` 还在就不重下**。
+   实测本地那份是 11-01 的旧证书（serial `63E51AD2…`），而这轮 profile 里绑的是云端 11-09 那张
+   （serial `63E51D71…`，有效期 2026-11-09→2027-11-09、`type=debug`、device-ids 含本机 UDID）。
+   hvigor 用旧证书签 → 设备按 profile 里的证书验 → 不信。
+2. 让工具重下 `.cer` 后，一致性回来了，但 hvigor 报
+   `11111002 Certificates error`：**云端那张证书不是本地 `.p12` 这把钥匙签出来的**
+   （换证书时换了密钥对）。这一段只能 `--newKeys` 重生成材料，重下 `.cer` 多少次都没用。
+
+教训：证书以**云端为准**，本地 `.cer` 只是一份缓存；而"证书对了"不等于"钥匙配对了"。
+
+### 处置
+
+- `sign --auto` 在 ⑥（profile 落盘）之后加**证书-配置一致性自检**：从 p7b 里取出
+  `bundle-info.development-certificate`，与本地 `.cer`（一条链，顺序是 根→中间→开发者）比对；
+  不一致就按 `certObjectId` 重下（旧文件改名 `*.lingqu-stale-<ms>` 留底）并复核，
+  重下仍不一致则直接给出「`.p12` 与证书不是一把钥匙 → `sign --auto --newKeys`」并中止，
+  不再一路"成功"到真机才炸。
+- 新增三个纯函数（各带单测）：`pemCertBlocksOf`（抽证书块并规范化空白）、
+  `profileDevCertPemOf`（从 profile JSON 取开发证书正文）、`cerHasCertOf`（链里有没有这张）。
+- `hapSignHint` 认 `11111002` / `00303242`：写明这是"材料文件齐全但钥匙不配"，
+  处置是 `--newKeys`，**别去重下 .cer、别改包名**。
+- 指纹库新增 **FP-023**（marker 用唯一的错误码 `11111002`，不拿 `Certificates error` 这类泛串）。
+- 任务书里 `9568322` 由"两种成因"改为"三种"（新增第 ③ 种），并明说
+  **「设备上装着同包名的另一套签名」报的是 `9568332`**，两者别混。
+- `references/signing.md` / `references/pitfalls.md` 同源更新（与指纹表一起改，不许只改一边）。
+
+### 验证
+
+- 真机 `5VFUN26310G06052`：`bm uninstall` → `sign --auto --newKeys`（新证书
+  id=2080774188410377024、新 profile、写回 `signingConfigs`）→ `hap`（`signed=true`）→
+  `deploy --start`：**`installed=true / started=true / ok=true`**。
+- 装机后 `probe --auto --max 8`：「选择文件」**pass**——点后版面多出「最近 / 正在加载… / 已选 (0/1)」，
+  即 ArkWeb 侧真的弹出了 `DocumentViewPicker`（0.39.108 的 native UI 桥在真机成立）；
+  `浏览 / 文档 / 搜索文件 / 自由手写` pass；3 条 `unknown`（可能是没点中，按 §4-157 不据此判不可用）。
+- 五道闸全绿，单测 `TOTAL=531 / FAILED=0 / ERROR=0`。
+
+---
+
 ## [0.39.109] - 2026-11-10
 
 ### 现象

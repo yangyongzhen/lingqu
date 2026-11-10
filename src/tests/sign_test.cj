@@ -752,3 +752,62 @@ public func testGcmPayloadLayout(): Unit {
         case None => @Assert(true, false)
     }
 }
+/*
+ * 证书-配置一致性（0.39.110）：`sign --auto` 复用云端同名证书时，本地 `.cer` 可能是**更早那张**，
+ * 于是 hvigor 拿旧证书签、profile 里写新证书 → 真机装不上（`9568322 not trusted app source`）。
+ * 判据就是下面三个纯函数：profile 里绑的那张证书，本地 `.cer`（一条链）里到底有没有。
+ */
+
+func fakeChainOf(bodies: Array<String>): String {
+    var s = ""
+    for (b in bodies) {
+        s += "-----BEGIN CERTIFICATE-----\n" + b + "\n-----END CERTIFICATE-----\n"
+    }
+    return s
+}
+
+@Test
+public func testPemCertBlocksOfNormalizesWhitespace(): Unit {
+    // 换行位置不同但正文相同 → 规范化后必须一样（否则同一张证书会被判成两张）
+    let a = fakeChainOf(["MIID\nAAAA"])
+    let b = fakeChainOf(["MIIDAAAA"])
+    let ba = pemCertBlocksOf(a)
+    let bb = pemCertBlocksOf(b)
+    @Assert(ba.size, 1)
+    @Assert(bb.size, 1)
+    @Assert(ba[0], bb[0])
+    // 没有证书块 → 空（不抛）
+    @Assert(pemCertBlocksOf("-----BEGIN CERTIFICATE-----").size, 0)
+    @Assert(pemCertBlocksOf("").size, 0)
+}
+
+@Test
+public func testProfileDevCertPemOfFromSample(): Unit {
+    let pem = profileDevCertPemOf(extractProfileJson(readSampleProfile()))
+    // fixture 里确实有开发证书
+    @Assert(pem != "", true)
+    // 规范化过：正文里不许残留空白
+    var hasWs = false
+    for (c in pem.toArray()) {
+        if (c == 32 || c == 9 || c == 10 || c == 13) {
+            hasWs = true
+        }
+    }
+    @Assert(hasWs, false)
+    // 缺键 / 空串 → 空（不抛）
+    @Assert(profileDevCertPemOf("{}"), "")
+    @Assert(profileDevCertPemOf(""), "")
+}
+
+@Test
+public func testCerHasCertOfMatchesOnlySameCert(): Unit {
+    let pem = profileDevCertPemOf(extractProfileJson(readSampleProfile()))
+    // 链里的顺序是 根 → 中间 → 开发者，不能假设开发者证书在第几位
+    let chain = fakeChainOf(["ROOTBODY", "INTERMEDIATE", pem])
+    @Assert(cerHasCertOf(chain, pem), true)
+    // 别的证书不算命中（这是"旧 .cer 签新 profile"的现场形态）
+    let stale = fakeChainOf(["ROOTBODY", "OTHERCERT"])
+    @Assert(cerHasCertOf(stale, pem), false)
+    // 空 pem 一律不命中（避免"取不到就当通过"）
+    @Assert(cerHasCertOf(chain, ""), false)
+}

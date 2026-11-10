@@ -27,10 +27,17 @@
 ## 部署期
 
 ### 5. `9568322 not trusted app source`（bm install）
-- **根因**：`build-profile.json5` 默认配 **release 签名**（app_gallery 分发 profile，
-  无 device-ids 字段），hdc 直装不信任。
-- **修法**：`products.default.signingConfig: "release" → "default"`（debugKey，含设备 UDID）；
-  **上架前改回 release**——lingqu 的构建规则里这是强提醒项。
+- **根因**（三种，先分清再动手）：
+  - ① `build-profile.json5` 配的是 **release 签名**（app_gallery 分发 profile，无 device-ids），hdc 直装不信任；
+  - ② debug 材料里的 profile 没有**本机 UDID**（设备没注册进团队）；
+  - ③ **签 HAP 用的证书 ≠ profile 里绑的证书**——复用云端同名证书时本地 `.cer` 还是更早那张
+    （实测：`.cer` 里是 serial `63E51AD2…`(11-01)，profile 里绑的是 `63E51D71…`(11-09)），
+    hvigor 用旧证书签、profile 写新证书 → 真机这头才炸，而前面每一环都报"成功"。
+    证书以**云端为准**，本地 `.cer` 只是缓存：`sign --auto` 现在会在 ⑥ 之后自检并重下。
+- **修法**：① `products.default.signingConfig: "release" → "default"`（上架前改回 release）；
+  ② 用 `sign --auto` 把设备注册进 profile；③ 让工具重下 `.cer`；重下仍报就说明
+  `.p12` 与证书不是一把钥匙 → `sign --auto --newKeys`（旧材料改名留底）。
+  **`9568332` 才是"设备上装着同包名的另一套签名"**，两者处置不同，别混。
   **进阶**：连 DevEco 都不用打开——`~/.ohos/config` 里自动签名材料的 profile 若含本机 UDID，
   把 `signingConfigs` 抄回 `build-profile.json5` 即可（详见 [signing.md](signing.md)）。
 

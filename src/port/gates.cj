@@ -289,6 +289,16 @@ public func hapSignHint(logText: String): String {
             "正解：让 gen/ohos/entry/hvigorfile.ts 不再跑这个钩子（本工具 t2h:hap 已把 lib<模块>.so 装配进 libs/arm64-v8a，" +
             "不依赖它编 Rust）；或先 `cargo tauri ohos dev` 起 dev server 再装配"
     }
+    // 11111002 / 00303242（0.39.110，m3u8dl-tauri 实测）：材料**文件齐全、包名也对**，但
+    // `.p12` 这把钥匙与云端那张证书不是一对——`sign --auto` 复用云端同名证书时，云端那张可能是
+    // **另一次**从别的 CSR 签出来的（本地 .cer 被重下成新证书，但 .p12 还是旧的）。
+    // 这一条与"材料缺失"长得很像，处置却相反：必须**换一套自己能掌握口令的材料**。
+    if (logText.contains("11111002") || logText.contains("00303242")) {
+        return "HAP 闸：签名材料与证书不配套（hvigor 11111002 / 00303242）——" +
+            "本地 .p12 私钥与 build-profile 指向的证书不是同一把钥匙（常见于复用云端同名证书、" +
+            "或材料是别处拷来的）。换密钥对重签：" +
+            "`lingqu-cli sign --auto --newKeys --path .`（旧材料会改名留底），再重跑装配"
+    }
     return ""
 }
 

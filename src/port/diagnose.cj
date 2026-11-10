@@ -193,6 +193,14 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
         "hvigorfile.ts 里的 tauri 钩子在跑 `cargo tauri ohos dev-eco-studio-script`，它要读 dev server 的 addr 文件（%TEMP%\\<包名>-server-addr）；非 dev 场景没有这个文件 → tauri-cli panic → hvigor 00308018",
         "让 gen/ohos/entry/hvigorfile.ts 不再跑这个钩子（迁移台的 t2h:hap 已负责把 lib<模块>.so 装配进 libs/arm64-v8a，不需要它编 Rust）；或者先 `cargo tauri ohos dev` 起 dev server 再装配",
         "", PK_GUIDE))
+    // FP-023（0.39.110，m3u8dl-tauri 实测）：材料文件齐全、包名也对，但 `.p12` 与证书不是一对。
+    // 现场链条：sign --auto 复用云端同名证书（那是**另一次**从别的 CSR 签出来的）→ 本地 .cer 被重下成
+    // 新证书、.p12 仍是旧的 → hvigor default@SignHap 直接 11111002；重下证书解决不了，只能换密钥对。
+    // marker 用错误码（唯一），不用 "Certificates error" 这类泛串（§4-164）。
+    lib.add(Fingerprint("FP-023", "11111002",
+        "签名材料里 `.p12` 私钥与 build-profile 指向的证书不是同一把钥匙（hvigor 11111002 Certificates error；00303242 'Unable to authenticate data' 同源）——常见于复用云端同名证书、或材料从别处拷来",
+        "换一套自己能掌握口令的材料重签：`lingqu-cli sign --auto --newKeys --path .`（旧材料改名留底），再重跑 t2h:hap / deploy。**别去重下 .cer、别改包名**——证书换成新的、钥匙还是旧的，重下多少次都对不上",
+        "", PK_GUIDE))
 
     return lib
 }

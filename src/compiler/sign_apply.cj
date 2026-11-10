@@ -328,6 +328,19 @@ public func autoSign(inp: AutoSignInput, token: AgcLoginOutcome): AutoSignOutcom
     }
     out.add("⑥ profile：${provNote}")
     out.add("⑥ 落盘：${out.p7bPath}")
+    // ⑥ 之后的**证书-配置一致性**自检（0.39.110 实测）：profile 里绑定的开发证书，必须是本地
+    // `.cer` 里那张——证书以**云端为准**，本地 `.cer` 只是一份缓存。
+    //
+    // 现场（m3u8dl-tauri 真机）：复用云端同名证书（id=2080015801942840128）时本地 `.cer` 还是
+    // **更早那张**（serial 63E51AD2…，11-01），hvigor 拿旧证书签、profile 里写新证书（63E51D71…，11-09）
+    // → 设备回 `9568322 signature verification failed due to not trusted app source`。
+    // 而登录 / 证书 / profile / 写回 / 装配每一环都报"成功"，只有真机装机这一下才炸。
+    let (cerOK, cerNote) = ensureCerMatchesProfile(out, token, teamId, cert)
+    out.add("⑥ ${cerNote}")
+    if (!cerOK) {
+        out.error = "⑥ ${cerNote}"
+        return out
+    }
     // ---------------- ⑦ 写 build-profile ----------------
     let (workKey, wkErr) = loadWorkKey(materialDirOfConfig(inp.configDir))
     if (wkErr != "") {
@@ -424,6 +437,174 @@ func firstExistingEnv(names: Array<String>): String {
         }
     }
     return ""
+}
+
+/**
+ * 让本地 `.cer` 与刚下载的 profile 里的开发证书**是同一张**（证书以云端为准）。
+ *
+ * 判定与修复都落在这里：不一致时按 `certObjectId` 重下一次（旧文件改名留底），再核一次；
+ * 重下仍不一致说明**云端那张证书不是当前 `.p12` 这把钥匙签的**，只能 `--newKeys`。
+ */
+func ensureCerMatchesProfile(out: AutoSignOutcome, token: AgcLoginOutcome, teamId: String,
+    cert: AgcCert): (Bool, String) {
+    var cerText = ""
+    try {
+        if (exists(Path(out.cerPath))) {
+            cerText = String.fromUtf8(File.readFrom(out.cerPath))
+        }
+    } catch (e: Exception) {
+        return (false, "读本地证书失败：${e}")
+    }
+    if (cerText == "") {
+        return (false, "本地没有证书文件（${out.cerPath}）")
+    }
+    var devPem = ""
+    try {
+        if (exists(Path(out.p7bPath))) {
+            devPem = profileDevCertPemOf(extractProfileJson(String.fromUtf8(File.readFrom(out.p7bPath))))
+        }
+    } catch (e: Exception) {
+        let _ = e
+        devPem = ""
+    }
+    if (devPem == "") {
+        // 读不出就不拦：证书格式一变更不该让整条链全红（宁可真机那一步再说话）
+        return (true, "profile 里读不出开发证书，跳过证书一致性自检")
+    }
+    if (cerHasCertOf(cerText, devPem)) {
+        return (true, "本地 .cer 与 profile 是同一张开发证书")
+    }
+    let bak = "${out.cerPath}.lingqu-stale-${nowMs()}"
+    try {
+        File.writeTo(bak, cerText.toArray())
+    } catch (e: Exception) {
+        return (false, "备份旧证书失败：${e}")
+    }
+    let objectRef = if (cert.certObjectId != "") { cert.certObjectId } else { cert.id }
+    let (saved, dlErr) = agcDownloadObject(token.accessToken, token.userId, teamId, objectRef,
+        out.cerPath)
+    if (dlErr != "") {
+        return (false, "本地 .cer 是旧证书且重下失败（${dlErr}）——装到真机会被 9568322 拒")
+    }
+    var fresh = ""
+    try {
+        fresh = String.fromUtf8(File.readFrom(out.cerPath))
+    } catch (e: Exception) {
+        return (false, "重下后读不出证书：${e}")
+    }
+    if (!cerHasCertOf(fresh, devPem)) {
+        return (false, "本地 .cer 与 profile 不是同一张证书，重下后仍不一致（旧文件已备份到 ${bak}）——" +
+            "云端那张证书不是当前 .p12 这把钥匙签的，用 `sign --auto --newKeys` 重生成密钥对再签")
+    }
+    return (true, "本地 .cer 是旧证书，已按云端重下：${saved}")
+}
+
+/**
+ * 抽出 PEM 文本里所有证书块并**规范化**（去掉换行与行内空白）。
+ *
+ * 同一张证书在不同文件里换行位置可能不同，直接字符串比较会假红；
+ * 而 `.cer` 是一条链（实测顺序是 根 → 中间 → 开发者），所以只谈"链里有没有这张"，
+ * 不假设开发者证书在第几位。
+ */
+public func pemCertBlocksOf(text: String): ArrayList<String> {
+    let blocks = ArrayList<String>()
+    let begin = "-----BEGIN CERTIFICATE-----"
+    let endMark = "-----END CERTIFICATE-----"
+    var from: Int64 = 0
+    var go = true
+    while (go) {
+        match (text.indexOf(begin, from)) {
+            case Some(s) =>
+                match (text.indexOf(endMark, s + begin.size)) {
+                    case Some(e) =>
+                        let norm = squashWhitespaceOf(text[(s + begin.size)..e])
+                        if (norm != "") {
+                            blocks.add(norm)
+                        }
+                        from = e + endMark.size
+                    case None => go = false
+                }
+            case None => go = false
+        }
+    }
+    return blocks
+}
+
+/** 去掉所有空白字节（空格 / 制表 / LF / CR），用于证书正文比较 */
+func squashWhitespaceOf(s: String): String {
+    let bytes = s.toArray()
+    let acc = ArrayList<Byte>()
+    for (b in bytes) {
+        if (b == 32 || b == 9 || b == 10 || b == 13) {
+            continue
+        }
+        acc.add(b)
+    }
+    return String.fromUtf8(acc.toArray())
+}
+
+/**
+ * 取 profile JSON 里 `bundle-info.development-certificate` 的证书**正文**（已规范化）；取不到给空串。
+ *
+ * 用"找键 → 找首个引号 → 扫到未转义引号"的写法而不是完整 JSON 解析：profile 里的证书是
+ * **一行带 `\n` 转义的长 base64**。取值后必须**交回 `pemCertBlocksOf`**再解析一次，
+ * 否则一边是链里的块体、一边是带 BEGIN/END 标记的整段，比较口径不一致会永远判"不是同一张"。
+ */
+public func profileDevCertPemOf(profileJson: String): String {
+    let key = "\"development-certificate\""
+    match (profileJson.indexOf(key)) {
+        case Some(k) =>
+            match (profileJson.indexOf("\"", k + key.size)) {
+                case Some(q) =>
+                    let bytes = profileJson.toArray()
+                    let acc = ArrayList<Byte>()
+                    var i = q + 1
+                    var esc = false
+                    while (i < bytes.size) {
+                        let c = bytes[i]
+                        if (esc) {
+                            esc = false
+                            // `\n` / `\r` / `\t` 还原成真空白；其余转义保留字符本身
+                            if (c == 110) {
+                                acc.add(10)
+                            } else if (c == 114) {
+                                acc.add(13)
+                            } else if (c == 116) {
+                                acc.add(9)
+                            } else {
+                                acc.add(c)
+                            }
+                        } else if (c == 92) {
+                            esc = true
+                        } else if (c == 34) {
+                            break
+                        } else {
+                            acc.add(c)
+                        }
+                        i++
+                    }
+                    let blocks = pemCertBlocksOf(String.fromUtf8(acc.toArray()))
+                    if (blocks.size == 0) {
+                        return ""
+                    }
+                    return blocks[0]
+                case None => return ""
+            }
+        case None => return ""
+    }
+}
+
+/** 本地 `.cer`（证书链）里是否含这张证书（纯函数） */
+public func cerHasCertOf(cerText: String, pem: String): Bool {
+    if (pem == "") {
+        return false
+    }
+    for (b in pemCertBlocksOf(cerText)) {
+        if (b == pem) {
+            return true
+        }
+    }
+    return false
 }
 
 /** 临时目录（放 CSR 之类中间产物） */

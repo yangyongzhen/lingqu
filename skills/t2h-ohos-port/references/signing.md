@@ -172,7 +172,7 @@ $env:OHOS_HOME="$deveco\sdk\default\openharmony"
 
 | 码 | 含义 | 处置 |
 |---|---|---|
-| **9568322** | `signature verification failed due to not trusted app source`——装的不是设备信任的证书，或 profile 没有本机 UDID | 换**绑定本机 UDID 的 debug profile**（§3）；release/上架 profile 直装必失败 |
+| **9568322** | `signature verification failed due to not trusted app source`——三种成因：①签的是 release/上架 profile（不含 device-ids）；②debug 材料里没有本机 UDID；③**签 HAP 用的证书 ≠ profile 里绑的证书** | ①②换**绑定本机 UDID 的 debug profile**（§3）；③见下条 `11111002`——证书以**云端为准**，本地 `.cer` 只是一份缓存，`sign --auto` 会自检并重下 |
 | **9568332** | `install sign info inconsistent`——同包名已装过**另一套签名**的版本（换材料后必然如此） | `bm uninstall -n <bundle>` 后重装（`t2h:deploy` 会自动做一次） |
 | **9568269** | `install file path invalid`——hdc 发文件保留了源目录结构 | 先 `cd` 到 HAP 所在目录再 `file send` 文件名；或直接 `hdc install -r <绝对路径>` |
 | **10106102** | `aa start` 被拒：设备在锁屏（开发者模式禁止自动解锁） | 解锁后重试；自动化流程要留等待点。**与 ability/bundle 名无关**，别去改名字 |
