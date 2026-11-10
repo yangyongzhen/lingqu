@@ -5,6 +5,50 @@
 
 ---
 
+## [0.39.111] - 2026-11-10
+
+### 现象
+
+上一轮（0.39.110）收尾时记了三个诚实缺口，第一条是
+「**指纹表 ↔ `pitfalls.md` 同源只靠纪律、没有自动校验**」。
+拿现场核对，它**已经在漂移**：`FP-020` 的正文写着 hvigor 报 `00308018`，
+而 `skills/t2h-ohos-port/references/` 六个 `.md` 里 `00308018` **一处都没有**；
+任务书正文点名 `9568320`，技能文档同样查不到。也就是说：agent 撞上这个码，
+指纹库给得出归因，但**去技能里翻不到处置**（§4-130 的同款处境：能力在、说明书没给）。
+
+### 根因
+
+指纹库（`src/port/diagnose.cj` 的 `fingerprintLibrary()`）与技能 references
+是**两处手写维护的同一份知识**，只靠顶部一句注释「改动两边同步」约束。
+纪律在没有判据时必然失效——尤其"补指纹"和"补技能"常常不是同一个人、同一轮做的事。
+
+### 处置
+
+1. **把同源做成判据**（`src/port/diagnose.cj`，四个纯函数）：
+   - `isUniqueErrorCodeOf()`——唯一错误码的口径（全 ASCII 数字、≥7 位），
+     与 §4-164「只收能被报错原文唯一认出的串」同一条线；
+   - `uniqueErrorCodesOf()`——从任意文本里抽这些码（保序去重，按字节扫，中文不误判）；
+   - `codesMissingInDocsOf()` / `fingerprintDocGapsOf()`——"这些码在文档里查不到"的缺口清单。
+2. **单测钉住两边**（`src/tests/fingerprint_sync_test.cj`，7 条）：
+   口径/抽取/去重/边界（码紧贴中文、超长码）/
+   合成指纹报缺口（并指名是哪条 FP）/
+   **读真实 `references/*.md` 断言缺口为空**（文档读不到时直接红，不静默通过）。
+3. **按缺口补文档**（`references/signing.md`）：新增 `00308018`（hvigor `Unknown Error`，
+   真 trace 是 `dev-eco-studio-script` 钩子 panic，处置=注掉钩子并重跑 `port --apply`）
+   与 `9568320`（`no signature file`，压根没签上，别去查设备）。
+
+### 证据
+
+- `cjpm build` 零警告；`cjpm test` → `TOTAL: 538 / PASSED: 538 / FAILED: 0 / ERROR: 0`
+  （0.39.110 基线 531，本轮 +7）。
+- 该断言**可复现地会红**：把 `signing.md` 里的 `00308018` 删掉，
+  `testRealReferencesCoverEveryFingerprintCode` 立刻报「缺口为空」失败并列出缺的码——
+  它不是"跑一遍总是绿"的摆设。
+- 同批同步：`docs/AI自进化飞轮.md`（认知层资产表按真实规模更新 + 补"同源靠单测"一节）、
+  `docs/进度记录.md`。
+
+---
+
 ## [0.39.110] - 2026-11-10
 
 ### 现象

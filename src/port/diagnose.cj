@@ -374,3 +374,83 @@ func diagLowerOf(s: String): String {
     }
     return String.fromUtf8(out.toArray())
 }
+
+// ===== 指纹库 ↔ 技能文档 的同源校验（0.39.111）=====
+// 两条教训撞在一起：§4-164 说"只有能被报错原文唯一认出的串才进指纹表"，
+// §4-130 说"工具有能力、说明书没给 = agent 只能瞎摸"。
+// 推论：**指纹表里出现的唯一错误码，技能文档里必须查得到处置**。
+// 这两处都是手写维护，一定会漂移；把它做成纯函数，才能用单测钉住（而不是靠谁记得同步）。
+
+/** 是否是"唯一可识别错误码"：全 ASCII 数字且 ≥7 位（`9568322` / `00303074` / `11111002`） */
+public func isUniqueErrorCodeOf(s: String): Bool {
+    let bytes = s.toArray()
+    if (bytes.size < 7) {
+        return false
+    }
+    for (b in bytes) {
+        if (b < 48 || b > 57) {
+            return false
+        }
+    }
+    return true
+}
+
+/** 从任意文本里抽出全部 7 位以上纯数字串（保序去重）—— 用来扫指纹正文与任务书正文 */
+public func uniqueErrorCodesOf(text: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let cur = ArrayList<Byte>()
+    let bytes = text.toArray()
+    var i = 0
+    while (i <= bytes.size) {
+        let isDigit = if (i < bytes.size) { bytes[i] >= 48 && bytes[i] <= 57 } else { false }
+        if (isDigit) {
+            cur.add(bytes[i])
+        } else {
+            if (cur.size >= 7) {
+                let code = String.fromUtf8(cur.toArray())
+                if (!out.contains(code)) {
+                    out.add(code)
+                }
+            }
+            cur.clear()
+        }
+        i += 1
+    }
+    return out
+}
+
+/** 给定文本里有哪些错误码在 `docText` 中查不到 */
+public func codesMissingInDocsOf(text: String, docText: String): ArrayList<String> {
+    let gaps = ArrayList<String>()
+    for (code in uniqueErrorCodesOf(text)) {
+        match (docText.indexOf(code)) {
+            case Some(_) => ()
+            case None => gaps.add(code)
+        }
+    }
+    return gaps
+}
+
+/**
+ * 指纹库 → 技能文档 的同源缺口。
+ * 每条指纹的 marker / 根因 / 修法里出现的唯一错误码，都应当能在技能 references 里查到；
+ * 查不到的按「FP-0xx 的错误码 xxx 在技能文档里查不到」返回（空数组 = 两边一致）。
+ */
+public func fingerprintDocGapsOf(fps: ArrayList<Fingerprint>, docText: String): ArrayList<String> {
+    let gaps = ArrayList<String>()
+    let checked = ArrayList<String>()
+    for (fp in fps) {
+        let codes = uniqueErrorCodesOf(fp.marker + " " + fp.rootCause + " " + fp.fix)
+        for (code in codes) {
+            if (checked.contains(code)) {
+                continue
+            }
+            checked.add(code)
+            match (docText.indexOf(code)) {
+                case Some(_) => ()
+                case None => gaps.add("${fp.id} 的错误码 ${code} 在技能文档里查不到")
+            }
+        }
+    }
+    return gaps
+}

@@ -173,6 +173,7 @@ $env:OHOS_HOME="$deveco\sdk\default\openharmony"
 | 码 | 含义 | 处置 |
 |---|---|---|
 | **9568322** | `signature verification failed due to not trusted app source`——三种成因：①签的是 release/上架 profile（不含 device-ids）；②debug 材料里没有本机 UDID；③**签 HAP 用的证书 ≠ profile 里绑的证书** | ①②换**绑定本机 UDID 的 debug profile**（§3）；③见下条 `11111002`——证书以**云端为准**，本地 `.cer` 只是一份缓存，`sign --auto` 会自检并重下 |
+| **9568320** | `no signature file`——压根没签上（HAP 里没有签名块） | 先 `sign --auto` 备好材料再 `hvigor assembleHap` 装配；**别去查设备**（这不是装机问题） |
 | **9568332** | `install sign info inconsistent`——同包名已装过**另一套签名**的版本（换材料后必然如此） | `bm uninstall -n <bundle>` 后重装（`t2h:deploy` 会自动做一次） |
 | **9568269** | `install file path invalid`——hdc 发文件保留了源目录结构 | 先 `cd` 到 HAP 所在目录再 `file send` 文件名；或直接 `hdc install -r <绝对路径>` |
 | **10106102** | `aa start` 被拒：设备在锁屏（开发者模式禁止自动解锁） | 解锁后重试；自动化流程要留等待点。**与 ability/bundle 名无关**，别去改名字 |
@@ -181,6 +182,7 @@ hvigor 侧（`assembleHap` 失败时）：
 
 | 码 | 含义 | 处置 |
 |---|---|---|
+| **00308018** | `Unknown Error`——真 trace 不在这一行，往日志深处找：`cargo tauri ohos dev-eco-studio-script` → `thread 'main' panicked: failed to read missing addr file %TEMP%\<包名>-server-addr` → tauri-cli 自己 panic | `gen/ohos/entry/hvigorfile.ts` 里那条 `afterRun(buildRustCode)` 钩子只给 `tauri ohos dev`（有 dev server）准备；非 dev 场景必失败 → 注掉它（规则 `R2-PORT-015` 自动注，带 `.bak`），**重新生成过 `gen/ohos` 就要重跑 `port --path . --apply`**。与签名、源码都无关，别去反复试签名（§4-114 / §4-153） |
 | **00303074** | `bundleName in app.json5 … does not match the bundleName in the generated SigningConfigs` | profile 是按包名签发的 → 给**这个**包名签一份（`sign --auto`） |
 | **00303242** | `Signature material verification failed, as: Unsupported state or unable to authenticate data` | 口令密文解不开（`material/` 换了 / 口令丢了）→ `sign --auto --newKeys` |
 | **00303107** | `Invalid storeFile` | 材料文件缺失（路径错或文件被删） |

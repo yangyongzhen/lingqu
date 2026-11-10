@@ -165,12 +165,18 @@ lingqu-cli notes --path . --action archive   # 已入库的移出候选池 + 台
 
 ### ⑥ 认知层：固化成长期资产
 
-| 资产 | 位置 | 规模（0.39.55） | 下一轮怎么被吃上 |
+| 资产 | 位置 | 规模（0.39.111） | 下一轮怎么被吃上 |
 |---|---|---|---|
-| 错误指纹库 | `src/port/diagnose.cj` 的 `fingerprintLibrary()` | **FP-001…FP-020**（20 条） | `t2h:diagnose` 命中即给修法，**不调模型**（省轮次） |
-| 机械改造规则 | `src/port/*.cj`（`R2-PORT-001…015`） | **15 条**，auto / guide 两档 | `t2h:port` 直接改；guide 档计一次人工介入（A3 口径） |
-| 技能库 | `skills/t2h-ohos-port/SKILL.md` + `references/{cargo-patches,toolchain,arkweb-shims,signing,pitfalls}.md` | 1 技能 + 5 参考 | `t2h:skill` 装进 `~/.cjh/skills/t2h-ohos-port.md`（正文进 **system prompt**） |
-| 坑清单 | `AGENTS.md` §4 | **119 条** | 人和 agent 都读；改代码前的对照表 |
+| 错误指纹库 | `src/port/diagnose.cj` 的 `fingerprintLibrary()` | **FP-001…FP-023**（23 条） | `t2h:diagnose` 命中即给修法，**不调模型**（省轮次） |
+| 机械改造规则 | `src/port/*.cj`（`R2-PORT-001…016`） | **16 条**，auto / guide 两档 | `t2h:port` 直接改；guide 档计一次人工介入（A3 口径） |
+| 技能库 | `skills/t2h-ohos-port/SKILL.md` + `references/{cargo-patches,toolchain,arkweb-shims,signing,pitfalls,native-ui-bridge}.md` | 1 技能 + 6 参考 | `t2h:skill` 装进 `~/.cjh/skills/t2h-ohos-port.md`（正文进 **system prompt**） |
+| 坑清单 | `AGENTS.md` §4 | **165 条** | 人和 agent 都读；改代码前的对照表 |
+
+**同源不是靠纪律，是靠单测**（0.39.111）：指纹库里出现的**唯一错误码**（全数字、≥7 位，如 `9568322`）
+必须能在 `references/*.md` 里查得到——`fingerprintDocGapsOf()` 把它做成纯函数，
+`testRealReferencesCoverEveryFingerprintCode` 读真实文档断言"缺口为空"。
+此前这条链路只写在注释里（"与 pitfalls.md 同源，改动两边同步"），实测**已经在漂移**
+（`FP-020` 正文里的 `00308018` 在六个 reference 里一个都没有）。
 
 技能安装的细节（`src/skill_install.cj`，照 cjh 既有约定，不自创）：
 
