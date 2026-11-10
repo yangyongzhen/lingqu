@@ -189,6 +189,150 @@ public func autoPortScopeGoal(scope: String): String {
 }
 
 /**
+ * 任务书小节的触发条件（0.39.112）。
+ *
+ * 为什么要给它一个"名字"而不是在单测里写死 `contains`：任务书不是所有小节都无条件出现
+ * （没给 CLI 路径就没有工具箱之外的命令示范、没插真机就没有冒烟节），判"给全了没有"
+ * 必须知道**这一份变体该有哪些**，否则只能靠人眼看。
+ */
+public let DIRECTIVE_WHEN_ALWAYS: String = "always"
+/** 只有拿到 `lingqu-cli` 绝对路径时才出现（没路径时工具箱整段退化成命令名举例） */
+public let DIRECTIVE_WHEN_CLI: String = "cli"
+/** 真机在线才有（冒烟与移植验收的分母说明） */
+public let DIRECTIVE_WHEN_DEVICE: String = "device"
+/** 有落档摘要才有（"当前落档"那节，让 agent 一上手就知道从哪继续） */
+public let DIRECTIVE_WHEN_STATE: String = "state"
+/** 半自动作用域才有（只做一步、做完就停） */
+public let DIRECTIVE_WHEN_HALF: String = "half"
+
+/**
+ * 任务书的一条必备小节。
+ *
+ * [section] 是小节标题的**稳定前缀**：生成物里必须原样出现，所以改文案就得同步改这里，
+ * 而 `docs/任务书规范.md` §3 抄的是同一份清单（单测两端都钉住，见 §4-167 同族）。
+ * [why] 写清"缺了会怎样"——它是判「这一条还能不能删」的唯一依据，删条款的人先读它。
+ */
+public class DirectiveClause {
+    public var section: String = ""
+    public var when: String = ""
+    public var why: String = ""
+
+    public init(section: String, when: String, why: String) {
+        this.section = section
+        this.when = when
+        this.why = why
+    }
+}
+
+/**
+ * 任务书必备小节清单——**这是任务书层的"验收判据"，不是备忘录**。
+ *
+ * 每一条都对应一次真实事故（§4-130 / §4-150 那一族）：工具明明有能力、任务书没写，
+ * agent 就只能瞎摸，白烧一轮人工介入。所以新增能力时问的不是"要不要写进任务书"，
+ * 而是"写在哪个小节、缺了会怎样"。
+ */
+public func directiveClauses(): ArrayList<DirectiveClause> {
+    let out = ArrayList<DirectiveClause>()
+    out.add(DirectiveClause("【灵渠 · AI 自动迁移任务书】", DIRECTIVE_WHEN_ALWAYS,
+        "不点明这是任务书，模型会当成随便一段聊天，给完建议就停下"))
+    out.add(DirectiveClause("**你是这次迁移的执行者，不是顾问。**", DIRECTIVE_WHEN_ALWAYS,
+        "0.36.0 就是这么退化的：AI 只出建议，命令还得人点"))
+    out.add(DirectiveClause("## 工具箱", DIRECTIVE_WHEN_ALWAYS,
+        "agent 的 bash cwd 是目标工程，相对路径全失效；没有可复制的绝对路径，整条循环就断了（§4-70）"))
+    out.add(DirectiveClause("## 原生 UI 能力", DIRECTIVE_WHEN_ALWAYS,
+        "选文件/选目录/分享/开外部应用在 ArkWeb 里没有原生等价物，不写它就自己开浏览器或猜路径（§4-162）；" +
+            "这条**无条件**给，因为桥的铁律与有没有 lingqu-cli 路径无关"))
+    out.add(DirectiveClause("## 把踩到的坑记下来", DIRECTIVE_WHEN_CLI,
+        "会话会被压缩，细节一压就淡；不落成笔记就等于没踩过（飞轮第 ①步的入口）"))
+    out.add(DirectiveClause("**判断只认落档**", DIRECTIVE_WHEN_ALWAYS,
+        "退出码 0 不等于通过（§4-63 假绿）；不写这条，它会拿\"跑完了\"当\"迁好了\""))
+    out.add(DirectiveClause("## 工作循环", DIRECTIVE_WHEN_ALWAYS,
+        "不给固定循环，它会跳步或反复重跑已通过的步骤，白烧轮次"))
+    out.add(DirectiveClause("## 当前落档", DIRECTIVE_WHEN_STATE,
+        "不给现状就会自己去猜从哪继续，通常等于重跑一遍扫描"))
+    out.add(DirectiveClause("## 本次范围", DIRECTIVE_WHEN_HALF,
+        "半自动不写范围，它会顺手把 build/hap/deploy 全跑了，人失去逐步确认的意义"))
+    out.add(DirectiveClause("## 真机：", DIRECTIVE_WHEN_ALWAYS,
+        "不说清设备在不在线，它会把\"未跑\"当成\"失败\"，或者对不存在的设备反复重试"))
+    out.add(DirectiveClause("### 先证「移植做完了」", DIRECTIVE_WHEN_DEVICE,
+        "D-020：A4 分母是移植项，不写清就会去替原作者逐条点业务功能，永远点不完"))
+    out.add(DirectiveClause("### 业务功能冒烟", DIRECTIVE_WHEN_DEVICE,
+        "不把冒烟单列，业务功能失败会被算进移植通过率（§4-63 第三态）"))
+    out.add(DirectiveClause("## 纪律", DIRECTIVE_WHEN_ALWAYS,
+        "平台限制≠失败、未验证≠通过、禁全盘搜索——不写就会谎报或挂死（2026-11-07 事故）"))
+    out.add(DirectiveClause("## 交叉编译的硬前置", DIRECTIVE_WHEN_ALWAYS,
+        "缺 `.cargo/config.toml` 的 `[env]` 段时 cc-rs 必然失败，不说清它会去改 Rust 源码"))
+    out.add(DirectiveClause("## TLS 栈", DIRECTIVE_WHEN_ALWAYS,
+        "reqwest 默认特性拉进 openssl-sys，OHOS 上必死；技能里写了也没用，症状串对不上（§4-150）"))
+    out.add(DirectiveClause("## 装配 HAP 前：鸿蒙脚手架必须先生成", DIRECTIVE_WHEN_ALWAYS,
+        "不写 `cargo tauri ohos init --ci`，它到 hap 这一步只会撞墙，或去全盘搜 `gen/ohos`"))
+    out.add(DirectiveClause("## 签名与登录", DIRECTIVE_WHEN_ALWAYS,
+        "CLI 早就有 `--login`/`--auto`，任务书没写 ⇒ agent 自己开浏览器登录，白花一次人工介入（§4-130）"))
+    out.add(DirectiveClause("## 预算与收尾", DIRECTIVE_WHEN_ALWAYS,
+        "不给预算它会无限挂着；不给收尾格式，人就只能读一大段散文"))
+    return out
+}
+
+/** [whens] 里有没有这个条件（小工具，避免依赖 Array 的 contains 语义） */
+func directiveWhensContains(whens: Array<String>, w: String): Bool {
+    for (x in whens) {
+        if (x == w) {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * 按触发条件筛出**这一份变体**该有的必备小节（纯函数）。
+ *
+ * [whens] 传 `[DIRECTIVE_WHEN_CLI, DIRECTIVE_WHEN_DEVICE, …]` 这种"这份变体满足了哪些条件"。
+ * `always` 不需要传——它永远算上。
+ */
+public func directiveSectionsOf(whens: Array<String>): Array<String> {
+    let out = ArrayList<String>()
+    for (c in directiveClauses()) {
+        if (c.when == DIRECTIVE_WHEN_ALWAYS || directiveWhensContains(whens, c.when)) {
+            out.add(c.section)
+        }
+    }
+    return out.toArray()
+}
+
+/**
+ * [body] 里缺了哪些必备小节（纯函数）。
+ *
+ * 空 body 一律判"全缺"——**不许把"读不到"当成"都齐了"**（§4-136 假绿的教训：
+ * 拿不到现场不是没问题）。写盘失败、文件被清空都该走这条路报出来。
+ */
+public func directiveGapsOf(body: String, wants: Array<String>): ArrayList<String> {
+    let gaps = ArrayList<String>()
+    for (w in wants) {
+        if (!body.contains(w)) {
+            gaps.add(w)
+        }
+    }
+    return gaps
+}
+
+/**
+ * 只看**条件性**小节（永不含 `always`）——用于断言"条件不满足时它确实不在"。
+ *
+ * 为什么不复用 `directiveSectionsOf`：那个函数的口径是"这一份变体该有的**全部**小节"，
+ * 天然含 always；拿它去断"不在"会把每条必给小节都断成失败（0.39.112 第一版单测就这么红的，
+ * 属于**测试自己错了**，不是被测代码错——这种情况必须先分清，别去改被测代码迎合测试）。
+ */
+public func directiveConditionalSectionsOf(whens: Array<String>): Array<String> {
+    let out = ArrayList<String>()
+    for (c in directiveClauses()) {
+        if (c.when != DIRECTIVE_WHEN_ALWAYS && directiveWhensContains(whens, c.when)) {
+            out.add(c.section)
+        }
+    }
+    return out.toArray()
+}
+
+/**
  * 迁移任务书（纯函数）。
  *
  * 写这份文本有三个"必须"：
@@ -239,6 +383,10 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     // 「原生 UI 能力」这一类缺口重复率极高（选文件/选目录/分享/相册/打开外部应用），而它撞出来的
     // 第一反应往往是"自己开个浏览器/自己猜路径"，白烧一轮人工介入。顺序、铁律、验证三步写死在这里；
     // 细节（桥骨架、三种返回值形态、picker 的 uri 授权语义）在技能 references/native-ui-bridge.md。
+    // 命令名兜底：这一段是**无条件**出现的，而 `inp.cliPath` 在定位不到时是空串——
+    // 直接拼进去会产出 `` ` hap --path .` ``（程序名丢了），agent 照着跑必然 "command not found"。
+    // 与「工具箱」那节同一个口径：退化成命令名，让它自己去找（§4-94：不许出现看起来像命令的假值）。
+    let cliRef = if (inp.cliPath.size > 0) { inp.cliPath } else { "lingqu-cli" }
     d += "\n## 原生 UI 能力（选择文件/目录、分享、打开外部应用）\n"
     d += "`verify` 的 `platform-api` 项里若出现「鸿蒙侧是空壳」（`None` / `Err(\"当前平台不支持…\")`），"
     d += "指的是桌面侧用了 `rfd::FileDialog` / `explorer` / 系统分享这类**原生 UI**。ArkWeb 里没有原生对话框，"
@@ -252,7 +400,7 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "3. **要返回值就别 fire-and-forget**：写一次性结果文件（先 `.tmp` 再 rename）+ Rust 轮询读取。\n"
     d += "**验证三步缺一不可**：`cargo build`（桌面别弄坏）→ "
     d += "`cargo build --target aarch64-unknown-linux-ohos --release` → "
-    d += "`" + inp.cliPath + " hap --path .`（**只有 hvigor 会编译 `.ets`**，"
+    d += "`" + cliRef + " hap --path .`（**只有 hvigor 会编译 `.ets`**，"
     d += "前两步全绿而 `.ets` 少个 import，真机上点了就是不弹框）。\n"
     d += "**别自己开浏览器、别猜路径**：要人操作就用 `lingqu-decision` 说清要人做什么。\n\n"
 
@@ -311,7 +459,7 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
         d += "### 业务功能冒烟（可选，`--max` 给 3 就够）\n"
         d += "想确认壳没接错，可以顺手点几个，但**不要为它烧轮次**：\n"
         d += "```bash\n"
-        d += inp.cliPath + " probe --path . --auto --max 3    # 自动点 3 个候选，结论落 .probe.json（单列，不计分）\n"
+        d += cliRef + " probe --path . --auto --max 3    # 自动点 3 个候选，结论落 .probe.json（单列，不计分）\n"
         d += "```\n"
         d += "- 判据是**版面变化**：点后冒出新的实质文本 → `pass`；点了没动静 → 记 `unknown`（分不清没点中还是真无响应，"
         d += "不许直接判 fail 拉低数字）；\n"

@@ -5,6 +5,59 @@
 
 ---
 
+## [0.39.112] - 2026-11-10
+
+### 现象
+
+0.39.111 收尾时记下的两个诚实缺口之一：「**任务书层只有代码 + AGENTS 零散说明，没有独立规范**」。
+它不是形式问题，现场已经在漏：0.39.83 签名那步没给 `sign --login` / `sign --auto`（agent 自己开浏览器
+登录 AGC，拿不到本机回调的 `tempToken`，白花一次人工介入）；0.39.99 TLS 栈那条技能里明明写着
+`reqwest` 要关默认特性，agent 照样踩 `openssl-sys`。据此逐行核对 `buildAutoPortDirective`，
+又抓出第三处：`## 原生 UI 能力` 是**无条件**渲染的，正文却裸拼 `inp.cliPath` —— 定位不到 CLI 时
+产出 `` ` hap --path .` ``（程序名丢了），agent 照着跑必然 `command not found`。
+
+### 根因
+
+任务书是 cjh **唯一每轮必读**的入口，但它的小节全是手写字符串拼接：删一节、改一句文案、
+把一个条件分支写成无条件，**编译期一句警告都没有**，症状要等下一轮真机迁移才暴露（agent 撞墙、白烧轮次）。
+更根本的是：「哪些小节是必备的、各自在什么条件下出现、缺了会怎样」从来没写下来过 ——
+所以既没法评审，也没法断言，只能靠人记得。
+
+### 处置
+
+1. **把必备清单做成纯函数**（`src/autoport.cj`）：`DirectiveClause{section, when, why}` +
+   `directiveClauses()`（**18 条**，每条 `why` 写明"缺了会怎样"）+ 五个触发条件常量
+   （`always` / `cli` / `device` / `state` / `half`）+ `directiveSectionsOf(whens)`（这一份变体该有哪些）+
+   `directiveConditionalSectionsOf(whens)`（只看条件性小节，供"不该在"的断言）+
+   `directiveGapsOf(body, wants)`（缺哪些；**空 body 判全缺**，不许把"读不到"当"都齐了"）。
+2. **独立规范文档** `docs/任务书规范.md`（214 行）：为什么单独立（三次事故）、形态（落文件 + <300 字 kickoff，
+   0.37.2 的 4433 字单帧被静默丢弃）、§3 必备小节表（与代码同一份）、§3.1 触发条件、§3.2 四种变体、
+   §4 全自动 vs 半自动、§5 三层分工（任务书 / 技能 / 规则指纹，§4-150）、§6 六条纪律红线、
+   §7 新增能力三落点 + 反例清单、§8 验收（含"只保证小节在，**不保证 agent 照做**"的诚实边界）、§9 变更流程。
+3. **同源单测** `src/tests/directive_spec_test.cj`（7 条）：清单格式（18 条、`why` 非空、条件合法、无重名）/
+   全流程变体缺口为空 / 无副作用变体只掉条件节且**命令不许丢程序名** / 有 CLI 时必须用真路径 /
+   半自动带范围节且含 `--login` / 截断正文逐条点名 / **读真实 `docs/任务书规范.md` 断言每个小节都列到了**
+   （文档读不到直接红）。
+4. **修真 bug**（判据第一轮抓出来的）：`## 原生 UI 能力` 与真机冒烟那条命令裸拼 `inp.cliPath` ⇒
+   改成 `cliRef` 兜底（有路径用路径，没有退化成命令名，与「工具箱」同口径），并如实把该节触发条件标为 `always`。
+
+### 证据
+
+- 单测：`TOTAL=545` / `FAILED=0` / `ERROR=0`（基线 538，+7）
+- 五道闸 `[1/5]`~`[5/5]` 全绿：`cjpm build` 0 warning、`cjpm test`、`cj-tauri check`、
+  页面脚本语法、`targets/desktop` 0 warning、`cli/` 0 warning
+- **先红后绿实跑**：`testDirectiveWithoutSideConditionsDropsOnlyThoseSections` 本轮红过两次 ——
+  第一次暴露 `## 原生 UI 能力` 的条件标注与生成物不一致 + 命令丢程序名（**被测代码错**）；
+  第二次是我自己把「该变体全部小节」当成「条件性小节」去断"不在"（**测试自己错**，已改成
+  `directiveConditionalSectionsOf`，并在代码注释里写明这种情形不许去改被测代码迎合测试）
+
+### 变更
+
+- 新增 `docs/任务书规范.md`、`src/tests/directive_spec_test.cj`
+- `src/autoport.cj`：必备清单 + 缺口判定 + `cliRef` 兜底
+- 互引：`AGENTS.md`（顶部文档清单 + §5 第 8 条）、`docs/AI自进化飞轮.md` §①、`docs/经验入库规则.md` 头部、
+  `README.md` 文档索引（顺带修掉一处字面 `\n` 与过时的「踩坑清单 119 条」）
+
 ## [0.39.111] - 2026-11-10
 
 ### 现象
