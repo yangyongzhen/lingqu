@@ -5,7 +5,57 @@
 
 ---
 
-## [0.39.108] - 2026-11-10
+## [0.39.109] - 2026-11-10
+
+### 现象
+
+真机复验 m3u8dl-tauri 的 picker 时，`deploy` 回投 `installed=true / started=true`，
+可同一份输出里 `installDetail` 明写着：
+
+```
+error: failed to install bundle. code:9568423 error: device is unauthorized,
+make sure the UDID of your device is configured in the signing profile.
+```
+
+结果是**设备上跑的还是旧版本**（`aa start` 起来的是上一轮装的），而工具"以为"刚装好。
+若此时接着跑 `probe`，测的是**没有 picker 桥的旧 build**，落档却会记在当前这轮名下——
+又是一种"长得跟通过一模一样"的假绿。
+
+### 根因
+
+`parseInstallResult` 的兜底判据是 `exitCode == 0 && code == 0`，而 `code` 来自
+`hdcFailCodeOf()`——它**只认 5 个硬编码失败码**（9568322 / 9568269 / 10106102 / 9568332 / 9568289），
+别的码一律回 **0**。于是任何**没登记过**的失败码都会让"失败"变"成功"（§4-40 早就写明
+"hdc 失败时退出码仍是 0，只能按输出文本判"，但兜底那一半把文本判据丢了）。
+`9568423` 恰好是没登记的那一类：设备 UDID 不在 profile 的 `device-ids` 里。
+
+### 处置
+
+- `genericFailCodeOf(text)`：按 `code:<数字>` 取**任意**失败码（只认 ≥5 位，避开 `code: 0`
+  这类正常字段），未知码也**算失败**；
+- `hdcErrorTextSeen(text)`：与失败码互补——没码但出现 `error:` / `failed to install` /
+  `failed to start` 也算失败；
+- `parseInstallResult` / `parseStartResult` 的 `ok` 改为
+  `exitCode == 0 && code == 0 && !hdcErrorTextSeen(text)`；
+- `hdcFailHintOf` 补 `9568423` 的处置：**这台设备的 UDID 不在 profile 里** ⇒ `sign --auto`
+  重签（要浏览器登录一次 AGC），别去改编译参数（§4-77：能秒级说清的别让 agent 白等）；
+- 单测：`testParseInstallUnknownCodeIsFailure`（真机原样输出 → `ok=false / failCode=9568423`）、
+  `testGenericFailCodeOf`、`testHdcErrorTextSeen`。
+
+### 证据
+
+修后同一条失败输出被判 `installed=false / failCode=9568423`，`started=false`——
+不再"装失败了却继续启动旧版本"。
+
+### 未验证
+
+- **m3u8dl-tauri 的 picker 真机实测仍未完成**：当前在线设备（真 UDID `667BA4F7…`）
+  **不在**签名 profile 的 `device-ids`（那是另两台 `FD0D92…` / `B8861D…`）里 ⇒ 本轮 HAP 装不上。
+  要补这一步需要一次 AGC 浏览器登录重签（计入 A3 人工介入）。设备上现有的是**旧 build**，
+  所以本轮**没有**对新 picker 做任何真机判定，也没往 `verify` 落档写"未测"以外的结论。
+
+---
+
 
 **主题**：**把「原生 UI 能力缺口」这一个反复出现的坑，从"每换一个工程重踩一遍"变成"有桥、有手册、有指纹、有判据"**。
 m3u8dl-tauri 的选择框接上 NAPI 桥 + ArkTS `DocumentViewPicker`（A4 **80% → 100%**），

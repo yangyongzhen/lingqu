@@ -135,7 +135,61 @@ public func hdcFailCodeOf(text: String): Int64 {
     if (text.contains("9568289")) {
         return 9568289
     }
+    if (text.contains("9568423")) {
+        return 9568423
+    }
+    // 0.39.109：**不认识的码也得算失败**。原先只认上面 5 个硬编码码，别的码一律回 0，
+    // 而调用方兜底是 `exitCode == 0 && code == 0` ⇒ 真机实测 9568423（device unauthorized）
+    // 被判成「安装成功」并继续 `aa start`（起的是设备上的旧版本），探针就会静默测旧 build。
+    return genericFailCodeOf(text)
+}
+
+/**
+ * 从输出里按 `code:<数字>` 取任意失败码（找不到回 0）。
+ * 只认 ≥5 位数字，避开 `code: 0` 这类正常字段；不依赖已知码清单。
+ */
+public func genericFailCodeOf(text: String): Int64 {
+    let bytes = text.toArray()
+    let n = bytes.size
+    var i: Int64 = 0
+    while (i + 4 < n) {
+        // 逐字节认 "code:"（不依赖 indexOf 的 Option 返回值，见 §4-59 的同族坑）
+        if (bytes[i] == 99 && bytes[i + 1] == 111 && bytes[i + 2] == 100 && bytes[i + 3] == 101 && bytes[i + 4] == 58) {
+            var j = i + 5
+            var value: Int64 = 0
+            var digits: Int64 = 0
+            while (j < n) {
+                let b = Int64(bytes[j])
+                if (b < 48 || b > 57) {
+                    break
+                }
+                value = value * 10 + (b - 48)
+                j++
+                digits++
+            }
+            if (digits >= 5) {
+                return value
+            }
+            i = j
+        } else {
+            i++
+        }
+    }
     return 0
+}
+
+/** 输出里出现明确的失败字样（与失败码互补：没码但有 error 也算失败） */
+public func hdcErrorTextSeen(text: String): Bool {
+    if (text.contains("error:")) {
+        return true
+    }
+    if (text.contains("failed to install")) {
+        return true
+    }
+    if (text.contains("failed to start")) {
+        return true
+    }
+    return false
 }
 
 /** 失败码 → 处置建议（与 FP-012/013/014 口径一致） */
@@ -145,6 +199,7 @@ public func hdcFailHintOf(code: Int64): String {
         case 9568269 => return "hdc file send 会保留源目录结构 → 先 cd 到 HAP 所在目录再发文件名（FP-013）"
         case 10106102 => return "设备在锁屏，拒绝自动解锁 → 解锁后重试（FP-014）"
         case 9568332 => return "同包名已装过**另一套签名**的版本 → 先卸载再装（工具会自动做一次，仍失败就手动 `bm uninstall -n <bundle>`）"
+        case 9568423 => return "**这台设备的 UDID 不在 profile 的 device-ids 里** → `lingqu-cli sign --auto --path .` 重新签发（要浏览器登录一次 AGC），再 `hap` + `deploy`；别去改编译参数"
         case _ => return ""
     }
 }
@@ -166,7 +221,7 @@ public func parseInstallResult(text: String, exitCode: Int64): DeployStep {
     if (hint != "") {
         detail = detail + " ｜ 处置：" + hint
     }
-    return DeployStep("install", exitCode == 0 && code == 0, detail, code)
+    return DeployStep("install", exitCode == 0 && code == 0 && !hdcErrorTextSeen(text), detail, code)
 }
 
 /** 解析 `aa start` 的结果：成功含 `start ability successfully` 或 `StartAbility success` */
@@ -184,7 +239,7 @@ public func parseStartResult(text: String, exitCode: Int64): DeployStep {
     if (hint != "") {
         detail = detail + " ｜ 处置：" + hint
     }
-    return DeployStep("start", exitCode == 0 && code == 0, detail, code)
+    return DeployStep("start", exitCode == 0 && code == 0 && !hdcErrorTextSeen(text), detail, code)
 }
 
 /** hilog 尾部：取最后 n 行非空日志（给界面与证据用） */

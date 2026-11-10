@@ -38,6 +38,35 @@ public func testParseInstallFailureSigningCode(): Unit {
 }
 
 @Test
+public func testParseInstallUnknownCodeIsFailure(): Unit {
+    // 0.39.109 真机实测输出：9568423 = 本机 UDID 不在 profile 的 device-ids 里。
+    // 修前 hdcFailCodeOf 只认 5 个硬编码码 ⇒ 回 0 ⇒ ok 被兜底成 true，
+    // 于是 deploy 报「installed=true」并继续 aa start（起的其实是设备上的旧版本）。
+    let text = "[Info]App install path:E:\\x\\entry-default-signed.hap msg:error: failed to install bundle. code:9568423 error: device is unauthorized, make sure the UDID of your device is configured in the signing profile. \nAppMod finish\n"
+    let step = parseInstallResult(text, 0)
+    @Assert(step.ok, false)
+    @Assert(step.failCode, 9568423)
+    @Assert(step.detail.contains("UDID"), true)
+}
+
+@Test
+public func testGenericFailCodeOf(): Unit {
+    @Assert(genericFailCodeOf("msg:error: failed to install bundle. code:9568423 x"), 9568423)
+    @Assert(genericFailCodeOf("code:10106102"), 10106102)
+    // 短数字不算失败码（避开 code: 0 这类正常字段）
+    @Assert(genericFailCodeOf("code: 0"), 0)
+    @Assert(genericFailCodeOf("all good"), 0)
+}
+
+@Test
+public func testHdcErrorTextSeen(): Unit {
+    @Assert(hdcErrorTextSeen("error: failed to install bundle. code:1"), true)
+    @Assert(hdcErrorTextSeen("failed to start ability"), true)
+    @Assert(hdcErrorTextSeen("msg:install bundle successfully."), false)
+    @Assert(hdcErrorTextSeen("msg:start ability successfully."), false)
+}
+
+@Test
 public func testParseInstallSuccess(): Unit {
     // 真实成功输出：用绑定本机 UDID 的 debug 材料签名后安装
     let text = "[Info]App install path:E:\\x\\entry-default-signed.hap msg:install bundle successfully. \nAppMod finish\n"
