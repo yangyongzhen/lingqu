@@ -251,7 +251,9 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                         let nm = jsonStrField(v, "name")
                         if (nm != "" && !apiNames.contains(nm)) {
                             apiNames.add(nm)
-                            platforms.add(PlatformInput(nm))
+                            let pi = PlatformInput(nm)
+                            pi.site = firstArrayItemOf(v, "sites")
+                            platforms.add(pi)
                         }
                     case None => ()
                 }
@@ -298,7 +300,7 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                             let src = readProjectSrc(projPath, siteFileOf(firstArrayItemOf(v, "sites")))
                             if (src != "") {
                                 f.degradedApi = firstApiHitIn(src, nm, apiNames)
-                                f.fallbackLanded = !ohosImplStubOnly(src, nm)
+                                f.fallbackLanded = commandImplLanded(src, nm)
                             }
                             f.humanVerdict = jsonStrField(human, nm)
                             // 真机探针（有就记，没测过就留空 → 条目照旧判"未测"）
@@ -358,7 +360,26 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
         }
         p.fallbackLanded = related > 0 && landed == related
         if (related == 0) {
-            p.note = "没有 IPC 命令命中它（可能用在非命令路径）→ 无法判定是否落地，不能算平台限制"
+            // 没有 IPC 命令命中它 → 看**命中行所在的那个函数**在鸿蒙侧落没落地。
+            // 典型现场：habit-tree / m3u8dl-tauri 的 app_data_dir 都在 resolve_app_data_dir()
+            // 里，鸿蒙分支返回沙箱路径（已落地）；旧判据对这种"非命令路径"直接记"无法判定
+            // → 没落地"，platform-api 就冤枉地判 fail（0.39.107）。
+            let siteFile = siteFileOf(p.site)
+            let src = readProjectSrc(projPath, siteFile)
+            if (src == "") {
+                p.note = "没有 IPC 命令命中它，命中行的源码也读不到 → 无法判定是否落地，不能算平台限制"
+            } else {
+                // 前端没有 `#[cfg]` 可判，落地的形态是 try/catch 兜底（getVersion 就是）
+                let isFrontend = siteFile.endsWith(".ts") || siteFile.endsWith(".js") ||
+                    siteFile.endsWith(".tsx") || siteFile.endsWith(".html")
+                let (gap, why) = if (isFrontend) {
+                    judgeFrontendSite(src, siteLineOf(p.site))
+                } else {
+                    judgePlatformSite(src, siteLineOf(p.site))
+                }
+                p.fallbackLanded = !gap
+                p.note = why
+            }
         } else if (landed == related) {
             p.note = "${related} 个命令在鸿蒙侧都有落地的实现"
         } else {

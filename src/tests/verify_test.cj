@@ -641,3 +641,99 @@ public func testSmokeDoesNotAffectTransplantRate(): Unit {
     @Assert(after.probeFeatures, 1)   // 但"实测过几条"要能数出来
     @Assert(after.businessTested, 1)
 }
+// ── 0.39.107：没有命令命中的平台 API，按命中行**所属函数**判降级落没落地 ──────────
+// 现场（habit-tree）：app_data_dir 只出现在 lib.rs 的文档注释与本工程的 resolve_app_data_dir
+// 及桌面专用 save_target_dir 里，一个 IPC 命令都没命中 → 旧判据记「无法判定 → 没落地」。
+
+@Test
+public func testFnNameOfLine(): Unit {
+    @Expect(fnNameOfLine("fn foo(a: Int64) {"), "foo")
+    @Expect(fnNameOfLine("pub async fn pick_folder() -> Option<String> {"), "pick_folder")
+    @Expect(fnNameOfLine("    let x = my_fn(1);"), "")
+    @Expect(fnNameOfLine("// fn commented() {"), "")
+    @Expect(fnNameOfLine("#[cfg(not(target_env = \"ohos\"))] pub fn save(x: Int64) {"), "save")
+}
+
+@Test
+public func testSiteLineOf(): Unit {
+    @Expect(siteLineOf("src-tauri/src/commands.rs:157"), 157)
+    @Expect(siteLineOf("E:/w/p/src/lib.rs:18"), 18)
+    // 没有行号 → 0（调用方按"不知道"处理，不猜）
+    @Expect(siteLineOf("src-tauri/src/lib.rs"), 0)
+}
+
+@Test
+public func testJudgePlatformSiteLandedShapes(): Unit {
+    let text = "#[cfg(not(target_env = \"ohos\"))]\n" +
+        "fn save_target_dir() -> Option<String> {\n" +
+        "    std::env::temp_dir().to_str().map(String::from)\n" +
+        "}\n" +
+        "fn resolve_app_data_dir(app: &App) -> Result<PathBuf, String> {\n" +
+        "    #[cfg(not(target_env = \"ohos\"))]\n" +
+        "    {\n" +
+        "        app.path().app_data_dir().map_err(|e| e.to_string())\n" +
+        "    }\n" +
+        "    #[cfg(target_env = \"ohos\")]\n" +
+        "    {\n" +
+        "        Ok(sandbox_dir())\n" +
+        "    }\n" +
+        "}\n" +
+        "#[cfg(target_env = \"ohos\")]\n" +
+        "pub async fn pick_folder() -> Option<String> {\n" +
+        "    None\n" +
+        "}\n"
+    // 桌面专用函数里的 temp_dir：鸿蒙上不编译 → 不算缺口
+    @Expect(judgePlatformSite(text, 3)[0], false)
+    // resolve_app_data_dir 的鸿蒙分支返回沙箱路径 → 落地了
+    @Expect(judgePlatformSite(text, 8)[0], false)
+    // 鸿蒙分支只 None → 缺口
+    @Expect(judgePlatformSite(text, 17)[0], true)
+    // 命中行在声明之上（找不到所属函数）→ 缺口（不猜"没问题"）
+    @Expect(judgePlatformSite(text, 1)[0], true)
+}
+
+@Test
+public func testJudgeFrontendSiteFallback(): Unit {
+    let text = "async function fillVersion() {\n" +
+        "  let v = APP_VERSION_FALLBACK;\n" +
+        "  try {\n" +
+        "    v = await getVersion();\n" +
+        "  } catch {\n" +
+        "    /* 无 Tauri API 时回落常量 */\n" +
+        "  }\n" +
+        "}\n" +
+        "async function reportVersion() {\n" +
+        "  return await getVersion();\n" +
+        "}\n"
+    // 包在 try/catch 里 → 有兜底，算落地
+    @Expect(judgeFrontendSite(text, 4)[0], false)
+    // 没有兜底 → 缺口
+    @Expect(judgeFrontendSite(text, 10)[0], true)
+}
+
+@Test
+public func testCommandImplLandedAcceptsInBodyCfg(): Unit {
+    // 形态 ②：整函数不分 cfg，体内按 cfg 分块（habit-tree open_url 的真实形态）
+    let inBody = "fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {\n" +
+        "    #[cfg(target_env = \"ohos\")]\n" +
+        "    {\n" +
+        "        crate::ohos_bridge::open_url(&app, url)?;\n" +
+        "        return Ok(());\n" +
+        "    }\n" +
+        "    #[cfg(not(target_env = \"ohos\"))]\n" +
+        "    {\n" +
+        "        std::process::Command::new(\"xdg-open\").arg(&url).spawn()\n" +
+        "    }\n" +
+        "}\n" +
+        "fn pick_m3u8_file() -> Option<String> {\n" +
+        "    #[cfg(target_env = \"ohos\")]\n" +
+        "    {\n" +
+        "        None\n" +
+        "    }\n" +
+        "}\n"
+    @Expect(commandImplLanded(inBody, "open_url"), true)
+    // 鸿蒙分支是空壳（None）→ 仍算没落地
+    @Expect(commandImplLanded(inBody, "pick_m3u8_file"), false)
+    // 压根没有鸿蒙分支 → 没落地
+    @Expect(commandImplLanded(inBody, "no_such_fn"), false)
+}

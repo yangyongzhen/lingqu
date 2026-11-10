@@ -307,15 +307,171 @@ let PLATFORM_MARKERS: Array<(String, String)> = [
     ("open::that", "open::that")
 ]
 
+/**
+ * 去掉行尾 `//` 注释（要求 `//` 在行首或前面是空白——`"http://x"` 这类不算注释）。
+ *
+ * 为什么要有：`let _ = foo(); // 用 dirs::data_dir 那套` 会把注释里的名字当成使用点。
+ */
+public func stripTrailingCommentOf(line: String): String {
+    var i: Int64 = 0
+    while (i + 1 < line.size) {
+        if (line[i] == 47 && line[i + 1] == 47) {
+            if (i == 0) {
+                return ""
+            }
+            let prev = line[i - 1]
+            if (prev == 32 || prev == 9) {
+                return line[0..i]
+            }
+            i += 2
+            continue
+        }
+        i += 1
+    }
+    return line
+}
+
+/** 这一行是不是测试属性（`#[test]` / `#[cfg(test)]` / `#[tokio::test]` …） */
+public func isTestAttrLine(trimmed: String): Bool {
+    if (!trimmed.startsWith("#[")) {
+        return false
+    }
+    if (trimmed.startsWith("#[test]") || trimmed.startsWith("#[cfg(test)]")) {
+        return true
+    }
+    // `#[tokio::test]` / `#[async_std::test]` 这类带命名空间的
+    if (trimmed.endsWith("test]") && !trimmed.startsWith("#[cfg(")) {
+        return true
+    }
+    return false
+}
+
+/**
+ * 逐行标出**出货代码**（`true` = 会进产物）。
+ *
+ * 为什么需要（0.39.107）：平台 API 清单原来按"整行包含标记"计，于是
+ * ① 文档注释里的 `dirs::data_dir()`（habit-tree `lib.rs:15`，解释为什么要换沙箱路径）
+ * ② `#[test]` 里的 `std::env::temp_dir()`（habit-tree `storage.rs:163`，造临时库）
+ * ③ 桌面专用函数里的 `app_data_dir()`（`#[cfg(not(...ohos...))]`，鸿蒙上压根不编译）
+ * 都被算成"平台 API 使用点"，进而被判"降级方案没落地" → 移植项 `platform-api` 判 fail。
+ * 前两条**不进货**，判它等于凭空扣分（§4-144 同族：判据只认一种现场）。
+ *
+ * 测试作用域按 rustfmt 排版约定取：属性行之后第一条**顶格 `}`** 就是条目收尾
+ * （`#[test] fn` 与 `#[cfg(test)] mod tests` 都成立；缩进的 `}` 是内层块的）。
+ */
+public func shippedLinesOf(text: String): Array<Bool> {
+    let lines = text.split("\n", -1)
+    let n = lines.size
+    let flags = Array<Bool>(n, repeat: true)
+    var inBlock = false
+    var i: Int64 = 0
+    while (i < n) {
+        let t = lines[i].trimAscii()
+        if (inBlock) {
+            flags[i] = false
+            if (t.contains("*/")) {
+                inBlock = false
+            }
+            i += 1
+            continue
+        }
+        if (isTestAttrLine(t)) {
+            // 测试作用域：属性行 → 第一条顶格 `}`
+            var j = i + 1
+            while (j < n && !lines[j].startsWith("}")) {
+                j += 1
+            }
+            let end = if (j < n) { j } else { n - 1 }
+            var k = i
+            while (k <= end) {
+                flags[k] = false
+                k += 1
+            }
+            i = end + 1
+            continue
+        }
+        if (t.startsWith("//") || t.startsWith("/*")) {
+            flags[i] = false
+            if (t.startsWith("/*") && !t.contains("*/")) {
+                inBlock = true
+            }
+            i += 1
+            continue
+        }
+        i += 1
+    }
+    return flags
+}
+
+/**
+ * 行内出现标记的位置（要求标记**前面不是标识符字符**，取第一个满足的）。
+ *
+ * 为什么要词边界：`app_data_dir(` 这个标记会命中工程自己写的包装函数
+ * `resolve_app_data_dir(`——habit-tree 里 5 处"命中"有 3 处就是这么来的（真用法只有
+ * `app.path().app_data_dir()` 一处）。子串匹配会把"我们已经封装好并在鸿蒙上落地了"的地方
+ * 又算成缺口（§4-144 同族）。
+ */
+public func markerPresentIn(line: String, marker: String): Bool {
+    var from: Int64 = 0
+    while (from < line.size) {
+        let at = findFromIn(line, marker, from)
+        if (at < 0) {
+            return false
+        }
+        if (at == 0) {
+            return true
+        }
+        if (!isIdentByteOf(line[at - 1])) {
+            return true
+        }
+        from = at + 1
+    }
+    return false
+}
+
+/** 从 `from` 开始的子串位置（-1 = 没有）；仓颉 String 的 indexOf 不带起点，这里补一个 */
+func findFromIn(s: String, sub: String, from: Int64): Int64 {
+    if (from >= s.size) {
+        return -1
+    }
+    let tail = s[from..]
+    return match (tail.indexOf(sub)) {
+        case Some(i) => from + i
+        case None => -1
+    }
+}
+
+func isIdentByteOf(b: Byte): Bool {
+    if (b >= 97 && b <= 122) {
+        return true
+    }
+    if (b >= 65 && b <= 90) {
+        return true
+    }
+    if (b >= 48 && b <= 57) {
+        return true
+    }
+    return b == 95
+}
+
 public func parsePlatformApis(src: Source): ArrayList<ScanItem> {
     let out = ArrayList<ScanItem>()
     let byName = HashMap<String, ScanItem>()
     let lines = src.text.split("\n", -1)
+    let shipped = shippedLinesOf(src.text)
     var ln: Int64 = 0
     for (line in lines) {
         ln += 1
+        // 注释 / 块注释 / 测试代码都不是"鸿蒙侧要落地的使用点"（见 shippedLinesOf 注释）
+        if (!shipped[ln - 1]) {
+            continue
+        }
+        let code = stripTrailingCommentOf(line)
+        if (code.trimAscii() == "") {
+            continue
+        }
         for ((marker, symbol) in PLATFORM_MARKERS) {
-            if (line.contains(marker)) {
+            if (markerPresentIn(code, marker)) {
                 match (byName.get(symbol)) {
                     case Some(it) => it.site(src.rel, ln)
                     case None =>
@@ -430,7 +586,7 @@ public func parseFrontendTauriApis(src: Source): ArrayList<ScanItem> {
             continue
         }
         for ((marker, symbol) in FRONTEND_TAURI_API_MARKERS) {
-            if (line.contains(marker)) {
+            if (markerPresentIn(line, marker)) {
                 match (byName.get(symbol)) {
                     case Some(it) => it.site(src.rel, ln)
                     case None =>
@@ -458,7 +614,7 @@ public func parseFrontend(src: Source): ArrayList<ScanItem> {
             continue
         }
         for ((marker, api) in FRONTEND_MARKERS) {
-            if (line.contains(marker)) {
+            if (markerPresentIn(line, marker)) {
                 match (byName.get(api)) {
                     case Some(it) => it.site(src.rel, ln)
                     case None =>
@@ -819,18 +975,40 @@ public class ScanResult {
             api = 0
         }
         var o = JsonObject()
-        o.put("runtime", JsonInt(runtime))
-        o.put("api", JsonInt(api))
+        // 「一项都没扫出来」≠「一项问题都没有」：没有前端项/平台项时该维度**没有依据**，
+        // 如实标 -1（与 build/deps/dist 同口径）。否则空目录的 runtime/api 双双算 100 分、
+        // 总分 100——看起来像"完美工程"，实际是什么都没扫到（0.39.107 实测踩到）。
+        let rtOk = frontendCount > 0
+        let apiOk = platformCount > 0
+        o.put("runtime", JsonInt(if (rtOk) { runtime } else { -1 }))
+        o.put("api", JsonInt(if (apiOk) { api } else { -1 }))
         // 未扫描维度如实标 -1（不编造 100 分）
         o.put("build", JsonInt(-1))
         o.put("deps", JsonInt(-1))
         o.put("dist", JsonInt(-1))
-        o.put("scannedDims", JsonString("runtime,api"))
+        var dims = ""
+        if (rtOk) {
+            dims = "runtime"
+        }
+        if (apiOk) {
+            dims = if (dims == "") { "api" } else { dims + ",api" }
+        }
+        o.put("scannedDims", JsonString(dims))
         // 总分只在已扫描维度上做**加权平均**：Σ(维分×权重) / Σ权重
         // 注意别再乘 100（第一版写成 weighted×100/0.45，直接算出 2500）
-        let weightSum = 0.25 + 0.20
-        let totalScore = (Float64(runtime) * 0.25 + Float64(api) * 0.20) / weightSum
-        o.put("total", JsonInt(Int64(totalScore)))
+        var weightSum = 0.0
+        var weighted = 0.0
+        if (rtOk) {
+            weightSum = weightSum + 0.25
+            weighted = weighted + Float64(runtime) * 0.25
+        }
+        if (apiOk) {
+            weightSum = weightSum + 0.20
+            weighted = weighted + Float64(api) * 0.20
+        }
+        // 两个维度都没依据 → 总分 -1（不编造分数）
+        let totalScore = if (weightSum > 0.0) { Int64(weighted / weightSum) } else { -1 }
+        o.put("total", JsonInt(totalScore))
         o.put("partial", JsonBool(true))
         o.put("note", JsonString("build/deps/dist 三维待 P3/P5 扫描；本分数只反映 runtime+api 两维"))
         o.put("manualItems", JsonInt(manual))
@@ -1083,6 +1261,27 @@ public func sanitizeFileName(name: String): String {
     return s
 }
 
+/**
+ * 判定「Rust 工程根相对工程目录的位置」：
+ *   · `Some("src-tauri")` —— 传统布局（Cargo.toml 在 `<工程>/src-tauri/`）
+ *   · `Some("")`          —— 扁平布局（`src-tauri` 就是工程根，`Cargo.toml` 在工程根）
+ *   · `None`              —— 两种都没有，调用方报「不是 Tauri 工程」
+ *
+ * 为什么单独收成函数：布局是**多处共用的判据**（Cargo.toml 位置、tauri.conf.json 位置、
+ * `src/` 位置、落档里的站点标签）。散在代码里就会漂移——rust-music-3 实测栽过：
+ * 只认 `src-tauri/` 时扫描器报「不是 Tauri v2 工程」，五类清单恒为 0，
+ * verify 的分母随之缩到 3 项、可用率虚高成 100%（§4-129 扁平布局同族坑）。
+ */
+public func srcTauriDirOf(hasNested: Bool, hasFlat: Bool): Option<String> {
+    if (hasNested) {
+        return Some("src-tauri")
+    }
+    if (hasFlat) {
+        return Some("")
+    }
+    return None
+}
+
 public func scanProject(root: String): ScanResult {
     return scanProject(root, None)
 }
@@ -1095,8 +1294,22 @@ public func scanProject(root: String, baseline: Option<Baseline>): ScanResult {
     let res = ScanResult()
 
     // ---------- 1) 工程识别 ----------
-    let cargoText = readTextOr("${root}/src-tauri/Cargo.toml", "")
-    let confText = readTextOr("${root}/src-tauri/tauri.conf.json", "")
+    // 两种布局都认（§4-129 同族）：传统 `<工程>/src-tauri/Cargo.toml`，扁平布局（`src-tauri` 就是
+    // 工程根，如 rust-music-3）直接在工程根。只认第一种会把扁平工程判成"不是 Tauri 工程"→
+    // 五类清单恒为 0 → verify 的分母缩到只剩装配项、可用率虚高。
+    var srcDir = ""
+    let hasNested = exists(Path("${root}/src-tauri/Cargo.toml"))
+    let hasFlat = exists(Path("${root}/Cargo.toml"))
+    match (srcTauriDirOf(hasNested, hasFlat)) {
+        case Some(d) => srcDir = d
+        case None =>
+            res.notes.add("未找到 Cargo.toml（找过 ${root}/src-tauri/Cargo.toml 与 ${root}/Cargo.toml）—— 不是 Tauri v2 工程？")
+            return res
+    }
+    let cargoRel = if (srcDir == "") { "Cargo.toml" } else { "${srcDir}/Cargo.toml" }
+    let confRel = if (srcDir == "") { "tauri.conf.json" } else { "${srcDir}/tauri.conf.json" }
+    let cargoText = readTextOr("${root}/${cargoRel}", "")
+    let confText = readTextOr("${root}/${confRel}", "")
     let pkgText = readTextOr("${root}/package.json", "")
 
     var project = JsonObject()
@@ -1108,12 +1321,14 @@ public func scanProject(root: String, baseline: Option<Baseline>): ScanResult {
     res.project = project
 
     if (cargoText.size == 0) {
-        res.notes.add("未找到 src-tauri/Cargo.toml —— 不是 Tauri v2 工程？")
+        // 文件在、但读不出来（编码/权限）与"压根没有"是两件事，别混成一句"不是 Tauri 工程"
+        res.notes.add("找到了 ${cargoRel} 但读不出内容（可能是编码或权限问题）")
         return res
     }
 
     // ---------- 2) 收集源码 ----------
-    let rustSources = collectSources(root, ["src-tauri/src"], [".rs"])
+    let rustRoots = if (srcDir == "") { ["src"] } else { ["${srcDir}/src"] }
+    let rustSources = collectSources(root, rustRoots, [".rs"])
     let frontSources = collectSources(root, ["src", "app", "frontend", "ui"], [".ts", ".tsx", ".js", ".jsx", ".html", ".css"])
     res.notes.add("Rust 源文件 ${rustSources.size} 个，前端源文件 ${frontSources.size} 个")
 
@@ -1240,7 +1455,7 @@ public func scanProject(root: String, baseline: Option<Baseline>): ScanResult {
 
     // ---------- 6) 插件 ----------
     let pluginItems = HashMap<String, ScanItem>()
-    for (it in parsePluginCargo(cargoText, "src-tauri/Cargo.toml")) {
+    for (it in parsePluginCargo(cargoText, cargoRel)) {
         match (pluginItems.get(it.name)) {
             case Some(old) => for (s in it.sites) {
                 old.sites.add(s)

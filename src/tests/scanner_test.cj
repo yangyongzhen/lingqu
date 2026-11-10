@@ -311,3 +311,104 @@ serde = "1"
     @Expect(cargoDepVersion(cargo, "tauri"), "=2.11.5")
     @Expect(cargoDepVersion(cargo, "serde"), "1")
 }
+
+// ---------------- 工程布局（rust-music-3 实测：只认 src-tauri/ 会让清单恒为 0） ----------------
+
+@Test
+public func testSrcTauriDirOf(): Unit {
+    // 传统布局：Cargo.toml 在 src-tauri/
+    @Expect(srcTauriDirOf(true, false).getOrThrow(), "src-tauri")
+    // 扁平布局：Cargo.toml 就在工程根，相对位置是空串（不是 "src-tauri"）
+    @Expect(srcTauriDirOf(false, true).getOrThrow(), "")
+    // 两种都有时以传统布局为准（老工程里可能存在无关的根 Cargo.toml，比如 workspace 汇总）
+    @Expect(srcTauriDirOf(true, true).getOrThrow(), "src-tauri")
+    // 都没有：None 让调用方报「不是 Tauri 工程」，绝不默认成某一种布局
+    @Expect(srcTauriDirOf(false, false).isSome(), false)
+}
+
+// ---------------- 平台 API 使用面：注释与测试代码不算（0.39.107） ----------------
+
+@Test
+public func testShippedLinesOfSkipCommentsAndTests(): Unit {
+    let text = "#[test]\n" +
+        "func temp_db() {\n" +
+        "    let d = std::env::temp_dir();\n" +
+        "}\n" +
+        "/* 块注释\n" +
+        "   app_data_dir( 在这里也不算\n" +
+        "*/\n" +
+        "fn real(app: &App) {\n" +
+        "    let d = app.path().app_data_dir();\n" +
+        "    // 行尾注释 dirs::data_dir\n" +
+        "}\n"
+    let flags = shippedLinesOf(text)
+    // 测试函数体（含 fn 行与收尾 `}`）全部 false，块注释内 false，行尾注释所在行仍是 true
+    @Expect(flags[0], false)
+    @Expect(flags[1], false)
+    @Expect(flags[2], false)
+    @Expect(flags[3], false)
+    @Expect(flags[4], false)
+    @Expect(flags[5], false)
+    @Expect(flags[7], true)
+    @Expect(flags[8], true)
+    // 整行的 `//` 注释（不是代码行）也不算出货代码；行尾注释由 stripTrailingCommentOf 处理
+    @Expect(flags[9], false)
+}
+
+@Test
+public func testParsePlatformApisIgnoresCommentsAndTestCode(): Unit {
+    // 现场（habit-tree）：dirs::data_dir 只在文档注释里、std::env::temp_dir 只在 #[test] 里，
+    // 两个都被算成"使用点"→ platform-api 判「降级没落地」。
+    let text = "/// 鸿蒙没有 HOME，dirs::data_dir() 返回 None，所以要换沙箱路径\n" +
+        "fn resolve(app: &App) {\n" +
+        "    let d = app.path().app_data_dir();\n" +
+        "}\n" +
+        "#[cfg(test)]\n" +
+        "mod tests {\n" +
+        "    #[test]\n" +
+        "    fn temp_db() {\n" +
+        "        let d = std::env::temp_dir();\n" +
+        "    }\n" +
+        "}\n"
+    let items = parsePlatformApis(src("src-tauri/src/lib.rs", text))
+    var names = ArrayList<String>()
+    for (it in items) {
+        names.add(it.name)
+    }
+    @Expect(names.contains("app_data_dir"), true)
+    @Expect(names.contains("dirs::data_dir"), false)
+    @Expect(names.contains("std::env::temp_dir"), false)
+}
+
+@Test
+public func testStripTrailingCommentOf(): Unit {
+    // 行尾注释剥掉
+    @Expect(stripTrailingCommentOf("let x = 1; // 用 dirs::data_dir"), "let x = 1; ")
+    // URL 里的 // 不是注释（前面不是空白）
+    @Expect(stripTrailingCommentOf("let u = \"https://x/y\";"), "let u = \"https://x/y\";")
+    // 整行注释 → 空串
+    @Expect(stripTrailingCommentOf("// app_data_dir("), "")
+}
+
+@Test
+public func testMarkerPresentInUsesWordBoundary(): Unit {
+    // 真用法：方法调用，前面是 `.`
+    @Expect(markerPresentIn("    let d = app.path().app_data_dir();", "app_data_dir("), true)
+    // 工程自己的包装函数名 `resolve_app_data_dir(` **不是**平台 API 用法（habit-tree 的误报源）
+    @Expect(markerPresentIn("    let dir = resolve_app_data_dir(app)?;", "app_data_dir("), false)
+    // 前面是空白/行首都算真命中
+    @Expect(markerPresentIn("app_data_dir(arg)", "app_data_dir("), true)
+    @Expect(markerPresentIn("rfd::FileDialog::new()", "rfd::FileDialog"), true)
+    @Expect(markerPresentIn("my_rfd::FileDialog::new()", "rfd::FileDialog"), false)
+}
+
+// 回归：空工程/什么都没扫到时不能算 100 分（rust-music-3 目录被清空后实测到总分 100）
+@Test
+public func testScoreOfEmptyScanIsNoBasisNotPerfect(): Unit {
+    let res = ScanResult()
+    let s = res.scoreJson()
+    @Expect(s.get("runtime").getOrThrow().asInt().getValue(), -1)
+    @Expect(s.get("api").getOrThrow().asInt().getValue(), -1)
+    @Expect(s.get("total").getOrThrow().asInt().getValue(), -1)
+    @Expect(s.get("scannedDims").getOrThrow().asString().getValue(), "")
+}

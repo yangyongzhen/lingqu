@@ -177,6 +177,14 @@ public class PlatformInput {
     public var fallbackLanded: Bool = false
     /** 为什么这么判（落档里要能自证，别只留一个布尔） */
     public var note: String = ""
+    /**
+     * 第一处命中位置（`src-tauri/src/lib.rs:157`）。
+     *
+     * 用途只有一个：**没有任何 IPC 命令命中它**时（`app_data_dir` 常出现在 setup/辅助函数里），
+     * 靠这行去源码里找"它所在的那个函数在鸿蒙侧有没有落地实现"。没有它就只能判"无法判定"，
+     * 而"无法判定"会被算成"降级没落地"——habit-tree 的 `app_data_dir` 就是这么被误判的（0.39.107）。
+     */
+    public var site: String = ""
 
     public init(name: String) {
         this.name = name
@@ -453,6 +461,277 @@ public func firstApiHitIn(src: String, fnName: String, apiNames: ArrayList<Strin
         }
     }
     return ""
+}
+
+/**
+ * 行内 `fn xxx(` 的 `xxx`（没有给 ""）。
+ *
+ * 只认 `fn` 前面是行首或空白，避免 `myfn(` / `xxxfn(` 撞上；跳过纯注释行。
+ * 纯函数，便于单测（不碰文件系统）。
+ */
+public func fnNameOfLine(line: String): String {
+    let t = line.trimAscii()
+    if (t.startsWith("//") || t.startsWith("*")) {
+        return ""
+    }
+    var from: Int64 = 0
+    while (from < t.size) {
+        let at = findFrom(t, "fn ", from)
+        if (at < 0) {
+            return ""
+        }
+        var ok = at == 0
+        if (at > 0) {
+            let prev = t[at - 1]
+            ok = prev == 32 || prev == 9
+        }
+        if (ok) {
+            let start = at + 3
+            var j = start
+            while (j < t.size && isIdentByteOf(t[j])) {
+                j += 1
+            }
+            if (j > start) {
+                return t[start..j]
+            }
+        }
+        from = at + 3
+    }
+    return ""
+}
+
+func isIdentByteOf(b: Byte): Bool {
+    if (b >= 97 && b <= 122) {
+        return true
+    }
+    if (b >= 65 && b <= 90) {
+        return true
+    }
+    if (b >= 48 && b <= 57) {
+        return true
+    }
+    return b == 95
+}
+
+/** 命中行（1 基行号）所属函数名（往前找最近的 `fn` 声明；找不到给 ""） */
+public func enclosingFnOf(src: String, lineNo: Int64): String {
+    let lines = src.split("\n", -1)
+    var i = if (lineNo > lines.size) { lines.size - 1 } else { lineNo - 1 }
+    while (i >= 0) {
+        let nm = fnNameOfLine(lines[i])
+        if (nm != "") {
+            return nm
+        }
+        i -= 1
+    }
+    return ""
+}
+
+/**
+ * 命中行所属函数是不是**桌面专用**（上方属性区里有 `#[cfg(...)]` 且同时含 `not(` 与 `ohos`）。
+ *
+ * 这类函数在鸿蒙上压根不编译，命中点不构成"降级没落地"——
+ * 典型现场：habit-tree `save_target_dir` 是 `#[cfg(not(target_env = "ohos"))]`。
+ */
+public func fnDesktopOnlyOf(src: String, lineNo: Int64): Bool {
+    let lines = src.split("\n", -1)
+    var i = if (lineNo > lines.size) { lines.size - 1 } else { lineNo - 1 }
+    var fnIdx: Int64 = -1
+    while (i >= 0) {
+        if (fnNameOfLine(lines[i]) != "") {
+            fnIdx = i
+            break
+        }
+        i -= 1
+    }
+    if (fnIdx < 0) {
+        return false
+    }
+    var j = fnIdx - 1
+    while (j >= 0) {
+        let t = lines[j].trimAscii()
+        if (t == "") {
+            j -= 1
+            continue
+        }
+        if (!t.startsWith("#[")) {
+            break
+        }
+        if (t.contains("cfg") && t.contains("ohos") && t.contains("not(")) {
+            return true
+        }
+        j -= 1
+    }
+    return false
+}
+
+/**
+ * 函数**体内**有没有落地的鸿蒙分支块。
+ *
+ * `fnImplsOf` 只认"整个函数被 `#[cfg(...)]` 包裹"的写法（m3u8dl-tauri 的 pick_folder 是那种），
+ * 但现场还有一半写法是**一个函数、体内两块 cfg**（habit-tree 的 resolve_app_data_dir）：
+ *
+ * ```
+ * fn resolve_app_data_dir(app: &tauri::App) -> Result<PathBuf, tauri::Error> {
+ *     #[cfg(target_env = "ohos")]
+ *     {
+ *         Ok(PathBuf::from("/data/storage/el2/base/files"))
+ *     }
+ *     #[cfg(not(target_env = "ohos"))]
+ *     {
+ *         app.path().app_data_dir()
+ *     }
+ * }
+ * ```
+ *
+ * 这种形态 `ohosImplStubOnly` 判不出来（函数本身没有 cfg），于是一个**已经落地**的
+ * 降级方案会被判成"没有鸿蒙实现"。纯函数，便于单测。
+ */
+public func hasLandedOhosBlockIn(body: String): Bool {
+    let marker = "#[cfg("
+    var i = findFrom(body, marker, 0)
+    while (i >= 0) {
+        let close = findFrom(body, ")]", i)
+        if (close >= 0) {
+            let attr = body[i..close + 2]
+            // `not(...)` 里也含 ohos 字样——那是桌面分支，不能当鸿蒙分支（同 fnImplsOf 的口径）
+            if (attr.contains("ohos") && !attr.contains("not(")) {
+                let brace = findFrom(body, "{", close + 2)
+                if (brace >= 0) {
+                    let (bs, be) = bodyRangeOf(body, brace)
+                    if (!ohosStubOnly(body[bs..be])) {
+                        return true
+                    }
+                }
+            }
+        }
+        i = findFrom(body, marker, i + marker.size)
+    }
+    return false
+}
+
+/**
+ * 一处平台 API 命中点**算不算缺口**（= 降级方案没落地）。返回 (是缺口, 为什么)。
+ *
+ * 判序（0.39.107）：桌面专用函数 → 不算缺口（鸿蒙上不编译这段）；
+ * 所在函数有落地的鸿蒙实现 → 不算缺口；其余（含"压根没有鸿蒙分支"）→ 算缺口。
+ *
+ * 为什么需要它：`app_data_dir` 这类平台 API 常出现在 setup / 辅助函数里，**没有 IPC 命令命中**，
+ * 旧判据直接落"无法判定 → 没落地"，于是明明 `resolve_app_data_dir()` 在鸿蒙上返回沙箱路径，
+ * 移植项 `platform-api` 还是判 fail。
+ */
+public func judgePlatformSite(src: String, lineNo: Int64): (Bool, String) {
+    let fnName = enclosingFnOf(src, lineNo)
+    if (fnName == "") {
+        return (true, "找不到命中行所属函数，无法判定降级落没落地")
+    }
+    if (fnDesktopOnlyOf(src, lineNo)) {
+        return (false, "用在 `${fnName}` 里，该函数桌面专用（`#[cfg(not(...ohos...))]`），鸿蒙上不编译这段")
+    }
+    if (!ohosImplStubOnly(src, fnName)) {
+        return (false, "用在 `${fnName}` 里，该函数有落地的鸿蒙实现")
+    }
+    // 一个函数、体内两块 cfg 的写法（habit-tree resolve_app_data_dir）：看函数体里的鸿蒙块
+    for (im in fnImplsOf(src, fnName)) {
+        if (hasLandedOhosBlockIn(im.body)) {
+            return (false, "用在 `${fnName}` 里，该函数体内的鸿蒙分支有落地的实现")
+        }
+    }
+    return (true, "用在 `${fnName}` 里，该函数没有落地的鸿蒙实现")
+}
+
+/**
+ * 一个命令的回调函数在鸿蒙侧**有没有落地实现**（两种形态都认）：
+ * ① 整个函数被 `#[cfg(target_env = "ohos")]` 包裹；② 单函数体内再按 cfg 分块
+ * （habit-tree `resolve_app_data_dir` / `open_url` 就是第 ② 种）。
+ *
+ * 只认 ① 会把"已经落了鸿蒙分支"的函数判成空壳（反过来只认 ② 同理），
+ * 两种写法在真机上效果一样，判据必须都收。
+ */
+public func commandImplLanded(src: String, fnName: String): Bool {
+    if (fnName == "") {
+        return false
+    }
+    if (!ohosImplStubOnly(src, fnName)) {
+        return true
+    }
+    for (im in fnImplsOf(src, fnName)) {
+        if (hasLandedOhosBlockIn(im.body)) {
+            return true
+        }
+    }
+    return false
+}
+
+/** 落档里的命中位置（`src-tauri/src/commands.rs:157`）→ 行号（取不到给 0） */
+public func siteLineOf(site: String): Int64 {
+    var cut: Int64 = -1
+    var i = 0
+    while (i < site.size) {
+        if (site[i] == 58 && i + 1 < site.size && site[i + 1] >= 48 && site[i + 1] <= 57) {
+            cut = i
+        }
+        i += 1
+    }
+    if (cut < 0) {
+        return 0
+    }
+    var v: Int64 = 0
+    var j = cut + 1
+    while (j < site.size) {
+        let c = site[j]
+        if (c < 48 || c > 57) {
+            break
+        }
+        v = v * 10 + Int64(c) - 48
+        j += 1
+    }
+    return v
+}
+
+/**
+ * 前端（`.ts` / `.js` / `.html`）里一处平台 API 调用**算不算缺口**。返回 (是缺口, 为什么)。
+ *
+ * 前端没有 `#[cfg(target_env = "ohos")]` 可判，落地的形态是**兜底路径**：
+ * ```
+ * async function fillVersion() {
+ *   let v = APP_VERSION_FALLBACK;      // 兜底值
+ *   try { v = await getVersion(); }    // 平台有就取真的
+ *   catch { /* 没有就留兜底 */ }
+ * }
+ * ```
+ * 判据只有一条：命中点所在函数块里有 `catch` → 失败有去处，算落地；没有 → 缺口。
+ * 纯函数（不碰文件系统），便于单测。
+ */
+public func judgeFrontendSite(src: String, lineNo: Int64): (Bool, String) {
+    let lines = src.split("\n", -1)
+    // ① 命中行的字节偏移（用来界定"往上找函数"的范围）
+    var off: Int64 = 0
+    var k: Int64 = 0
+    while (k < lineNo - 1 && k < lines.size) {
+        off = off + lines[k].size + 1
+        k += 1
+    }
+    // ② 最近的函数/箭头函数起点
+    var start: Int64 = -1
+    var s = findFrom(src, "function ", 0)
+    while (s >= 0 && s <= off) {
+        start = s
+        s = findFrom(src, "function ", s + 1)
+    }
+    if (start < 0) {
+        return (true, "找不到命中点所属函数（无法判定有没有兜底）")
+    }
+    // ③ 取该函数块体，看有没有 catch
+    let brace = findFrom(src, "{", start)
+    if (brace < 0) {
+        return (true, "找不到函数体（无法判定有没有兜底）")
+    }
+    let (bs, be) = bodyRangeOf(src, brace)
+    if (src[bs..be].contains("catch")) {
+        return (false, "调用点所在函数有 try/catch 兜底，平台不支持时走回落（前端降级已落地）")
+    }
+    return (true, "调用点所在函数没有 try/catch 兜底，平台不支持时直接抛错/静默失败")
 }
 
 /** 可用率统计（口径见文件头） */

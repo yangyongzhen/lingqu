@@ -157,7 +157,19 @@ func fillObservation(obs: StepObservation, stepId: String, root: JsonValue): Uni
     }
     if (stepId == "port") {
         obs.ok = true
-        obs.note = "人工决策 ${arraySizeFieldOf(root, "items")} 条"
+        let human = arraySizeFieldOf(root, "items")
+        // portRun 是 0.39.81 起每次跑完都写的本轮摘要。没有它（老落档 / 只记过人工决策）
+        // 就只能说"记过几条决策"——**看不出改造到底应用了没有**，断点板会像"跑过但没干活"。
+        let run = objFieldOf(root, "portRun")
+        let applied = intFieldOf(run, "applied", -1)
+        if (applied >= 0) {
+            let applyNow = boolFieldOf(run, "apply")
+            obs.note = "改造已应用 ${applied} 个文件（自动规则 ${intFieldOf(run, "auto", 0)} 条" +
+                "、待拍板 ${intFieldOf(run, "human", 0)} 条）／人工决策 ${human} 条" +
+                if (applyNow) { "" } else { "｜本轮是试运行（未写盘）" }
+        } else {
+            obs.note = "人工决策 ${human} 条（旧落档没有 portRun 块，看不出改造应用情况）"
+        }
         return
     }
     if (stepId == "build") {

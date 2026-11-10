@@ -5,6 +5,117 @@
 
 ---
 
+## [0.39.107] - 2026-11-10
+
+**主题**：平台 API 判据从"按 IPC 命令猜"改成"**按命中行所属函数看落地**"——三个样本里 10 处所谓"空壳"缩到 **3 处真缺口**，其中 **2 处已经落地实现**（habit-tree `open_url` 走 NAPI 桥、m3u8dl-tauri 临时目录走沙箱）；顺带修 ⑦ 报告屏认不出 `portRun` 的老账。
+
+### 现象
+
+三样本按 A4 新口径重跑，`platform-api` 一律判 fail，note 都是同一句
+「N 处没有落地的降级方案」，于是可用率卡在 **80%**。逐处核对发现这 10 处"空壳"其实分三类问题：
+
+1. **误报**：`dirs::data_dir` / `app_data_dir` 出现在**文档注释**里、`std::env::temp_dir` 出现在 `#[test]` 里；
+2. **命名撞车**：`app_data_dir(` 这个标记把工程自己写的包装函数 `resolve_app_data_dir(` 也命中了（habit-tree 5 处"命中"里 3 处是这种）；
+3. **判据认不出真实形态**：真正的落地写法是**一个函数、体内按 cfg 分块**（`resolve_app_data_dir` / `open_url` 都是），而判据只认"整个函数被 `#[cfg(target_env = "ohos")]` 包裹"。
+
+剩下的 3 处是真缺口：habit-tree 的 `open_url`（鸿蒙上会走到 `xdg-open` 分支然后 spawn 失败，点"开源地址"没反应）、m3u8dl-tauri 的 `std::env::temp_dir`（鸿蒙没有可写 `/tmp`，concat 列表写不进去）、同一个工程的 `rfd::FileDialog`（选择框空壳返回 `None`）。
+
+### 根因
+
+判据把「**有没有命令命中它**」当成了「**该怎么判**」：
+无命令命中 → 直接落"无法判定 → 没落地"；有命令命中 → 只看命令函数有没有整函数 cfg 分支。
+两条路都没问「命中行**所在的那个函数**在鸿蒙上有没有实现」，于是封装得好好的代码被判成缺口。
+另外,"标记是否是独立标识符"这件事没人管，子串匹配天然会咬到 `resolve_app_data_dir(`。
+
+### 处置
+
+- 扫描器加**词边界**：`markerPresentIn(line, marker)` 要求标记前一个字符不是标识符字符
+  （`[A-Za-z0-9_]`），`app.path().app_data_dir()` 命中、`resolve_app_data_dir(` 不再命中。
+  平台标记与前端标记统一走这一条（`parsePlatformApis` / `parseFrontendTauriApis`）。
+- 判据补两种形态：`judgePlatformSite(src, lineNo)` 按**命中行所属函数**判，
+  `commandImplLanded(src, fnName)` 同时认「整函数 cfg」与「体内 cfg 分块」
+  （命令侧与无命令侧共用同一个结论，避免两条路各判一套）。
+- 前端（`.ts/.js`）另立判据 `judgeFrontendSite`：没有 `#[cfg]` 可判，落地形态是
+  **try/catch 兜底**（`getVersion` 失败回落 `APP_VERSION_FALLBACK` 就是范例）。
+- **真缺口就真动手**：habit-tree `open_url` 加鸿蒙分支 → 经 NAPI 桥投 `viewData` Want
+  （`EntryAbility.openExternalUrl`，系统默认浏览器接收，不需额外权限）；
+  m3u8dl-tauri 新增 `temp_dir()`（桌面走系统 temp、OHOS 走 setup 登记的沙箱 `files/tmp`），
+  `merge.rs` 两处调用点改用它。两个工程分别 `cargo build --target aarch64-unknown-linux-ohos
+  --release` **exit=0**（鸿蒙分支在桌面编译里不参与，必须交叉编译才算验过）。
+- 顺手修 m3u8dl-tauri 桌面分支缺 `tauri::Manager` 导入（`app.path()` 编不过，与本次判据无关的老账）。
+- ⑦ 报告/断点板的 `port` 步认 `portRun` 块：以前只报「人工决策 N 条」，
+  **看不出改造到底应用了没有**；现在报「改造已应用 N 个文件（自动规则 X 条、待拍板 Y 条）／人工决策 Z 条」，
+  旧落档没有该块时如实说明而不是装作没发生。
+
+### 证据
+
+- 单测 521 → **524**（`testMarkerPresentInUsesWordBoundary`、`testJudgeFrontendSiteFallback`、
+  `testCommandImplLandedAcceptsInBodyCfg`）。
+- habit-tree 平台命中点：`app_data_dir` 从 5 处降到 2 处（其余是包装函数名/注释），
+  `dirs::data_dir` 误报消失；`std::process::Command` 落地后仍是**同一条 API**，但判据终于看对了函数。
+- 未验证：m3u8dl-tauri 的 `rfd::FileDialog`（选择框）还需接 ArkTS `DocumentViewPicker`，
+  本轮**未做**——它仍留在分母里判 fail（口径见 ADR D-020，不粉饰）。
+
+---
+
+**主题**：扫描器认**扁平布局**——rust-music-3 实测「只认 `src-tauri/`」让五类清单恒为 0、A4 分母缩水成 3 项、可用率虚高为 100%；顺带按 A4 新口径（ADR **D-020**：只数移植验收项）重跑三个样本，README 进度 65% → **70%** 并新增「已验证的迁移样本」开源地址小节。
+
+### 现象
+
+按新口径重跑 rust-music-3 时，`lingqu-cli scan --path …` 只回一句
+「未找到 src-tauri/Cargo.toml —— 不是 Tauri v2 工程？」，scan 落档里
+`commands / events / frontend / platform` **全为 0** ⇒ verify 的清单只剩
+`launch / build / hap` 三项，`transplantTotal=3`、通过率 3/3 = **100%**——
+一个既没扫过功能清单、也没验过事件通路的样本，反而拿到了比扫全了的样本更高的分。
+
+该工程是**扁平布局**：`Cargo.toml` / `tauri.conf.json` / `src/` 都在工程根，
+没有 `src-tauri/` 这一层。
+
+### 根因
+
+扫描器把工程布局**写死**成 `src-tauri/`（§4-129 那族坑的第五处漏网）：
+`scanProject` 只读 `${root}/src-tauri/Cargo.toml` 与 `${root}/src-tauri/tauri.conf.json`、
+源码只收 `src-tauri/src`，读不到就直接 `return`「不是 Tauri 工程」。
+而"布局"是**多处共用的判据**（Cargo.toml 位置、tauri.conf.json 位置、`src/` 位置、
+落档里的站点标签），每处各写一份，迟早漂移——这次漂到"扫描器不认识真实工程"。
+
+### 处置
+
+- 新增纯函数 **`srcTauriDirOf(hasNested, hasFlat): Option<String>`**：
+  传统布局 → `Some("src-tauri")`；扁平布局 → `Some("")`；两者都没有 → `None`
+  （调用方报「不是 Tauri 工程」，**绝不默认成某一种布局**）。`scanProject` 的
+  Cargo.toml / tauri.conf.json / Rust 源码根 / 插件站点标签**全部由它派生**，
+  布局判据从此只有一个构造点。
+- 「文件在、但读不出来」与「压根没有」**分开报**：前者不再被一句
+  「不是 Tauri 工程」掩盖（§4-75 同族：读档口径与"没跑过"是两件事）。
+- 单测 `testSrcTauriDirOf`：传统 / 扁平 / 两者都有（以传统为准）/ 都没有 ⇒
+  `cjpm test` **TOTAL 514 → 515**。
+
+### 证据（A4 新口径重跑，2026-11-10）
+
+| 样本 | 移植项 | 通 | 未过 | 未测 | 可用率 |
+|---|---|---|---|---|---|
+| habit-tree | 5 | 4 | 1（5 处平台 API 无落地降级） | 0 | **80%** |
+| m3u8dl-tauri | 5 | 4 | 1（4 处平台 API 无落地降级） | 0 | **80%** |
+| rust-music-3 | 6 | 4 | 1（2 处平台 API 无落地降级） | 1（events 未逐条触发） | **80%**（4/5 有结论） |
+
+- 修前 rust-music-3 的分母是 **3**（100%），修后是 **6**（80%）——
+  同一份工程，改的只是"我们认不认这种布局"。
+- 三个样本那 1 条失败**同源**：命中的平台 API（`app_data_dir` / `dirs::data_dir` /
+  `rfd::FileDialog` / `std::process::Command` …）在 `#[cfg(target_env = "ohos")]`
+  分支里是 `Ok(None)` 空壳，等于**没有落地的等价实现**，对应功能在真机上点不动。
+  按 D-020 它们必须留在分母里并判 fail，不许再登记成"平台限制"剔出去。
+- 真机本轮不在线（`hdc list targets` → `[Empty]`），`launch` 项沿用既有证据截图
+  仍判 pass；**未做**新的真机交互实测，`probe` 结论不更新。
+
+### 文档
+
+- `README.md`：进度 65% → **70%**；进度描述改为按 D-020 口径叙述；新增
+  「🧩 已验证的迁移样本（上游开源地址）」小节，cc-switch 与 note-gen 靠前展示。
+- `docs/进度记录.md` / `docs/需求追踪.md`：同步本轮结果与未完成项。
+
+---
+
 ## [0.39.105] - 2026-11-09
 
 **主题**：⑥ 验证屏把**真机冒烟项**从移植主行挪回折叠节，并给折叠探针补上「展开必须为 1」的断言——一条是口径漏网，一条是假绿。
