@@ -96,6 +96,11 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
         "tauri 依赖未被 fork patch 替换（版本漂移绕过 patch 或 patch 段缺失）",
         "核对 [patch.crates-io] 段存在且 tauri 钉精确版本 =2.11.5",
         "R2-PORT-002", PK_RULE))
+    // 排在通用 `unresolved import`（FP-005）之前：marker 更具体，先认它
+    lib.add(Fingerprint("FP-022", "openharmony_ability",
+        "桥代码直接 `use openharmony_ability::…`，但本工程对它只有 [patch] 段没有直接依赖（[patch] 只改来源，不把 crate 加进依赖图）",
+        "改走 tauri 的转出 `use tauri::ohos::openharmony_ability::get_main_thread_env;`（同一 crate 同一 rev，无需动 Cargo.toml/lock）",
+        "R2-PORT-017", PK_RULE))
     lib.add(Fingerprint("FP-005", "unresolved import",
         "wry/tao 未一并 patch（fork 的 workspace patch 不跨工程继承）",
         "[patch.crates-io] 补 wry/tao 的 fork rev",

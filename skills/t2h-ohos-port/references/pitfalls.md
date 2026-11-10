@@ -100,3 +100,21 @@
 - **别做的事**：给交叉编译配 `PKG_CONFIG_ALLOW_CROSS`、装宿主 OpenSSL、`OPENSSL_DIR` 指过去——
   目标平台没有 OpenSSL。这条死路会白烧整轮预算（2026-11-08 note-gen-2 实测）。
 - **自查**：`cargo tree --target aarch64-unknown-linux-ohos -i openssl-sys` 应为空。
+
+### 14. 接了 Picker 却"下载到一半才失败" / "点了不弹框"
+两种表现，同一族根因，处置都在 `native-ui-bridge.md`：
+
+- **点了不弹框**：`verify` 判 pass（Rust 分支调了桥）但真机没反应 ⇒ 多半是 ArkTS 侧
+  `__ohos_dispatch` 里没有同名 `cmd` 分支，或者 `.ets` 的符号压根没导入——
+  **`cargo build` 与交叉编译都不检查 `.ets`**，只有 `lingqu-cli hap`（hvigor）会查。
+- **下载到一半 EACCES / 建目录失败**：Picker 返回的是 `file://docs/...` **uri**，
+  授权只在 uri 通道上生效，**不覆盖 `std::fs` 的裸路径读写**。选目录必须由 Rust 侧探可写
+  （建目录 + 探针写 + 删探针），不可写回落沙箱 `files/downloads` 并把真实落点交回界面。
+
+### 15. `use openharmony_ability::…` 报 E0432 unresolved import
+- **现象**：写桥时 `error[E0432]: unresolved import \`openharmony_ability\``（交叉编译期）。
+- **根因**：多数 Tauri OHOS 工程对 `openharmony-ability` **只有 `[patch]` 段，没有直接依赖**
+  （它是 tauri fork 的内部依赖）。`[patch]` 只改来源，**不等于把 crate 加进你的依赖图**。
+- **修法**：改走 tauri 的转出 —— `use tauri::ohos::openharmony_ability::get_main_thread_env;`
+  （同一个 crate、同一个 rev，无需动 Cargo.toml / Cargo.lock）。指纹 **FP-022**。
+

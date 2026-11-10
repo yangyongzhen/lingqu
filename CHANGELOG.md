@@ -5,7 +5,73 @@
 
 ---
 
-## [0.39.107] - 2026-11-10
+## [0.39.108] - 2026-11-10
+
+**主题**：**把「原生 UI 能力缺口」这一个反复出现的坑，从"每换一个工程重踩一遍"变成"有桥、有手册、有指纹、有判据"**。
+m3u8dl-tauri 的选择框接上 NAPI 桥 + ArkTS `DocumentViewPicker`（A4 **80% → 100%**），
+并把这轮经验按「规则 / 指纹 / 技能 / 任务书 / 飞轮」五层落进仓——单点修复不复利就是白修。
+
+### 现象
+
+m3u8dl-tauri 的 `pick_folder` / `pick_m3u8ld_file` 在鸿蒙侧是空壳：桌面走 `rfd::FileDialog`，
+鸿蒙分支直接 `None`。`verify` 判 `platform-api` fail ⇒ 可用率卡在 **80%**、且这一项**永远留在 A4 分母里**。
+同理 habit-tree 的 `open_url`（上一版已修）——**同一个族**的缺口在两个样本上各撞一次，说明这是结构性问题，不是个别工程没写好。
+
+### 根因
+
+ArkWeb 里**没有原生对话框**，这类能力只能由 ArkTS 拉起系统 UI、Rust 通过 NAPI 桥请它动手。
+但仓里此前只有"零星做过一次"（habit-tree `open_url` 的单向 fire-and-forget），
+既没有可复用的桥骨架，也没有写清：
+
+1. **线程模型**：Tauri 命令在 IPC 线程跑，`get_main_thread_env()` 是 thread_local、只有主线程有值
+   ⇒ 直接调必定拿不到 env（必须 `run_on_main_thread` 投递）；
+2. **uri ≠ 路径**：Picker 返回 `file://docs/…` 的 **uri**，系统授权**只在 uri 通道生效、不覆盖 `std::fs` 裸路径读写**
+   ⇒ 拿路径去写分片，会在下载到一半才 EACCES；
+3. **返回值怎么回去**：单选/选目录需要真返回，fire-and-forget 拿不到用户结果；
+4. **`.ets` 谁编译**：`cargo build` 与交叉编译**都不检查 `.ets`**，只有 hvigor 查
+   ⇒ 前两步全绿、真机上点了不弹框的假绿。
+
+### 处置
+
+**① 落地修复（m3u8dl-tauri）**
+
+- 新建 `src-tauri/src/ohos_bridge.rs`：`call_arkts(msg)` 取主线程 `Env` → `globalThis.__ohos_dispatch`；
+  `dispatch_on_main(app, msg)` 先 `run_on_main_thread` 再调（线程铁律）。
+- 返回值走**沙箱落档 + 轮询**：Rust 下发一次性结果文件路径；ArkTS 选完先写 `.tmp` 再 `renameSync`
+  （rename 保证 Rust 永不见半截 JSON），Rust 以 100 ms 轮询读取。
+- `commands.rs` 的 `pick_folder` / `pick_m3u8ld_file`：鸿蒙走桥，桌面保留 `rfd::FileDialog`（cfg 隔离）。
+- `EntryAbility.ets` 21 行 → **159 行**：`(globalThis as ESObject).__ohos_dispatch` + `DocumentViewPicker`
+  两种命令（`pick_folder` 用 `DocumentSelectMode.FOLDER`，`pick_m3u8ld_file` 用 `fileSuffixFilters`）；
+  选文件 `copyFileSync` 进沙箱再回传路径；选目录交给 Rust 侧探可写。
+- 首次交叉编译报 `unresolved import openharmony_ability`：本工程对该 crate 只有 `[patch]` 段、
+  **没有直接依赖**（`[patch]` 只改来源，不把 crate 加进依赖图）⇒ 改走 `tauri::ohos::openharmony_ability`
+  转出，不动 `Cargo.toml` / `Cargo.lock`。
+- 证据：桌面 `cargo build` exit=0；`cargo build --target aarch64-unknown-linux-ohos --release` **exit=0**；
+  `hap` 装配 `built=true / errors=0 / gates=true / 8,324,836 B signed`（ArkTS 过 hvigor）；
+  `verify` 重跑 ⇒ m3u8dl-tauri **100%**（`total 5 / pass 4 / fail 0 / limit 1`）。
+
+**② 经验沉淀（这轮的重点）**
+
+- **技能层**：新增 `skills/t2h-ohos-port/references/native-ui-bridge.md`——桥骨架、线程铁律、
+  三种返回值形态对照（fire-and-forget / 沙箱落档 / 反向 napi，后者标注"真机未验证"）、
+  picker 的 uri 授权语义、验证三步、纪律与反例；`SKILL.md` 索引表加行。
+- **指纹层**：`FP-022`（marker `openharmony_ability`）——归因「只有 `[patch]` 没有直接依赖」，
+  处置「走 tauri 转出」；**排在通用 `unresolved import`（FP-005）之前**，否则被泛指纹先吃掉。
+  `references/pitfalls.md` 同源补第 14/15 条（"点了不弹框"与"下载到一半 EACCES"两种表现同一族）。
+- **任务书层**：`buildAutoPortDirective` 新增「原生 UI 能力」节——写死三条铁律 + 验证三步 +
+  「**别自己开浏览器、别猜路径**」。这条是 §4-130 的正面处置：能力已有、说明书没给 = agent 只能瞎摸。
+- **判据层**：明确"落地要双侧"——Rust 分支调了桥 **且** `EntryAbility.ets` 的 `__ohos_dispatch` 里有同名
+  `cmd` 分支；只满足前者的真机表现是「点了没反应」，而现有 `commandImplLanded` 会判通过（写进
+  reference §6 作为自检清单，判据本体留待下一轮与 `R2-PORT-017` 一起做）。
+
+### 未验证
+
+- **真机未复跑**：本轮没有设备在线，m3u8dl-tauri picker 的**真机选目录/选文件**未实测，
+  100% 来自静态判据 + 桌面/交叉编译 + HAP 装配结果；以 `.lingqu/verify/<工程>.probe.json` 为准。
+- 形态 C（反向 napi 回调）未在真机验证，reference 里已标注，不当成可选默认。
+
+---
+
 
 **主题**：平台 API 判据从"按 IPC 命令猜"改成"**按命中行所属函数看落地**"——三个样本里 10 处所谓"空壳"缩到 **3 处真缺口**，其中 **2 处已经落地实现**（habit-tree `open_url` 走 NAPI 桥、m3u8dl-tauri 临时目录走沙箱）；顺带修 ⑦ 报告屏认不出 `portRun` 的老账。
 

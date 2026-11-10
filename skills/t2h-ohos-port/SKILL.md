@@ -165,3 +165,4 @@ command -v devecocli                      # 有就直接用
 | [arkweb-shims.md](references/arkweb-shims.md) | 前端适配三坑；polyfill 完整代码与"为什么必须 remove() 而不能 display:none" |
 | [signing.md](references/signing.md) | **真机装不上（9568322）时第一个读**：三条签名路径对比、复用本机自动签名材料的 6 步配方、失败码表、什么时候才真需要账号 |
 | [pitfalls.md](references/pitfalls.md) | 部署/真机阶段按报错原文索引；hdc 目录坑、锁屏、验证清单；**构建期 `pkg-config … cross-compilation` 的两种归因（glib-sys vs openssl-sys）见第 13 条** |
+| [native-ui-bridge.md](references/native-ui-bridge.md) | **某命令在鸿蒙侧是空壳**（`rfd::FileDialog` / `explorer` / 分享 / 相册 → `None`、`Err("当前平台不支持")`）时读：`__ohos_dispatch` 桥骨架、主线程 env 铁律、三种返回值形态、**picker 的 uri 授权不覆盖裸路径**、验证三步（桌面 + 交叉 + `hap` 验 ArkTS） |

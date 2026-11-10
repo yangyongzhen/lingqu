@@ -329,6 +329,20 @@ archive → archivedNotes=1 keptNotes=2  notesNote="ok:归档 1 条，主文件�
           missNote="台账 4 行，未到 200 行阈值，不归档"（不假装归档）
 ```
 
+**实测（0.39.108，一次真实入库的链路走位）**
+
+m3u8dl-tauri 的 picker 缺口修完后，经验**没有停在会话里**，按「经验入库规则」的四个去处分别落位：
+
+| 去处 | 本轮实际落点 | 选它的理由 |
+|---|---|---|
+| 规则 | `R2-PORT-017`（脚手架，**下一轮**） | 只有**可枚举的机械改造**才配进规则；桥的命名与命令语义要判断，留给 agent |
+| 指纹 | `FP-022`（marker `openharmony_ability`） | 能被**报错原文唯一认出**才进指纹表；`Permission denied` 这类泛串会污染匹配顺序，只进技能与坑表 |
+| 技能 reference | `references/native-ui-bridge.md` + `pitfalls.md` 14/15 | 需要判断的形态选择（三种返回值形态、uri 语义） |
+| AGENTS §4 | §4-162~164 | 跨样本复现的**结构性问题**写进坑表，附三条判据 |
+
+这条链路的**验收不是"文档写了"**，而是**换一个带原生 UI 的工程重跑 `autoport`**，看 agent 是否按任务书那一节动手——
+与 §4-164 的判据一致：文档存在 ≠ agent 会用（§4-150）。
+
 ### 阶段 2：半自动 PR（人只点"提交"）—— ✅ **0.39.58 已完成**
 
 - ✅ `t2h:pr_prepare`（`src/pr_prepare.cj` + `PrPrepareCommand`，三处联动）：把候选整理成

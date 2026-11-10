@@ -235,6 +235,27 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
         d += "```bash\nlingqu-cli resume --path .\nlingqu-cli scan --path .\n```\n"
         d += "（`lingqu-cli` 不在 PATH 里的话，让应用帮你定位，或直接读 `.lingqu/` 落档做判断。）\n"
     }
+    // 0.39.108（AGENTS §4-130 的教训）：**能力已经有、说明书没给 = agent 只能瞎摸**。
+    // 「原生 UI 能力」这一类缺口重复率极高（选文件/选目录/分享/相册/打开外部应用），而它撞出来的
+    // 第一反应往往是"自己开个浏览器/自己猜路径"，白烧一轮人工介入。顺序、铁律、验证三步写死在这里；
+    // 细节（桥骨架、三种返回值形态、picker 的 uri 授权语义）在技能 references/native-ui-bridge.md。
+    d += "\n## 原生 UI 能力（选择文件/目录、分享、打开外部应用）\n"
+    d += "`verify` 的 `platform-api` 项里若出现「鸿蒙侧是空壳」（`None` / `Err(\"当前平台不支持…\")`），"
+    d += "指的是桌面侧用了 `rfd::FileDialog` / `explorer` / 系统分享这类**原生 UI**。ArkWeb 里没有原生对话框，"
+    d += "只能由 ArkTS 拉起系统 UI、Rust 通过 NAPI 桥请它动手。细则见技能 "
+    d += "`skills/t2h-ohos-port/references/native-ui-bridge.md`（**先读它再动手**）。三条铁律：\n"
+    d += "1. **线程**：Tauri 命令在 IPC 线程跑，`get_main_thread_env()` 只有主线程有值 ⇒ "
+    d += "必须 `app.run_on_main_thread(...)` 投递后再调桥；\n"
+    d += "2. **uri ≠ 路径**：Picker 返回 `file://docs/…` 的 **uri**，授权只在 uri 通道生效、"
+    d += "**不覆盖 `std::fs` 的裸路径读写**。选文件要拷进沙箱再回传；选目录要**探一次可写**"
+    d += "（建目录+探针写+删探针），不可写回落 `files/downloads` 并把真实落点交回界面；\n"
+    d += "3. **要返回值就别 fire-and-forget**：写一次性结果文件（先 `.tmp` 再 rename）+ Rust 轮询读取。\n"
+    d += "**验证三步缺一不可**：`cargo build`（桌面别弄坏）→ "
+    d += "`cargo build --target aarch64-unknown-linux-ohos --release` → "
+    d += "`" + inp.cliPath + " hap --path .`（**只有 hvigor 会编译 `.ets`**，"
+    d += "前两步全绿而 `.ets` 少个 import，真机上点了就是不弹框）。\n"
+    d += "**别自己开浏览器、别猜路径**：要人操作就用 `lingqu-decision` 说清要人做什么。\n\n"
+
     // 0.39.55：让 agent **自己把踩的坑写下来**。它的文字汇报会留在会话里，而会话会被压缩
     // （实测"21/24/30 条早期消息 → 摘要"），细节一压缩就淡；落成文件才留得住、才能进报告与技能库。
     //
