@@ -1099,6 +1099,15 @@ public class DiagnoseCommand <: CommandHandler {
         res.put("userFingerprintsDir", JsonString(userFlywheelDir()))
         res.put("userFingerprints", JsonInt(Int64(parseFingerprintsJson(userFpText).size)))
         res.put("librarySize", JsonInt(Int64(fpLib.size)))
+        // 0.39.115：规则清单也回投——「一共几条改造规则、编号范围是什么」不再只能靠人数
+        // （`src/port/rules.cj` 是唯一清单，这里只是它的读者；条数漂移由 port_rules_test 判红）。
+        res.put("ruleCount", JsonInt(portRuleCount()))
+        res.put("ruleRange", JsonString(portRuleRangeTextOf()))
+        var ruleArr = JsonArray()
+        for (rid in portRuleIds()) {
+            ruleArr.add(JsonString(rid))
+        }
+        res.put("ruleIds", ruleArr)
         // 0.39.55：**未命中也要落档**——否则"这条错误没人认识"这件事不留痕，下个样本又从零开始。
         // 只在 items 为空时记；同签名累加次数，攒到阈值就提示"该补指纹"。
         var missInfo = JsonObject()

@@ -55,8 +55,8 @@
                               ▼
               ┌──────────────────────────────────────────────────────────┐
               │ ⑥ 认知层（固化，长期资产）                                │
-              │  指纹库  fingerprintLibrary()  FP-001…FP-020              │
-              │  规则库  R2-PORT-001…015                                  │
+              │  指纹库  fingerprintLibrary()  FP-001…FP-023              │
+              │  规则库  R2-PORT-001…017                                  │
               │  技能库  skills/t2h-ohos-port/{SKILL.md,references/*}     │
               │  坑清单  AGENTS.md §4（1…119）                            │
               └───────────────┬──────────────────────────────────────────┘
@@ -170,8 +170,8 @@ lingqu-cli notes --path . --action archive   # 已入库的移出候选池 + 台
 
 | 资产 | 位置 | 规模（0.39.111） | 下一轮怎么被吃上 |
 |---|---|---|---|
-| 错误指纹库 | `src/port/diagnose.cj` 的 `fingerprintLibrary()` | **FP-001…FP-023**（23 条） | `t2h:diagnose` 命中即给修法，**不调模型**（省轮次） |
-| 机械改造规则 | `src/port/*.cj`（`R2-PORT-001…016`） | **16 条**，auto / guide 两档 | `t2h:port` 直接改；guide 档计一次人工介入（A3 口径） |
+| 错误指纹库 | `src/port/diagnose.cj` 的 `fingerprintLibrary()` | **FP-001…FP-023**（21 条；008/009 是空位，从未存在） | `t2h:diagnose` 命中即给修法，**不调模型**（省轮次） |
+| 机械改造规则 | `src/port/*.cj` + `src/main.cj`（`R2-PORT-001…017`） | **17 条**，auto / guide 两档（017 只报不写） | `t2h:port` 直接改；guide 档计一次人工介入（A3 口径） |
 | 技能库 | `skills/t2h-ohos-port/SKILL.md` + `references/{cargo-patches,toolchain,arkweb-shims,signing,pitfalls,native-ui-bridge}.md` | 1 技能 + 6 参考 | `t2h:skill` 装进 `~/.cjh/skills/t2h-ohos-port.md`（正文进 **system prompt**） |
 | 坑清单 | `AGENTS.md` §4 | **165 条** | 人和 agent 都读；改代码前的对照表 |
 

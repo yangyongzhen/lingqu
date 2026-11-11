@@ -107,7 +107,7 @@ export DEVECO_SDK_HOME=<sdk>/default                   # 签名工具找 hap-sig
 ```bash
 lingqu-cli scan   --path <工程>   # 画像：C1=100% 且无"未知"才继续（出现未知 = 扫描器缺口，先记）
 lingqu-cli deps   --path <工程>   # 依赖矩阵：记下"预测失败集"（P3 判据 1 的输入，勿改工程）
-lingqu-cli port   --path <工程>   # 15 条规则：dry-run 看预览 → apply；guide 项逐条决策
+lingqu-cli port   --path <工程>   # 17 条规则：dry-run 看预览 → apply；guide 项逐条决策
 lingqu-cli build  --path <工程>   # 交叉编译：.so 产出 + 前端指纹闸 PASS；失败日志进 P3 对照
 lingqu-cli hap    --path <工程>   # HAP 装配：点名校验 lib<module>.so；rawfile=0
 lingqu-cli sign   --auto --path <工程>   # AGC 自动签名（浏览器授权一次）

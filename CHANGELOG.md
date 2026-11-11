@@ -5,6 +5,49 @@
 
 ---
 
+## [0.39.115] - 2026-11-11
+
+**把「17 条改造规则」收成一个单点，并给条数装上能红的判据**。起因是上一轮核准文档计数：
+17 条规则的编号只以 `RuleOutcome("R2-PORT-0xx")` 字面量散在 6 个文件里，
+**没有任何地方能回答"一共几条"**——于是 README 写 16 条、`docs/AI自进化飞轮.md` 写 16 条、
+`docs/需求追踪.md` 写 15 条，三种说法同时存在（§4-166 同族：同一份知识写两处、只靠"记得同步"必然漂）。
+
+### Added
+
+- **`src/port/rules.cj`：改造规则的唯一清单**。`portRules()`（17 条：编号 + 一句话标题 + 是否只报不写），
+  配套纯函数 `portRuleIds / portRuleCount / portRuleRangeTextOf / portRuleKnownOf / portRuleTitleOf /
+  portDetectOnlyRuleIdsOf`；三件判据工具 `ruleIdFromConstructLine`（认字面量与 `HVIGOR_HOOK_RULE_ID`
+  两种真实形态，认不出的写法**返回空串让调用方判红**，不许有默认真值）、`ruleDriftTextOf`
+  （清单 ↔ 源码构造点**双向**差集）、`ruleNumberingTextOf`（连号无重复）。范围串
+  `R2-PORT-001…017` **由清单首尾算出**，不会与条数脱钩（§4-63）。
+- **`t2h:diagnose` 回投 `ruleCount / ruleRange / ruleIds`**——清单有了运行期读者，
+  agent 也能直接看到"工具里到底有哪些规则"。
+- **`src/tests/port_rules_test.cj`（7 条）**：编号连号无重复 · 两种构造形态解析（含裸前缀
+  `R2-PORT-*` 不许切片）· 源码构造点 ↔ 清单双向对齐（漏登记、漏实现、改成动态编号都红）·
+  `diagnose.cj` 点名的规则必须存在 · README 与飞轮的编号范围/条数一致（并查旧条数残留）。
+
+### Changed
+
+- 文档计数以代码为唯一真相：README / `docs/AI自进化飞轮.md` / `docs/迁移指南.md` /
+  `docs/P5-流水线Linux执行方案.md` / `docs/需求追踪.md` 统一为 **17 条规则 `R2-PORT-001…017`**、
+  **21 条指纹 `FP-001…FP-023`**（008/009 是 0.13.0 起的空位，不补编）。
+
+### 诚实的边界
+
+- 清单只保证「有几条、编号连续、四处编号对得上」，**不保证规则行为对**——那要靠 5 个样本的真机迁移验收。
+- 规则 tier 是**运行期按现场降档**的（008 半配好、016 多行数组都降 guide），所以清单只登记
+  "是否只报不写"这条静态事实、不登记档位——否则又是一份会漂的副本。
+
+### 验证
+
+- `cjpm test`：**605 例**（598 → 605，本轮 +7），`FAILED=0 / ERROR=0`。
+- 门禁六道全绿：`build-biz / test / check / js-syntax / build-app / build-cli`。
+- **判据能红（做过反向验证）**：把清单里第 13 条临时改成 `R2-PORT-018`，
+  `unittest_bin/lingqu.tests.exe --filter='*PortRuleNumbering*'` 立刻红在
+  「编号不连续：第 13 条应为 R2-PORT-013，实际 R2-PORT-018」；改回后绿。
+- **运行期读者实跑**：`LINGQU_DIAGNOSE_LOG=... lingqu-cli diagnose`
+  回投 `ruleCount=17 / ruleRange="R2-PORT-001…017"`，`ruleIds` 17 条齐。清单不再是"只有单测知道"。
+
 ## [0.39.114] - 2026-11-11
 
 **把「落档说了算」的几个窟窿补上，并让桥不再"只写半边"**。本轮的判据统一：不是"代码写了"，
