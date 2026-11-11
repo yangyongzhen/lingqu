@@ -205,12 +205,186 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
     return lib
 }
 
+// ===== 用户级认知层（飞轮阶段 4，0.39.113）：内置库 + `~/.lingqu/flywheel/fingerprints.json` =====
+//
+// 为什么要有它（docs/AI自进化飞轮.md §8 阶段 4）：经验裁决入库后，用户若没登录 atomgit、
+// 也不想给源仓提 PR，这条经验就只对本工程有效，下个工程又从零开始。**贡献是可选分享，
+// 本地飞轮是默认自用**——两条轨道分开。
+//
+// 合并口径两条，都由单测钉住：
+//   ① **用户级排前**：用户刚学到的坑通常比内置的泛串更具体，而**本表顺序即匹配顺序**
+//      （0.39.99 的教训：FP-021 必须排在通用的 FP-016 之前，否则永远被泛串抢走）；
+//   ② **同 id 用用户版本**：id 是身份不是位置——用户改写了 FP-012 的修法就该以他为准。
+//
+// 诚实边界：`R2-PORT-*` 规则是确定性的**文本变换函数**（`src/port/port.cj`），
+// 一份 JSON 没法安全地执行它们 ⇒ 用户级层**不装可执行规则**，只装指纹与经验/技能；
+// 要加规则仍得改仓（走 `--to repo` 的草稿 PR）。别把安全边界当便利丢掉。
+
+/** 用户库文件的容器键（两种顶层形态都认：`{"fingerprints":[…]}` 与裸数组 `[…]`） */
+public let USER_FP_CONTAINER_KEY: String = "fingerprints"
+
+/** 取 JSON 字符串字段（不存在/类型不对给 ""）——用户库解析与"缺 id 自动编号"共用 */
+public func fpStrFieldOf(o: JsonObject, key: String): String {
+    match (o.get(key)) {
+        case Some(v) =>
+            match (v.kind()) {
+                case JsonKind.JsString => return v.asString().getValue()
+                case _ => return ""
+            }
+        case None => return ""
+    }
+}
+
+/**
+ * 纯函数：从一份 JSON 对象解一条指纹。
+ * 缺 `id` 或 `marker` 一律不要——认不出来的指纹只会污染匹配顺序。
+ * `patchKind` 缺省按 **guide**（保守：guide 只给根因与修法，不会让 agent 去跑确定性改造）。
+ */
+public func fingerprintFromJson(o: JsonObject): Option<Fingerprint> {
+    let id = fpStrFieldOf(o, "id").trimAscii()
+    let marker = fpStrFieldOf(o, "marker")
+    if (id.size == 0 || marker.size == 0) {
+        return None
+    }
+    var kind = fpStrFieldOf(o, "patchKind").trimAscii()
+    if (kind != PK_RULE && kind != PK_GUIDE) {
+        kind = PK_GUIDE
+    }
+    return Some(Fingerprint(id, marker, fpStrFieldOf(o, "rootCause"),
+        fpStrFieldOf(o, "fix"), fpStrFieldOf(o, "ruleId"), kind))
+}
+
+/**
+ * 纯函数：解析用户级指纹 JSON（**宽容**：坏 JSON / 顶层形态不对 → 空表，绝不抛）。
+ *
+ * 为什么宽容：这份文件是用户手写的，一个逗号写错不该让整个诊断功能瞎掉；
+ * 「加载到 0 条」由上层用条数如实报出来（`t2h:notes --action fp-list`），不静默。
+ */
+public func parseFingerprintsJson(text: String): ArrayList<Fingerprint> {
+    let out = ArrayList<Fingerprint>()
+    if (text.trimAscii().size == 0) {
+        return out
+    }
+    var v: JsonValue
+    try {
+        v = JsonValue.fromStr(text)
+    } catch (e: Exception) {
+        let _ = e
+        return out
+    }
+    var arr = JsonArray()
+    match (v.kind()) {
+        case JsonKind.JsArray => arr = v.asArray()
+        case JsonKind.JsObject =>
+            match (v.asObject().get(USER_FP_CONTAINER_KEY)) {
+                case Some(k) =>
+                    match (k.kind()) {
+                        case JsonKind.JsArray => arr = k.asArray()
+                        case _ => return out
+                    }
+                case None => return out
+            }
+        case _ => return out
+    }
+    var i: Int64 = 0
+    while (i < arr.size()) {
+        match (arr[i].kind()) {
+            case JsonKind.JsObject =>
+                match (fingerprintFromJson(arr[i].asObject())) {
+                    case Some(fp) => out.add(fp)
+                    case None => let _ = 0
+                }
+            case _ => let _ = 0
+        }
+        i += 1
+    }
+    return out
+}
+
+/**
+ * 纯函数：合并内置库与用户库（**用户级排前 + 同 id 用用户版本**，其余内置按原顺序追加）。
+ *
+ * 同一份用户文件里重复写同一个 id：**先写的那条算**（后写的当笔误忽略，不吵不闹）。
+ */
+public func mergeFingerprintLibraries(builtin: ArrayList<Fingerprint>,
+    user: ArrayList<Fingerprint>): ArrayList<Fingerprint> {
+    let out = ArrayList<Fingerprint>()
+    let seen = HashSet<String>()
+    for (u in user) {
+        let id = u.id.trimAscii()
+        if (id.size == 0 || seen.contains(id)) {
+            continue
+        }
+        seen.add(id)
+        out.add(u)
+    }
+    for (b in builtin) {
+        let id = b.id.trimAscii()
+        if (seen.contains(id)) {
+            continue
+        }
+        seen.add(id)
+        out.add(b)
+    }
+    return out
+}
+
+/** 动作层（不读盘）：内置库 + 给定的用户库 JSON 文本；用户库为空/坏了就是内置库本身 */
+public func fingerprintLibraryWithUser(userJson: String): ArrayList<Fingerprint> {
+    let builtin = fingerprintLibrary()
+    let user = parseFingerprintsJson(userJson)
+    if (user.size == 0) {
+        return builtin
+    }
+    return mergeFingerprintLibraries(builtin, user)
+}
+
+/** 纯函数：下一个用户级指纹 id（`FP-U001` 起，取已有最大号 +1；不覆盖用户自己指定的 id） */
+public func nextUserIdOf(existing: ArrayList<Fingerprint>): String {
+    var max: Int64 = 0
+    for (fp in existing) {
+        let id = fp.id.trimAscii()
+        if (!id.startsWith("FP-U")) {
+            continue
+        }
+        var num: Int64 = 0
+        var digits = 0
+        for (b in id[4..].toArray()) {
+            if (b < 48 || b > 57) {
+                break
+            }
+            num = num * 10 + (Int64(b) - 48)
+            digits += 1
+        }
+        if (digits > 0 && num > max) {
+            max = num
+        }
+    }
+    let next = max + 1
+    var s = "FP-U"
+    if (next < 10) {
+        s += "00"
+    } else if (next < 100) {
+        s += "0"
+    }
+    return s + "${next}"
+}
+
 /**
  * 对构建/运行日志文本做指纹匹配（T4-7a 纯函数）。
  * 返回全部命中（同一指纹只报一次，取首次命中的日志行作证据）。
  */
 public func diagnoseLog(logText: String): ArrayList<Diagnosis> {
-    let lib = fingerprintLibrary()
+    return diagnoseLogWith(logText, fingerprintLibrary())
+}
+
+/**
+ * 同 `diagnoseLog`，但**库由调用方给**（用户级认知层合并后的库从这里进来，0.39.113）。
+ *
+ * 为什么不直接让 `diagnoseLog` 自己读盘：单测必须确定性——开发机上恰好有一份
+ * `~/.lingqu/flywheel/fingerprints.json` 时，内置库的用例不该跟着变（D-009）。
+ */
+public func diagnoseLogWith(logText: String, lib: ArrayList<Fingerprint>): ArrayList<Diagnosis> {
     let out = ArrayList<Diagnosis>()
     let hit = HashSet<String>()
     let lines = logText.split("\n", -1)

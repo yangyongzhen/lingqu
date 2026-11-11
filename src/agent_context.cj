@@ -3,6 +3,7 @@ package lingqu
 import std.fs.*
 import stdx.encoding.json.*
 import stdx.net.http.*
+import lingqu.compiler.*
 
 /*
  * ② 面向 agent 的工程上下文（AI 接入计划第 2 步，2026-11-01）。
@@ -210,7 +211,10 @@ public func readTextOrEmpty(p: String): String {
         return ""
     }
     try {
-        return String.fromUtf8(File.readFrom(p))
+        // 走 lenientUtf8 而不是 String.fromUtf8：手写/GBK 混进来的落档（还有用户级认知层里
+        // 用户自己编辑的 fingerprints.json）里只要有一个非法字节，fromUtf8 会抛，
+        // 整份文件退回空串 = **静默丢掉全部内容**（§4-113 / §4-116 同族）。
+        return lenientUtf8(File.readFrom(p))
     } catch (e: Exception) {
         let _ = e
         return ""

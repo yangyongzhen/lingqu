@@ -174,6 +174,14 @@ public func cliUsage(): String {
     text += "  lingqu-cli probe --path E:/work/habit-tree --feature pick_m3u8_file --click-file ./pick.txt\n"
     text += "                                         # 真机上点一下再判定：版面冒出新内容/日志命中期望行=pass，什么都没变=fail\n"
     text += "                                         # --click-file / --expect-log-file：中文文本一律走 UTF-8 文件（argv 传中文会崩，§4-119）\n"
+    text += "  lingqu-cli notes --path E:/work/habit-tree --action archive --to user\n" +
+        "                                         # 已入库经验并入**用户级**认知层 ~/.lingqu/flywheel/lessons.md（不登录、不提 PR 也能积累）\n"
+    text += "  lingqu-cli notes --path E:/work/habit-tree --action archive --to repo\n" +
+        "                                         # 只留在候选草稿里，等你提 PR 给公共仓（不写用户级）\n"
+    text += "  lingqu-cli notes --action fp-add --body ./fp.json\n" +
+        "                                         # 写用户级错误指纹（body 走 UTF-8 文件；缺 id 自动编号 FP-U001）\n" +
+        "                                         # 下一次 diagnose / migrate 就会命中它（用户级排前，同 id 用你的版本）\n"
+    text += "  lingqu-cli notes --action fp-list        # 合并库：内置 + 用户级，每条带 source\n"
     text += "说明：命令与界面上的按钮一一对应（同一份实现），结果同时落工程里的 .lingqu/。\n"
     text += "退出码：0 = ok；1 = 失败或参数不全（stderr 里会是 JSON 的错误原因）。\n"
     return text

@@ -5,6 +5,75 @@
 
 ---
 
+## [0.39.113] - 2026-11-11
+
+**飞轮阶段 4「用户级认知层」落地**：不登录任何平台、不给源仓提 PR，也能把"这次学到的坑"
+变成下一次迁移就吃上的认知——**贡献公共仓是"分享"，本地飞轮必须是"自用"**（两条轨道分开）。
+
+### 现象
+
+经验裁决入库后只有三条去处：本工程 `notes`、`pitfalls.md`、指纹/规则库——**后两条都在 lingqu 源仓里**。
+用户没登录 atomgit、或不想给别人的仓提 PR，"这条经验值得入库"就到此为止：下个工程从零再撞一遍。
+这不是"少个功能"，而是把**积累**这件本该默认发生的事，做成了需要先有账号的选择题。
+
+### 根因
+
+认知层只有一个装载点（编译进代码的 `fingerprintLibrary()` + 仓里的 `skills/`），而写入通道只有
+"改 lingqu 源码"。**装载点与写入通道都绑死在"公共仓"上** ⇒ 没有公共贡献能力的人，飞轮在他机器上不转。
+
+### Added
+
+- **用户级认知层 `~/.lingqu/flywheel/`**（`LINGQU_FLYWHEEL_DIR` 可覆盖，探针/多用户靠它）——新增 `src/flywheel.cj`：
+  - `fingerprints.json`：用户级错误指纹。`t2h:notes --action fp-add --body <json 文件>` 写
+    （支持 单对象 / 数组 / `{"fingerprints":[…]}`；缺 `id` 自动编号 `FP-U001` 起，**缺 `marker` 直接报错**
+    ——没有触发串的指纹永远不会命中，写进去只是让"我有 12 条指纹"看起来很美）；
+    `--action fp-list` 列出合并库，每条带 `source: builtin|user`。
+  - `lessons.md`：用户级经验本。`t2h:notes --action archive --to user`（默认）并入，
+    同 `lessonKeyOf` 去重、**不累加次数**——归档是幂等动作，要是重跑一次就 +1，
+    用户看到的"出现 N 次"只是他手勤（假数据比没有更坏，§4-94 同族）。
+  - `rules.json` / `skills/`：留位与说明；技能回流仍走 `t2h:skill` → `~/.cjh/skills/`（机制不变，零新增）。
+- `t2h:notes --action archive --to user|repo`：`repo` 只把经验留在候选草稿里等你提 PR（**不写用户级**）；
+  `--to` 认不出时 `ok=false` 并说明，**不许默默当成 `user`**（用户会以为进了 PR 队列，其实只在本机）。
+- `t2h:diagnose` / `t2h:migrate` 回投 `userFingerprints` / `librarySize` / `userFingerprintsDir`。
+
+### Changed
+
+- `readTextOrEmpty`（`src/agent_context.cj`）改用 `lenientUtf8`：用户级落档是**人手工编辑**的，
+  以前只要一个非法字节 `String.fromUtf8` 就抛，整份文件读成空串 = 静默丢全部内容（§4-113 / §4-116 同族）。
+- 合并口径收在 `lingqu.port`（`mergeFingerprintLibraries` / `fingerprintLibraryWithUser` / `nextUserIdOf`）：
+  **用户级排前 + 同 id 用用户版本**——本表顺序即匹配顺序，刚学到的坑通常比内置泛串更具体（§4-150）。
+
+### 诚实边界（写清，别让它看起来更强）
+
+- 用户级层**不装可执行规则**：`R2-PORT-*` 是确定性的**文本变换函数**（`src/port/port.cj`），
+  一份 JSON 没法安全地执行它 ⇒ 想加规则仍得改仓（`--to repo` 出草稿）。把安全边界让给"便利"才是真的坑。
+- 用户级入库**照旧要过人工闸门**；"永远不做"清单（全自动写认知层 / 自动合并 / 自动覆盖 `skills/`）一条没松。
+
+### 验证（全程离线：不登录、不联网）
+
+手工走了一遍完整链路（`LINGQU_FLYWHEEL_DIR=E:/tmp/lingqu-fw-probe`，`cli/target/release/bin/main.exe`）：
+
+```
+$ lingqu-cli notes --action fp-add --body E:/tmp/fp-body.json --path E:/tmp/lingqu-proj
+[lingqu][notes] fp-add: ok:E:/tmp/lingqu-fw-probe\fingerprints.json（新增 1 / 覆盖 0 / 共 1 条）
+$ lingqu-cli notes --action fp-list --path E:/tmp/lingqu-proj
+[lingqu][notes] fp-list: 合并库 22 条（用户级 1 条）@ E:/tmp/lingqu-fw-probe
+$ lingqu-cli diagnose --path E:/tmp/lingqu-proj --log "boom LINGQU-PROBE-MARKER happened"
+  → hits[0].fingerprint = { id: FP-U001, marker: LINGQU-PROBE-MARKER, patchKind: guide }   ← 用户级指纹命中
+$ lingqu-cli notes --action archive --to user --path E:/tmp/lingqu-proj
+  → archivedNotes: 1 / to: user / userNote: ok:…\lessons.md（用户级经验 1 条，本次新增 1）
+$ cat E:/tmp/lingqu-fw-probe/lessons.md      ← 四段完整落进用户级经验本，带"重跑不虚增"说明头
+```
+
+单测：`src/tests/flywheel_test.cj` 19 条（目录解析两种分隔符 / home 为空不回落 CWD / 用户库 JSON 容错 /
+`patchKind` 缺省按 guide / 合并优先级与去重 / upsert 幂等 / body 自动编号 / 经验本去重不虚增）。
+`TOTAL=564，FAILED=0，ERROR=0`；五道闸全绿。
+
+**未验证**：Linux 侧（本机只有 Windows）；`~/.lingqu/flywheel/` 与 `t2h:pr_prepare` 的联动仍靠人手工
+（`--to repo` 只出草稿，不会自动塞进 PR 产物）。
+
+---
+
 ## [0.39.112] - 2026-11-10
 
 ### 现象

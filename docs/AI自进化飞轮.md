@@ -371,7 +371,7 @@ m3u8dl-tauri 的 picker 缺口修完后，经验**没有停在会话里**，按�
 推更多真实样本 → 撞真实坑 → `notes` / `misses` 攒出真实数据 → 人裁决入库 →
 下一个样本**少烧轮次**（§4 的度量方向真正被观测到）。
 
-### 阶段 4：用户级认知层（不登录、不贡献，飞轮照样转）—— 方案已定，待实现
+### 阶段 4：用户级认知层（不登录、不贡献，飞轮照样转）—— ✅ **0.39.113 已完成，§8 阶段 1–4 至此全部落地**
 
 **问题**（2026-11-03 用户提出）：指纹库 / 规则库编译在代码里、skills 在仓里——用户裁决
 "这条经验值得入库"后，如果**没登录 atomgit 或不想给 lingqu 源仓提 PR**，经验就只对当前
@@ -404,6 +404,43 @@ PR 路线照旧是人只点提交；认知层仍不许全自动写（用户级�
 **及格判据**：不登录任何平台，全程离线完成"迁移 → 撞坑 → 经验 → 裁决入库 → 下一个
 工程 diagnose 命中用户级指纹"整链；单测覆盖加载合并（用户级优先/追加/格式容错）与
 archive 双目标。
+
+**落地口径（0.39.113 实际做了什么）**
+
+| # | 落点 | 实际形态 |
+|---|---|---|
+| 4.1 | `src/flywheel.cj` + `src/port/diagnose.cj` | `fingerprintLibrary()` 不动，新增纯函数 `mergeFingerprintLibraries(内置, 用户)` / `fingerprintLibraryWithUser(json文本)` / `nextUserIdOf`；`t2h:diagnose` 与 `migrate` 内的诊断都走合并库，回投 `userFingerprints` / `librarySize` / `userFingerprintsDir` |
+| 4.2 | `t2h:notes --action archive --to user\|repo` | `user`（默认）= 并入 `~/.lingqu/flywheel/lessons.md`（`unionUserLessons` 去重、**不累加次数**）；`repo` = 留在候选草稿等提 PR，**不写用户级**；`--to` 认不出 → `ok=false` 并说明 |
+| 4.3 | 无代码 | 技能回流仍是 `t2h:skill` → `~/.cjh/skills/`；`~/.lingqu/flywheel/skills/` 只留位与说明 |
+| 4.4 | 无代码 | `~/.lingqu/flywheel/` 整目录可拷/同步到团队私有仓（`LINGQU_FLYWHEEL_DIR` 指过去即可） |
+
+**诚实边界（这条别在后续版本里被"顺手放宽"）**：用户级层**只装能合并的东西**——指纹（JSON 数据）
+与经验/技能（文本）。`R2-PORT-*` 规则是确定性的**文本变换函数**（`src/port/port.cj`），
+一份 JSON 没法安全执行它 ⇒ **规则仍只能改仓**（`--to repo` 出草稿）。
+把安全边界让给"便利"，换来的不是飞轮，是"用户下载一份别人写的 JSON 就能改我的源码"。
+
+**实测（0.39.113，全程离线：不登录、不联网）**
+
+```
+$ LINGQU_FLYWHEEL_DIR=E:/tmp/lingqu-fw-probe lingqu-cli notes --action fp-add --body E:/tmp/fp-body.json --path E:/tmp/lingqu-proj
+  ok:E:/tmp/lingqu-fw-probe\fingerprints.json（新增 1 / 覆盖 0 / 共 1 条）
+$ lingqu-cli notes --action fp-list --path E:/tmp/lingqu-proj
+  合并库 22 条（用户级 1 条）@ E:/tmp/lingqu-fw-probe
+$ lingqu-cli diagnose --path E:/tmp/lingqu-proj --log "boom LINGQU-PROBE-MARKER happened"
+  hits[0].fingerprint = { id: FP-U001, marker: LINGQU-PROBE-MARKER, patchKind: guide }   ← 用户级指纹命中
+$ lingqu-cli notes --action archive --to user --path E:/tmp/lingqu-proj
+  archivedNotes: 1 / to: user / userNote: ok:…\lessons.md（用户级经验 1 条，本次新增 1）
+$ cat E:/tmp/lingqu-fw-probe/lessons.md        ← 四段完整落进用户级经验本，头部写明"重跑不虚增"
+```
+
+单测 `src/tests/flywheel_test.cj`（19 条）：覆盖目录解析（两种分隔符 / home 为空**不回落 CWD**）、
+用户库 JSON 容错（坏 JSON / 少 marker / `patchKind` 缺省按 guide）、合并优先级（用户级排前 + 同 id
+用用户版本 + 同批重复只取先写的）、`upsert` 幂等（重跑只能"覆盖 N 条"、不许"又新增 N 条"）、
+`fp-add` 的 body 自动编号与批内不撞号、经验本去重不虚增次数。
+`TOTAL=564，FAILED=0，ERROR=0`；五道闸全绿。
+
+**未验证**：Linux 侧（本机只有 Windows）；`--to repo` 与 `t2h:pr_prepare` 尚无自动联动（人工把草稿
+挪进 PR 产物），这一步仍靠人。
 
 ---
 

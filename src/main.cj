@@ -1166,7 +1166,14 @@ public class DiagnoseCommand <: CommandHandler {
             return res
         }
 
-        let items = diagnoseLog(logText)
+        // 飞轮阶段 4（0.39.113）：内置库 + **用户级认知层**（`~/.lingqu/flywheel/fingerprints.json`）。
+        // 用户级排前、同 id 用用户版本——这条"自己学到的坑，下个工程就命中"的通路不登录也能走。
+        let userFpText = readUserFingerprintsText()
+        let fpLib = fingerprintLibraryWithUser(userFpText)
+        let items = diagnoseLogWith(logText, fpLib)
+        res.put("userFingerprintsDir", JsonString(userFlywheelDir()))
+        res.put("userFingerprints", JsonInt(Int64(parseFingerprintsJson(userFpText).size)))
+        res.put("librarySize", JsonInt(Int64(fpLib.size)))
         // 0.39.55：**未命中也要落档**——否则"这条错误没人认识"这件事不留痕，下个样本又从零开始。
         // 只在 items 为空时记；同签名累加次数，攒到阈值就提示"该补指纹"。
         var missInfo = JsonObject()
@@ -2522,7 +2529,8 @@ public class BuildCommand <: CommandHandler {
         // build-script / 链接类失败在 stdout 里没有 compiler-message，只能靠 stderr；
         // 两份文本拼起来喂指纹库，才不会漏掉最常见的那类失败。
         let combined = diagsAsLogText(parsed.diags) + "\n" + stderrText
-        let hits = diagnoseLog(combined)
+        // 0.39.113：同样带上用户级认知层的指纹（自己学到的坑，迁移时就该命中）
+        let hits = diagnoseLogWith(combined, fingerprintLibraryWithUser(readUserFingerprintsText()))
         let dj = diagnosisJson(hits)
         // stderr 侧的 error 行：build-script / 链接类失败的**唯一**痕迹
         let stderrErrors = countErrorLines(stderrText)
@@ -6827,7 +6835,13 @@ public func build(): AppSpec {
  *   · `export`：整份 markdown（给报告/人看）
  *   · `suggest`：**筛候选**（次数 ≥2 + 四段齐全 + 未入库）→ 写 `<工程>-candidates.md` + 逐条 PR 正文草稿；
  *     未命中台账里同签名 ≥3 次的也一并列出来（0.39.56）
- *   · `archive`：把已入库（`- 入库：…`）的经验移出候选池；台账到 `MISS_ROLL_MIN_LINES` 行就整体归档（0.39.56）
+ *   · `archive`：把已入库（`- 入库：…`）的经验移出候选池；台账到 `MISS_ROLL_MIN_LINES` 行就整体归档（0.39.56）；
+ *     **`--to user|repo` 决定这份经验去哪**（0.39.113，默认 `user`）：
+ *     `user` = 并入用户级认知层 `~/.lingqu/flywheel/lessons.md`（不登录、不提 PR 也能累积）；
+ *     `repo` = 留在候选草稿里等你提 PR 给公共仓（不写用户级）
+ *   · `fp-list`：列出**合并后**的指纹库（内置 N + 用户级 M，带来源）——`~/.lingqu/flywheel/fingerprints.json`
+ *   · `fp-add`：写一条/一批**用户级**指纹（`--body <json 文件>`，支持 单对象 / 数组 / `{"fingerprints":[…]}`；
+ *     缺 `id` 自动编号 `FP-U001` 起，缺 `marker` 直接报错）（0.39.113）
  */
 public class NotesCommand <: CommandHandler {
     public init() {}
@@ -6940,20 +6954,90 @@ public class NotesCommand <: CommandHandler {
             return res
         }
         // archive（0.39.56）：已入库的经验移出候选池 + 台账到量滚动
+        // 飞轮阶段 4（0.39.113）：`--to` 决定这份经验去哪——
+        //   user（默认）= 并入用户级认知层 `~/.lingqu/flywheel/lessons.md`；
+        //   repo       = 留在候选草稿里等你提 PR 给公共仓（**不写用户级**，两条轨道别混）。
         if (action == "archive") {
             let ar = archiveLessons(path, projName)
+            let toRaw = argStr(args, "to", ARCHIVE_TO_USER)
+            let to = archiveTargetOf(toRaw)
             let (missLines, missPath, missNote) = rollMissesLedger(path, nowText(), MISS_ROLL_MIN_LINES)
-            res.put("ok", JsonBool(!ar.note.startsWith("error:")))
+            // 认不出的 --to 必须报错，不许默默当成 user（§4-111：期望与结果不一致又不报错最难查）
+            var userNote = "skip:--to repo：经验留在候选草稿里，等你提 PR"
+            if (to.size == 0) {
+                userNote = "error:--to 只接受 user / repo（收到「${toRaw}」）"
+            } else if (to == ARCHIVE_TO_USER) {
+                userNote = mergeArchivedIntoUserBook(path, projName)
+            }
+            var toLabel = to
+            if (toLabel.size == 0) {
+                toLabel = "invalid"
+            }
+            res.put("ok", JsonBool(!ar.note.startsWith("error:") && to.size > 0))
             res.put("project", JsonString(projName))
             res.put("archivedNotes", JsonInt(ar.archived))
             res.put("keptNotes", JsonInt(ar.kept))
             res.put("archivePath", JsonString(ar.archivePath))
             res.put("notesNote", JsonString(ar.note))
+            res.put("to", JsonString(toLabel))
+            res.put("userLessonsPath", JsonString(userLessonsPath()))
+            res.put("userNote", JsonString(userNote))
             res.put("missLedgerLines", JsonInt(missLines))
             res.put("missArchivePath", JsonString(missPath))
             res.put("missNote", JsonString(missNote))
             putLessonsInto(res, loadLessons(path, projName))
-            eprintln("[lingqu][notes] archive: ${ar.note}｜${missNote}")
+            eprintln("[lingqu][notes] archive(${toLabel}): ${ar.note}｜${userNote}｜${missNote}")
+            return res
+        }
+        // fp-list / fp-add（0.39.113）：**不登录任何平台**也能攒下自己学到的坑
+        if (action == "fp-list") {
+            let userText = readUserFingerprintsText()
+            let lib = fingerprintLibraryWithUser(userText)
+            let userCount = Int64(parseFingerprintsJson(userText).size)
+            res.put("ok", JsonBool(true))
+            res.put("project", JsonString(projName))
+            res.put("userDir", JsonString(userFlywheelDir()))
+            res.put("userFingerprintsPath", JsonString(userFingerprintsPath()))
+            res.put("userFingerprints", JsonInt(userCount))
+            res.put("librarySize", JsonInt(Int64(lib.size)))
+            res.put("fingerprints", fingerprintsJsonOf(lib, userText))
+            eprintln("[lingqu][notes] fp-list: 合并库 ${lib.size} 条（用户级 ${userCount} 条）@ ${userFlywheelDir()}")
+            return res
+        }
+        if (action == "fp-add") {
+            let bodyPath = argStr(args, "body", "")
+            if (bodyPath.size == 0) {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString(
+                    "t2h:notes action=fp-add 需要参数 body（指纹 JSON 文件路径）——中文内容别走 argv，见 AGENTS §4-119"))
+                return res
+            }
+            var bodyText = ""
+            var readErr = ""
+            try {
+                bodyText = lenientUtf8(File.readFrom(bodyPath))
+            } catch (e: Exception) {
+                readErr = "${e}"
+            }
+            if (readErr.size > 0) {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString("读 body 文件失败：${readErr}"))
+                return res
+            }
+            let (incoming, bodyErr) = parseUserFpBody(bodyText, parseFingerprintsJson(readUserFingerprintsText()))
+            if (bodyErr.size > 0) {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString(bodyErr))
+                return res
+            }
+            let note = addUserFingerprints(incoming)
+            res.put("ok", JsonBool(note.startsWith("ok:")))
+            res.put("project", JsonString(projName))
+            res.put("incoming", JsonInt(Int64(incoming.size)))
+            res.put("userFingerprintsPath", JsonString(userFingerprintsPath()))
+            res.put("userNote", JsonString(note))
+            res.put("librarySize", JsonInt(Int64(fingerprintLibraryWithUser(readUserFingerprintsText()).size)))
+            eprintln("[lingqu][notes] fp-add: ${note}")
             return res
         }
         let lessons = loadLessons(path, projName)
@@ -6977,4 +7061,30 @@ func putLessonsInto(res: JsonObject, lessons: ArrayList<LessonNote>): Unit {
     }
     res.put("count", JsonInt(Int64(lessons.size)))
     res.put("lessons", arr)
+}
+
+/**
+ * 把**合并后**的指纹库塞进回包，并标出每条来自哪一层（0.39.113）。
+ *
+ * 为什么必须标来源：用户级指纹是**排在前面的**，一条 `FP-U001` 抢在 `FP-012` 之前命中时，
+ * 界面上要是分不清"这是内置的还是我自己写的"，就没法判断该改哪一边（§4-63 同族）。
+ */
+func fingerprintsJsonOf(lib: ArrayList<Fingerprint>, userText: String): JsonArray {
+    let userIds = HashSet<String>()
+    for (x in parseFingerprintsJson(userText)) {
+        userIds.add(x.id.trimAscii())
+    }
+    var arr = JsonArray()
+    for (fp in lib) {
+        var o = JsonObject()
+        o.put("id", JsonString(fp.id))
+        o.put("marker", JsonString(fp.marker))
+        o.put("rootCause", JsonString(fp.rootCause))
+        o.put("fix", JsonString(fp.fix))
+        o.put("ruleId", JsonString(fp.ruleId))
+        o.put("patchKind", JsonString(fp.patchKind))
+        o.put("source", JsonString(if (userIds.contains(fp.id.trimAscii())) { "user" } else { "builtin" }))
+        arr.add(o)
+    }
+    return arr
 }
