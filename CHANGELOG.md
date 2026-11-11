@@ -5,7 +5,62 @@
 
 ---
 
-## [0.39.113] - 2026-11-11
+## [0.39.114] - 2026-11-11
+
+**把「落档说了算」的几个窟窿补上，并让桥不再"只写半边"**。本轮的判据统一：不是"代码写了"，
+而是"落档里能查到、换一个工程还能查得到"。
+
+### Added
+
+- `t2h:port` 规则 **R2-PORT-017**：**桥的双侧检测**。Rust 侧发了哪些桥命令
+  （`call_arkts("x")` 与 `"cmd": "x"` 两种形态都认），与 ArkTS 分发器（`case "x"` /
+  `parsed.cmd === 'x'`）逐条比对，缺哪个就**点名**。背景：`cargo build`（含
+  `--target aarch64-unknown-linux-ohos`）**不编译 ArkTS**，只有 hvigor 会审 ⇒ "Rust 全绿、
+  ArkTS 少个分支"能一路绿灯到真机才发现点了没反应（§4-162）。**只报不写**——补 ArkTS 分支
+  要上下文，替 agent 写等于抢它的活（D-015）。
+- `lingqu-cli pr`：`t2h:pr_prepare` 原先只有 IPC 入口，agent 在 bash 里跑不到。工具是它的手，
+  CLI 必须同款可达。
+- `sign --check-material`：证书与 `.p12` 的配套性**前置体检**（纯函数 + 落档
+  `<工程>.material.json`），用来提前抓住 `11111002 Certificates error` 那一族
+  ——云端证书不是本地这把钥匙签的，重下多少次都没用，只能换密钥对。
+- `notes archive --to repo` 当场产出 `lessons-suggestion.md`（带
+  `<!-- lingqu:repo-lessons:begin/end -->` 标记的可合并块），并回投
+  `repoPrReady` / `repoPrPath`。
+
+### Changed
+
+- `t2h:pr_prepare` 把 repo 归档落下的经验块**幂等并入** `pr-body.md`，回投 `lessonsMerged`；
+  候选池已被归档清空时，正文以经验块为主体出草稿。
+- ③port 屏与 ⑤构建屏签名卡补 `action:"load"` **纯读盘回读**（与 ①②⑤⑥⑦ 同款口径）：
+  agent 自己跑出来的落档，界面必须看得到（§4-135）。
+
+### Fixed
+
+- **归档到 repo 的经验「两边都不认」**：`--to repo` 只回一句「经验留在候选草稿里，等你提 PR」，
+  而 `pr_prepare` 只认**未入库**候选 ⇒ 刚归档的那批谁也读不到，人按提示去提 PR 会发现草稿里没有它。
+  现在归档当场产块、pr_prepare 并进正文，人只做"复核 + 提交"。
+- **归档集合取错**：`--to repo` 一度按"候选"取，应取**本轮归档掉的已入库经验**
+  （已沉淀的才提上游仓）。
+- `upsertLessonsSectionOf` 用 `doc[(size-1)..size]` 判末字符 —— 那是**取最后一个字节**，
+  中文正文必抛 `IllegalArgumentException: Invalid utf8 byte sequence`（§4-116 同族）；
+  替换路径还多留一个换行 ⇒ 重跑不幂等。两处一起修，单测钉住。
+- `pr_prepare` 在「没有候选」时**提前返回**，而 `--to repo` 归档恰恰清空候选池 ⇒
+  经验块永远并不进正文（实测 `repoPrReady=true` 但 `pr-body.md` 不存在）。早退条件改成
+  「既无候选又无经验块」。
+
+### 验证
+
+- `cjpm test`：`TOTAL=598 / FAILED=0 / ERROR=0`（本轮 +15：桥双侧判据 9、repo↔pr 接头 5、
+  源码判据 1）。
+- 真实工程实跑：habit-tree 上 `t2h:port` 的 `R2-PORT-017` 回
+  `applied=false / note="桥两侧都在（3 个 cmd）"`；临时样本走
+  `notes append → archive --to repo → pr` 全链路：`repoPrReady=true` →
+  `lessonsMerged=true`、`pr-body.md` 里 2 个标记 + 「## 经验沉淀」标题。
+- 未验证：鸿蒙真机侧仍未复跑（设备锁屏）；Linux 侧本轮改动未跑。
+
+---
+
+
 
 **飞轮阶段 4「用户级认知层」落地**：不登录任何平台、不给源仓提 PR，也能把"这次学到的坑"
 变成下一次迁移就吃上的认知——**贡献公共仓是"分享"，本地飞轮必须是"自用"**（两条轨道分开）。

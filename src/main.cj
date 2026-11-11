@@ -676,31 +676,6 @@ public class ScanCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -834,31 +809,6 @@ public class DecisionsCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -1013,31 +963,6 @@ public class AiBriefCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -1292,35 +1217,93 @@ func hostIsWindows(): Bool {
  * 分档（T4-8）：auto=规则机械完成；guide=给方案留人工（confirm/prompt、type=color），
  * guide 计数进人工介入（验收 A3 ≤5 口径）。
  */
+/**
+ * R2-PORT-017（0.39.114）：桥是不是**两侧都在**（Rust `call_arkts("x")` + ArkTS `case "x"`）。
+ *
+ * 实测动机（§4-162）：把 `rfd::FileDialog` / `explorer` 这类原生能力换成桥以后，Rust 分支调了
+ * `call_arkts("pickFile")`，而 ArkTS 分发器里没有那一支——`cargo build`（含 ohos target）
+ * 照样 exit=0、`verify` 判 pass，**真机点了毫无反应**（`cargo` 不审 ArkTS，只有 hvigor 审）。
+ *
+ * 为什么只报不写：补 ArkTS 那一半要读业务语义（选什么、回什么、uri 怎么落地），机械改写会把
+ * 桥写坏。所以 tier=guide，把"缺哪个 cmd、该去哪个文件"说清，让 agent 自己动手（D-015）。
+ */
+func bridgeSidesOutcome(projPath: String, srcTauriDir: String): RuleOutcome {
+    var o = RuleOutcome("R2-PORT-017", false, "", "", "")
+    o.tier = T_GUIDE
+    let srcDir = "${srcTauriDir}/src"
+    if (!exists(Path(srcDir))) {
+        o.note = "没有 ${srcDir}——跳过"
+        return o
+    }
+    let rsFiles = ArrayList<String>()
+    collectRsFilesUnder(srcDir, 6, rsFiles)
+    var rustText = ""
+    for (f in rsFiles) {
+        try {
+            rustText += String.fromUtf8(File.readFrom(f)) + "\n"
+        } catch (e: Exception) {
+            let _ = e
+        }
+    }
+    let cmds = rustBridgeCmdsOf(rustText)
+    if (cmds.size == 0) {
+        o.note = "没有 Rust 侧桥调用（call_arkts / \"cmd\": ...）——这个工程不经过 ArkTS 桥"
+        return o
+    }
+    let ets = readArktsDispatcherOf(projPath)
+    let missing = missingBridgeCmdsOf(rustText, ets)
+    if (missing.size == 0) {
+        o.note = "桥两侧都在（${cmds.size} 个 cmd）"
+        return o
+    }
+    var miss = ""
+    for (i in 0..missing.size) {
+        if (i > 0) {
+            miss += "、"
+        }
+        miss += "\"${missing[i]}\""
+    }
+    o.note = if (ets == "") {
+        "Rust 侧有 ${cmds.size} 个桥 cmd，但工程里找不到 ArkTS 分发器（没有含 __ohos_dispatch 的 .ets）：" +
+            "${miss} 到真机上不会有反应。先确认 gen/ohos 已生成，再补 __ohos_dispatch 分发"
+    } else {
+        "桥只写了一半：Rust 侧发了 ${miss}，但 ArkTS 分发器里没有对应分支——cargo 不审 ArkTS，" +
+            "这会一路绿灯到真机才发现点了没反应。补 ArkTS 的 case / parsed.cmd 分支" +
+            "（按 uri 语义落盘，别直接拿路径读写）"
+    }
+    return o
+}
+
+/** 限深收集 `.rs`（桥调用只在 src 下，跳过 target 这类大目录） */
+func collectRsFilesUnder(dir: String, depth: Int64, out: ArrayList<String>): Unit {
+    if (depth <= 0 || !exists(Path(dir))) {
+        return
+    }
+    var infos: Array<FileInfo> = []
+    try {
+        infos = Directory.readFrom(dir)
+    } catch (e: Exception) {
+        let _ = e
+        return
+    }
+    for (info in infos) {
+        let nm = info.name
+        if (nm == "target" || nm == ".git" || nm == "node_modules") {
+            continue
+        }
+        let full = dir + cjhPathSep() + nm
+        if (info.isDirectory()) {
+            collectRsFilesUnder(full, depth - 1, out)
+        } else if (nm.size > 3 && nm[(nm.size - 3)..nm.size] == ".rs") {
+            out.add(full)
+        }
+    }
+}
+
 public class PortCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -1330,6 +1313,12 @@ public class PortCommand <: CommandHandler {
             res.put("ok", JsonBool(false))
             res.put("error", JsonString("t2h:port 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
             return res
+        }
+        // ---- action=load（0.39.114）：只回读 decisions.json 的 portRun 摘要 ----
+        // 纯读盘：不扫描、不改文件、不写盘。回读通道与重跑必须分开，
+        // 否则屏上的数与落档里的数成了两份互不相干的（§4-138）。
+        if (argStr(args, "action", "") == "load") {
+            return portRecordResponse(path)
         }
         let badPortPath = projectPathRejectReason(path)
         if (badPortPath != "") {
@@ -1398,6 +1387,8 @@ public class PortCommand <: CommandHandler {
         // R2-PORT-015（0.39.53）：hvigorfile.ts 里的 tauri Rust 钩子会 panic（hvigor 00308018）——
         // 本工具的 t2h:hap 自己装配 .so，不需要它，命中就注掉（有备份、可回滚、幂等）
         result.outcomes.add(hvigorHookOutcome("${srcTauriDir}/gen/ohos/entry/hvigorfile.ts"))
+        // 桥的双侧检测（0.39.114）：只报不写，见 bridgeSidesOutcome 的注释
+        result.outcomes.add(bridgeSidesOutcome(path, srcTauriDir))
         // 未设 SDK 路径时 008 没法生成可用链接器配置——降级为提示（不写坏文件）
         if (sdkNative.size == 0) {
             for (o in result.outcomes) {
@@ -1613,31 +1604,6 @@ public class RevertCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -1768,31 +1734,6 @@ public class DepsCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -2154,6 +2095,13 @@ public class UiReportCommand <: CommandHandler {
         o.put("stepFillN", JsonInt(argInt(args, "stepFillN", 0)))
         o.put("stepFillLast", JsonString(argStr(args, "stepFillLast", "")))
         o.put("stepFillErr", JsonString(argStr(args, "stepFillErr", "")))
+        // 0.39.114：③ 规则改造 / ④ 签名卡的落档回读痕迹（页面侧 reportUi 同步加，§4-60）
+        o.put("portRecLoaded", JsonInt(argInt(args, "portRecLoaded", 0)))
+        o.put("portRecApplied", JsonInt(argInt(args, "portRecApplied", -1)))
+        o.put("portRecAt", JsonInt(argInt(args, "portRecAt", -1)))
+        o.put("signRecLoaded", JsonInt(argInt(args, "signRecLoaded", 0)))
+        o.put("signRecMode", JsonString(argStr(args, "signRecMode", "")))
+        o.put("signRecAt", JsonInt(argInt(args, "signRecAt", -1)))
         o.put("scanBlockers", JsonInt(argInt(args, "scanBlockers", 0)))
         // P3 依赖矩阵指标（t2h:deps 探针回投；depsTotal=0 且 depsOut 空表示未扫）
         o.put("depsTotal", JsonInt(argInt(args, "depsTotal", 0)))
@@ -2439,31 +2387,6 @@ public class BuildCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -2884,31 +2807,6 @@ public class HapCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -3313,6 +3211,13 @@ public class SignCommand <: CommandHandler {
         //
         // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
         // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
+        //
+        // ⚠ 只有 SignCommand 该有这段：它让**当前命令**变成"只去登录、别的事都不干"。
+        // 0.39.114 实测扫出另外 10 个 handler（scan/decisions/ai_brief/port/revert/deps/
+        // build/hap/migrate/autoport_start）里逐字粘了同一段——只要环境里有
+        // `LINGQU_SIGN_LOGIN=1`，这些命令就全变成"去登录并返回登录结果"（§4-167 同族：
+        // 能力复制粘贴到不相干命令上，表现为命令被静默劫持）。
+        // 需要登录就用 `lingqu-cli sign --login`，别在别的命令里加这条分支。
         if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
             let timeoutSec = argInt(args, "timeout", 300)
             let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
@@ -3333,6 +3238,28 @@ public class SignCommand <: CommandHandler {
             eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
                 "teams=${outc.teamCount} err=${outc.error}")
             return res2
+        }
+        // ---- action=load（0.39.114）：只回读 `.lingqu/sign/<工程>.json` ----
+        // 纯读盘：不跑 hdc、不扫 ~/.ohos/config、不重新体检（体检要连设备，秒级变十秒级，
+        // 且得到的是"现在这一刻"的结论，与落档可能不同）。
+        if (argStr(args, "action", "") == "load") {
+            var lp = argStr(args, "path", "")
+            if (lp.size == 0) {
+                lp = envOr("LINGQU_SCAN_PATH", "")
+            }
+            if (lp.size == 0) {
+                lp = envOr("LINGQU_BUILD_PATH", "")
+            }
+            return signRecordResponse(lp)
+        }
+        // ---- `--checkMaterial`（0.39.114）：证书 / .p12 / profile 是不是"一套"（纯读盘、秒级） ----
+        //
+        // 这条链上"签 HAP 用的证书 ≠ profile 绑的证书"**没有任何环节会报错**，
+        // 只有装机回 9568322 或 hvigor 报 11111002 才知道（§4-165）。下面几步全是读文件，
+        // 一秒内给结论——比等 hvigor 跑三分钟便宜得多（§4-77）。
+        if (argBool(args, "checkMaterial", false) || argBool(args, "check-material", false) ||
+            envOr("LINGQU_SIGN_CHECK_MATERIAL", "") == "1") {
+            return signMaterialCheckResponse(argStr(args, "path", ""))
         }
         // ---- `--reencrypt`：用本机 material/ 重新加密 build-profile 里的口令密文 ----
         //
@@ -3587,6 +3514,8 @@ public class SignCommand <: CommandHandler {
                 root3.put("udid", JsonString(udid))
                 root3.put("projectBundle", JsonString(bundle))
                 root3.put("by", JsonString("auto"))
+                // 「这份结论是哪一代的」：回读要靠它说清"旧档 vs 现状"（§4-109 / §4-133）
+                root3.put("generatedAt", JsonInt(DateTime.now().toUnixTimeStamp().toMilliseconds()))
                 root3.put("ok", JsonBool(result.ok))
                 if (!result.ok) {
                     root3.put("error", JsonString(result.error))
@@ -3895,6 +3824,10 @@ public class SignCommand <: CommandHandler {
             root.put("projectBundle", JsonString(bundleName))
             root.put("candidateBundleMatch", JsonBool(check.bundleMatch))
             root.put("candidateBundles", JsonString(census))
+            // profile 类型与落档时间：回读要能直接给出「debug / release」与「这是哪一代的结论」，
+            // 否则界面只能按 mode 猜（§4-133：按落档渲染的快照要有"哪一代"的位）
+            root.put("profileType", JsonString(outProfileType))
+            root.put("generatedAt", JsonInt(DateTime.now().toUnixTimeStamp().toMilliseconds()))
             var carr = JsonArray()
             for (p in cands) {
                 carr.add(p.toJson())
@@ -4391,6 +4324,337 @@ func reportRecordResponse(path: String): JsonObject {
     }
     res.put("loaded", JsonBool(true))
     return reportRecordOf(res, root, path, nm)
+}
+
+// ============================================================
+// 落档回读：③ 规则改造 / ④ 签名（0.39.114）
+// ============================================================
+
+/**
+ * `decisions.json` → `t2h:port {action:"load"}` 的返回体（纯函数，有单测）。
+ *
+ * 为什么要它：③ 屏原先只认人点「预览改造 / 应用改造」，`port` 落档里的 `portRun`
+ * （本轮应用几条、有没有写盘、什么时候跑）**没有任何路径读回界面**——agent 用
+ * `lingqu-cli port --apply` 跑完，屏上还是「—」，与 §4-135 的判据①同族
+ * （agent 会自己跑的步骤，界面必须有从落档回读的通道）。
+ *
+ * 回读**只给摘要、不给规则明细**：规则明细要靠重跑扫描算，重算得到的是"现在这一刻"的数，
+ * 与落档对不上（§4-138 的教训）。所以返回体带 `recordOnly=true`，界面据此不渲染规则表。
+ */
+public func portRecordOf(root: JsonValue): JsonObject {
+    var res = JsonObject()
+    res.put("ok", JsonBool(false))
+    res.put("loaded", JsonBool(false))
+    var obj = JsonObject()
+    match (root.kind()) {
+        case JsonKind.JsObject => obj = root.asObject()
+        case _ =>
+            res.put("error", JsonString("decisions.json 不是一个 JSON 对象"))
+            return res
+    }
+    let items = jsonArrayOrEmpty(obj, "items")
+    res.put("decisionsCount", JsonInt(items.size()))
+    var run = JsonObject()
+    var hasRun = false
+    match (obj.get("portRun")) {
+        case Some(v) => match (v.kind()) {
+            case JsonKind.JsObject =>
+                run = v.asObject()
+                hasRun = true
+            case _ => ()
+        }
+        case None => ()
+    }
+    if (!hasRun) {
+        // 老落档：只有人工决策、没有 portRun。这是**第三态**——看得出记过决策，
+        // 看不出改造跑没跑。既不许当"没跑过"，也不许当"跑过了"（§4-63）。
+        if (items.size() > 0) {
+            res.put("ok", JsonBool(true))
+            res.put("loaded", JsonBool(true))
+        }
+        res.put("recordOnly", JsonBool(true))
+        res.put("error", JsonString("这份 decisions.json 里没有 portRun 段：只记过 ${items.size()} 条人工决策，" +
+            "看不出改造有没有跑过。要摘要就重跑一次 `lingqu-cli port --path .`"))
+        return res
+    }
+    res.put("ok", JsonBool(true))
+    res.put("loaded", JsonBool(true))
+    res.put("recordOnly", JsonBool(true))
+    res.put("apply", JsonBool(argBool(run, "apply", false)))
+    res.put("applied", JsonInt(argInt(run, "applied", 0)))
+    res.put("auto", JsonInt(argInt(run, "auto", 0)))
+    res.put("guide", JsonInt(argInt(run, "human", 0)))
+    res.put("at", JsonInt(argInt(run, "at", -1)))
+    let outs = jsonArrayOrEmpty(run, "outcomes")
+    res.put("outcomesCount", JsonInt(outs.size()))
+    res.put("outcomes", outs)
+    return res
+}
+
+/** 只读回读**规则改造**落档（`t2h:port {action:"load"}` 走这里，纯读盘、不重扫） */
+public func portRecordResponse(path: String): JsonObject {
+    var res = JsonObject()
+    var nm = projectNameOf(path)
+    if (nm.size == 0) {
+        nm = "project"
+    }
+    nm = sanitizeFileName(nm)
+    res.put("project", JsonString(nm))
+    if (path.size == 0) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("t2h:port 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
+        return res
+    }
+    // 与写入侧共用 `portBackupDirOf` 的落点（AGENTS §4-33：成对路径只能有一个构造点）
+    let outFile = portBackupDirOf(path, nm) + cjhPathSep() + "decisions.json"
+    res.put("out", JsonString(outFile))
+    if (!exists(Path(outFile))) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("还没有改造落档（${outFile}）：先点「预览改造」，或让 agent 跑 " +
+            "`lingqu-cli port --path <工程> --apply`"))
+        return res
+    }
+    var root = JsonValue.fromStr("{}")
+    try {
+        root = JsonValue.fromStr(lenientUtf8(File.readFrom(outFile)))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("读改造落档失败：${e}"))
+        return res
+    }
+    let body = portRecordOf(root)
+    body.put("project", JsonString(nm))
+    body.put("out", JsonString(outFile))
+    return body
+}
+
+/**
+ * `t2h:sign {checkMaterial:true}` / `lingqu-cli sign --checkMaterial`：证书 / `.p12` / profile 是不是"一套"。
+ *
+ * 只回答一件事：**profile 里绑的那张开发证书，在不在本地 `.cer` 证书链里**。
+ * 不在就必然 `11111002 Certificates error`（装到真机则 `9568322`），而这在跑 hvigor 之前
+ * 一秒内就能判掉（§4-77）。不判口令、不连设备、不跑 hvigor——那些各有专门入口。
+ *
+ * 落档刻意写到 **`<工程>.material.json`**，不动 `<工程>.json`：后者是体检/自动签的结论，
+ * 被"只查了证书配套性"的一轮覆盖掉，界面就会显示成一次失败的签名（§4-33 的成对路径同族）。
+ */
+func signMaterialCheckResponse(projPathIn: String): JsonObject {
+    var pp = projPathIn
+    if (pp.size == 0) {
+        pp = envOr("LINGQU_SCAN_PATH", "")
+    }
+    if (pp.size == 0) {
+        pp = envOr("LINGQU_BUILD_PATH", "")
+    }
+    let res = JsonObject()
+    if (pp.size == 0) {
+        res.put("ok", JsonBool(false))
+        res.put("error", JsonString("要给工程路径（--path）：这项体检要读工程的 build-profile.json5"))
+        return res
+    }
+    let path = hostPath(pp)
+    let projName = sanitizeFileName(projectNameOf(path))
+    // 鸿蒙脚手架位置（与体检同口径：以 Cargo.toml 位置推 src-tauri 根）
+    var ohosDir = ""
+    let tomlPath = cargoTomlPathOf(path)
+    if (tomlPath != "") {
+        let srcDir = tomlPath[0..(tomlPath.size - "/Cargo.toml".size)]
+        ohosDir = hostPath("${srcDir}/gen/ohos")
+    }
+    let buildProfile = if (ohosDir == "") { "" } else { hostPath("${ohosDir}/build-profile.json5") }
+    if (buildProfile == "" || !exists(Path(buildProfile))) {
+        res.put("ok", JsonBool(false))
+        res.put("blocked", JsonBool(false))
+        res.put("error", JsonString("找不到 ${buildProfile}（还没生成鸿蒙脚手架？）"))
+        res.put("nextStep", JsonString("先 `lingqu-cli port --apply` 生成 gen/ohos，再回来体检"))
+        return res
+    }
+    var projText = ""
+    try {
+        projText = String.fromUtf8(File.readFrom(buildProfile))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("error", JsonString("读 ${buildProfile} 失败：${e}"))
+        return res
+    }
+    let proj = parseProjSigning(projText)
+    let certPath = resolveProjectPath(proj.certPath, ohosDir)
+    let profilePath = resolveProjectPath(proj.profilePath, ohosDir)
+    let storeFile = resolveProjectPath(proj.storeFile, ohosDir)
+    // 本地证书正文（.cer 是一条链）
+    var cerText = ""
+    let hasCer = certPath != "" && exists(Path(certPath))
+    if (hasCer) {
+        try {
+            cerText = String.fromUtf8(File.readFrom(certPath))
+        } catch (e: Exception) {
+            let _ = e
+        }
+    }
+    // profile 里绑的开发证书（读不出 = 空串，判定层不拦）
+    var devPem = ""
+    let hasProfile = profilePath != "" && exists(Path(profilePath))
+    if (hasProfile) {
+        try {
+            devPem = profileDevCertPemOf(extractProfileJson(latin1Of(File.readFrom(profilePath))))
+        } catch (e: Exception) {
+            let _ = e
+        }
+    }
+    let v = judgeMaterialKeys(hasCer, cerText, devPem)
+    var outJson = ""
+    var outError = ""
+    try {
+        let sgDir = lqDirOf(path) + cjhPathSep() + "sign"
+        ensureDirOf(sgDir)
+        outJson = sgDir + cjhPathSep() + "${projName}.material.json"
+        var root = JsonObject()
+        root.put("schema", JsonString("lingqu/sign/v1"))
+        root.put("project", JsonString(projName))
+        root.put("by", JsonString("material"))
+        root.put("ok", JsonBool(v.ok))
+        root.put("blocked", JsonBool(v.blocked))
+        root.put("ohosDir", JsonString(ohosDir))
+        root.put("buildProfile", JsonString(buildProfile))
+        root.put("cerPath", JsonString(certPath))
+        root.put("profilePath", JsonString(profilePath))
+        root.put("storeFile", JsonString(storeFile))
+        root.put("hasConfig", JsonBool(proj.signingConfigName != ""))
+        root.put("hasCer", JsonBool(hasCer))
+        root.put("hasProfile", JsonBool(hasProfile))
+        root.put("profileCertReadable", JsonBool(devPem != ""))
+        root.put("reason", JsonString(v.reason))
+        root.put("nextStep", JsonString(v.nextStep))
+        root.put("generatedAt", JsonInt(DateTime.now().toUnixTimeStamp().toMilliseconds()))
+        root.put("material", v.toJson())
+        File.writeTo(outJson, root.toJsonString().toArray())
+    } catch (e: Exception) {
+        outError = "落档失败：${e}"
+    }
+    eprintln("[lingqu][sign:material] ok=${v.ok} blocked=${v.blocked} hasCer=${hasCer} " +
+        "pem=${devPem != ""} out=${outJson} err=${outError}")
+    res.put("ok", JsonBool(v.ok && outError == ""))
+    res.put("blocked", JsonBool(v.blocked))
+    res.put("reason", JsonString(v.reason))
+    res.put("nextStep", JsonString(v.nextStep))
+    res.put("hasConfig", JsonBool(proj.signingConfigName != ""))
+    res.put("hasCer", JsonBool(hasCer))
+    res.put("hasProfile", JsonBool(hasProfile))
+    res.put("profileCertReadable", JsonBool(devPem != ""))
+    res.put("cerPath", JsonString(certPath))
+    res.put("profilePath", JsonString(profilePath))
+    res.put("storeFile", JsonString(storeFile))
+    res.put("by", JsonString("material"))
+    res.put("out", JsonString(outJson))
+    res.put("outError", JsonString(outError))
+    return res
+}
+
+/**
+ * `lingqu/sign/v1` → `t2h:sign {action:"load"}` 的返回体（纯函数，有单测）。
+ *
+ * 落档有两种形态，字段名不同（§4-115 的教训：先摸清两种拼写再取值）：
+ * - 体检档：`check{ok,reason,nextStep,…}` + `signing{configuredName,filesExist}` + 顶层 `candidateCount`
+ * - 自动签档：顶层 `ok/error/nextStep` + `autoSign{…}`，没有 `check`/`signing`
+ * 界面读的是**扁平**字段（`renderSign` 那一套），这里把两种形态都归一成扁平的。
+ */
+public func signRecordOf(root: JsonValue): JsonObject {
+    var res = JsonObject()
+    res.put("ok", JsonBool(false))
+    res.put("loaded", JsonBool(false))
+    var obj = JsonObject()
+    match (root.kind()) {
+        case JsonKind.JsObject => obj = root.asObject()
+        case _ =>
+            res.put("error", JsonString("sign 落档不是一个 JSON 对象"))
+            return res
+    }
+    let check = jsonObjectOrEmpty(obj, "check")
+    let mode = jsonObjectOrEmpty(obj, "mode")
+    let signing = jsonObjectOrEmpty(obj, "signing")
+    let isAuto = argStr(obj, "by", "") == "auto"
+    let modeName = argStr(mode, "mode", "")
+    // 体检档没有顶层 ok（真值在 check.ok）；自动签档有顶层 ok。两处都认。
+    let ok = argBool(obj, "ok", argBool(check, "ok", false))
+    let configuredName = argStr(signing, "configuredName", "")
+    let filesExist = argBool(signing, "filesExist", false)
+    var profileType = argStr(obj, "profileType", "")
+    if (profileType == "" && (modeName == "debug" || modeName == "release")) {
+        profileType = modeName
+    }
+    res.put("ok", JsonBool(ok))
+    res.put("loaded", JsonBool(true))
+    res.put("recordOnly", JsonBool(true))
+    res.put("by", JsonString(if (isAuto) { "auto" } else { "check" }))
+    res.put("udid", JsonString(argStr(obj, "udid", argStr(check, "udid", ""))))
+    res.put("reason", JsonString(argStr(check, "reason", "")))
+    res.put("nextStep", JsonString(argStr(obj, "nextStep", argStr(check, "nextStep", ""))))
+    res.put("error", JsonString(argStr(obj, "error", "")))
+    res.put("hasConfig", JsonBool(configuredName != "" || (isAuto && ok)))
+    res.put("signingName", JsonString(configuredName))
+    res.put("filesExist", JsonBool(filesExist || (isAuto && ok)))
+    res.put("allowsDevice", JsonBool(argBool(check, "configuredAllowsDevice", false)))
+    res.put("profileType", JsonString(profileType))
+    res.put("candidateCount", JsonInt(argInt(obj, "candidateCount", 0)))
+    res.put("candidatePath", JsonString(argStr(obj, "candidatePath", "")))
+    res.put("projectBundle", JsonString(argStr(obj, "projectBundle", "")))
+    res.put("candidateBundle", JsonString(argStr(obj, "candidateBundle", "")))
+    res.put("candidateBundles", JsonString(argStr(obj, "candidateBundles", "")))
+    res.put("candidateBundleMatch", JsonBool(argBool(obj, "candidateBundleMatch", false)))
+    res.put("mode", JsonString(modeName))
+    res.put("modeLabel", JsonString(argStr(mode, "modeLabel", "")))
+    res.put("canInstallDevice", JsonBool(argBool(mode, "canInstallDevice", false)))
+    res.put("releaseReady", JsonBool(argBool(mode, "releaseReady", false)))
+    res.put("signReminder", JsonString(argStr(mode, "reminder", "")))
+    res.put("installNextStep", JsonString(argStr(mode, "installNextStep", "")))
+    res.put("releaseNextStep", JsonString(argStr(mode, "releaseNextStep", "")))
+    res.put("releaseProfileCount", JsonInt(argInt(mode, "releaseProfileCount", 0)))
+    res.put("switchSteps", jsonArrayOrEmpty(mode, "switchSteps"))
+    // 「这份结论是哪一代的」——落档时间必须回投，否则界面拿旧档当真值（§4-109 / §4-133）
+    res.put("generatedAt", JsonInt(argInt(obj, "generatedAt", -1)))
+    return res
+}
+
+/** 只读回读**签名**落档（`t2h:sign {action:"load"}` 走这里，纯读盘、不重新体检） */
+public func signRecordResponse(path: String): JsonObject {
+    var res = JsonObject()
+    var nm = projectNameOf(path)
+    if (nm.size == 0) {
+        nm = "project"
+    }
+    nm = sanitizeFileName(nm)
+    res.put("project", JsonString(nm))
+    if (path.size == 0) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("t2h:sign 需要参数 path（或设环境变量 LINGQU_SCAN_PATH）"))
+        return res
+    }
+    let outFile = lqPathOf(path, "sign/${nm}.json")
+    res.put("out", JsonString(outFile))
+    if (!exists(Path(outFile))) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("还没有签名落档（${outFile}）：先点「签名体检」，或让 agent 跑 " +
+            "`lingqu-cli sign --path <工程>`"))
+        return res
+    }
+    var root = JsonValue.fromStr("{}")
+    try {
+        root = JsonValue.fromStr(lenientUtf8(File.readFrom(outFile)))
+    } catch (e: Exception) {
+        res.put("ok", JsonBool(false))
+        res.put("loaded", JsonBool(false))
+        res.put("error", JsonString("读签名落档失败：${e}"))
+        return res
+    }
+    let body = signRecordOf(root)
+    body.put("project", JsonString(nm))
+    body.put("out", JsonString(outFile))
+    return body
 }
 
 /**
@@ -5487,31 +5751,6 @@ public class MigrateCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -5695,31 +5934,6 @@ public class AutoPortStartCommand <: CommandHandler {
     public init() {}
 
     public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
-        // ---- 路线 A 的入口：`--login`（或 LINGQU_SIGN_LOGIN=1）只做 AGC 登录并落盘令牌 ----
-        //
-        // 为什么单列一条：登录要起本机回调服务 + 等人点浏览器（最长 5 分钟），
-        // 与"体检"的秒级语义完全不同；混在一起会让体检这条快路径被拖住。
-        if (argBool(args, "login", false) || envOr("LINGQU_SIGN_LOGIN", "") == "1") {
-            let timeoutSec = argInt(args, "timeout", 300)
-            let noBrowser = argBool(args, "noBrowser", false) || envOr("LINGQU_SIGN_NO_BROWSER", "") == "1"
-            let outc = agcLogin(timeoutSec, !noBrowser)
-            var res2 = JsonObject()
-            res2.put("ok", JsonBool(outc.ok))
-            res2.put("user", JsonString(agcUserLine(outc)))
-            res2.put("userId", JsonString(outc.userId))
-            res2.put("userName", JsonString(outc.userName))
-            res2.put("countryCode", JsonString(outc.countryCode))
-            res2.put("isRealName", JsonBool(outc.isRealName))
-            res2.put("teamId", JsonString(outc.teamId))
-            res2.put("teamName", JsonString(outc.teamName))
-            res2.put("teamCount", JsonInt(outc.teamCount))
-            res2.put("port", JsonInt(outc.port))
-            res2.put("tokenSaved", JsonBool(loadAgcToken().isSome()))
-            res2.put("error", JsonString(outc.error))
-            eprintln("[lingqu][sign:login] ok=${outc.ok} uid=${outc.userId} team=${outc.teamId} " +
-                "teams=${outc.teamCount} err=${outc.error}")
-            return res2
-        }
         var path = argStr(args, "path", "")
         if (path.size == 0) {
             path = envOr("LINGQU_SCAN_PATH", "")
@@ -6958,16 +7172,31 @@ public class NotesCommand <: CommandHandler {
         //   user（默认）= 并入用户级认知层 `~/.lingqu/flywheel/lessons.md`；
         //   repo       = 留在候选草稿里等你提 PR 给公共仓（**不写用户级**，两条轨道别混）。
         if (action == "archive") {
+            // 归档前先取**本轮要归档的那批 = 已入库经验**（archiveLessons 会把它们移进归档文件，
+            // 之后再取就只剩空）。提上游仓的应该是"已经沉淀过的"，不是还没裁决的候选（0.39.114）
+            let (repoNotes, _) = splitArchivedLessons(loadLessons(path, projName))
             let ar = archiveLessons(path, projName)
             let toRaw = argStr(args, "to", ARCHIVE_TO_USER)
             let to = archiveTargetOf(toRaw)
             let (missLines, missPath, missNote) = rollMissesLedger(path, nowText(), MISS_ROLL_MIN_LINES)
             // 认不出的 --to 必须报错，不许默默当成 user（§4-111：期望与结果不一致又不报错最难查）
             var userNote = "skip:--to repo：经验留在候选草稿里，等你提 PR"
+            var repoPrReady = false
+            var repoPrPath = ""
             if (to.size == 0) {
                 userNote = "error:--to 只接受 user / repo（收到「${toRaw}」）"
             } else if (to == ARCHIVE_TO_USER) {
                 userNote = mergeArchivedIntoUserBook(path, projName)
+            } else if (to == ARCHIVE_TO_REPO) {
+                // 阶段 2（0.39.114）：不再只回一句"等你提 PR"——当场产出可合并块，pr_prepare 会并进正文
+                let st = stageRepoLessons(path, projName, repoNotes)
+                repoPrReady = st.ready
+                repoPrPath = st.path
+                userNote = if (st.outError != "") {
+                    "error:${st.outError}"
+                } else {
+                    st.note
+                }
             }
             var toLabel = to
             if (toLabel.size == 0) {
@@ -6980,6 +7209,8 @@ public class NotesCommand <: CommandHandler {
             res.put("archivePath", JsonString(ar.archivePath))
             res.put("notesNote", JsonString(ar.note))
             res.put("to", JsonString(toLabel))
+            res.put("repoPrReady", JsonBool(repoPrReady))
+            res.put("repoPrPath", JsonString(repoPrPath))
             res.put("userLessonsPath", JsonString(userLessonsPath()))
             res.put("userNote", JsonString(userNote))
             res.put("missLedgerLines", JsonInt(missLines))

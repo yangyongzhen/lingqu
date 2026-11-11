@@ -218,6 +218,63 @@ func readProjectSrc(projPath: String, rel: String): String {
     }
 }
 
+/** 限深收集 `.ets`（`Directory.walk` 非递归；gen/ohos 里还有 oh_modules 这类重目录，跳过） */
+func collectEtsUnder(dir: String, depth: Int64, out: ArrayList<String>): Unit {
+    if (depth <= 0 || !exists(Path(dir))) {
+        return
+    }
+    var infos: Array<FileInfo> = []
+    try {
+        infos = Directory.readFrom(dir)
+    } catch (e: Exception) {
+        let _ = e
+        return
+    }
+    for (info in infos) {
+        let nm = info.name
+        if (nm == "node_modules" || nm == "oh_modules" || nm == ".git" || nm == "target" ||
+            nm == "build" || nm == ".hvigor") {
+            continue
+        }
+        let full = dir + cjhPathSep() + nm
+        if (info.isDirectory()) {
+            collectEtsUnder(full, depth - 1, out)
+        } else if (nm.size > 4 && nm[(nm.size - 4)..nm.size] == ".ets") {
+            out.add(full)
+        }
+    }
+}
+
+/**
+ * 工程里的 ArkTS 分发器正文（含 `__ohos_dispatch` 的 `.ets` 拼起来；找不到给空串）。
+ *
+ * 为什么要它：桥的"落地"是**两侧**的事（Rust 调 `call_arkts("x")` + ArkTS 有 `case "x"`）。
+ * `cargo build`（含 `--target ...ohos`）**不编译 ArkTS**，只有 hvigor 审——只查 Rust 半边
+ * 就会把"半实现"判成落地（§4-162，真机点了没反应那种假绿）。
+ */
+func readArktsDispatcherOf(projPath: String): String {
+    let files = ArrayList<String>()
+    for (r in ["src-tauri/gen/ohos", "gen/ohos", "src-tauri/ohos", "ohos"]) {
+        let p = projPath + cjhPathSep() + r
+        if (exists(Path(p))) {
+            collectEtsUnder(p, 8, files)
+        }
+    }
+    var text = ""
+    for (f in files) {
+        var t = ""
+        try {
+            t = String.fromUtf8(File.readFrom(f))
+        } catch (e: Exception) {
+            let _ = e
+        }
+        if (t != "" && t.indexOf("__ohos_dispatch").isSome()) {
+            text += t + "\n"
+        }
+    }
+    return text
+}
+
 /**
  * scan 落档 → **原应用业务功能清单**（每条 IPC 命令一项）+ **平台 API 落地情况**。
  *
@@ -240,6 +297,8 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
 
     // 平台 API 名单（判"这条命令碰没碰平台专有能力"要用）
     let apiNames = ArrayList<String>()
+    // ArkTS 分发器只读一次：桥的双侧判据要用它（§4-162；cargo 不审 ArkTS，别只查 Rust 半边）
+    let arktsDispatch = readArktsDispatcherOf(projPath)
     let platArr = objFieldOf(items, "platform")
     match (platArr.kind()) {
         case JsonKind.JsArray =>
@@ -301,6 +360,16 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                             if (src != "") {
                                 f.degradedApi = firstApiHitIn(src, nm, apiNames)
                                 f.fallbackLanded = commandImplLanded(src, nm)
+                                // 桥命令必须**两侧都在**：Rust 调了 call_arkts("x")，ArkTS 得有 case "x"。
+                                // 只写半边时 cargo 照样 exit=0，真机点了没反应（§4-162）。
+                                let bv = bridgeTwoSidedOf(src, arktsDispatch, nm)
+                                if (bv.callsBridge) {
+                                    f.bridgeCmd = bv.cmd
+                                    if (!bv.landed) {
+                                        f.bridgeMissing = bv.reason
+                                        f.fallbackLanded = false
+                                    }
+                                }
                             }
                             f.humanVerdict = jsonStrField(human, nm)
                             // 真机探针（有就记，没测过就留空 → 条目照旧判"未测"）

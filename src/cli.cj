@@ -25,13 +25,14 @@ import stdx.encoding.json.*
 /** CLI 支持的命令（与注册表一致；GUI 专属的 quit/cjh_* 不开放） */
 public let CLI_COMMANDS: Array<String> = [
     "migrate", "scan", "deps", "port", "revert", "decisions", "diagnose", "build", "hap", "sign",
-    "deploy", "verify", "report", "probe", "batch", "resume", "env", "skill", "agent_context", "git_clone", "notes"
+    "deploy", "verify", "report", "probe", "batch", "resume", "env", "skill", "agent_context",
+    "git_clone", "notes", "pr"
 ]
 
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
 func cliIsBoolFlag(key: String): Bool {
     for (k in ["screenshot", "verifyOnly", "apply", "start", "all", "json", "wait", "applyPort",
-               "preflight", "force", "shot"]) {
+               "preflight", "force", "shot", "checkMaterial"]) {
         if (k == key) {
             return true
         }
@@ -167,6 +168,9 @@ public func cliUsage(): String {
     text += "  lingqu-cli sign --path E:/work/habit-tree\n"
     text += "  lingqu-cli sign --login                 # 自动签名第一步：AGC 登录（浏览器授权一次）\n"
     text += "  lingqu-cli sign --auto --path E:/work/habit-tree   # 自动签名全流程（设备/证书/profile/写回）\n"
+    text += "  lingqu-cli sign --checkMaterial --path E:/work/habit-tree\n" +
+        "                                         # 只查材料配套性（证书/.p12/profile 是不是一套），纯读盘、秒级；\n" +
+        "                                         # 拦得住 hvigor 的 11111002 与装机的 9568322，别等它跑三分钟\n"
     text += "  lingqu-cli resume --path E:/work/habit-tree\n"
     text += "  lingqu-cli verify --path E:/work/habit-tree\n"
     text += "  lingqu-cli probe --path E:/work/habit-tree --auto --max 8\n" +
@@ -445,6 +449,11 @@ func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcCont
     }
     if (cmd == "port") {
         return PortCommand().handle(fullName, args, ctx)
+    }
+    if (cmd == "pr") {
+        // 阶段 2（0.39.114）：`pr_prepare` 原先只有 IPC 入口，agent 在 bash 里跑不到——
+        // 工具是它的手，CLI 必须同款可达（§0.1）
+        return PrPrepareCommand().handle(fullName, args, ctx)
     }
     if (cmd == "revert") {
         return RevertCommand().handle(fullName, args, ctx)

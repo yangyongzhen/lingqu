@@ -111,6 +111,8 @@ public class PrPrepareResult {
     public var degraded: Bool = false
     public var note: String = ""
     public var outError: String = ""
+    /** 正文里并进了 `archive --to repo` 落下的经验块（阶段 2 打通，0.39.114） */
+    public var lessonsMerged: Bool = false
 
     public func toJson(): JsonObject {
         var o = JsonObject()
@@ -121,6 +123,7 @@ public class PrPrepareResult {
         o.put("prepared", JsonInt(this.prepared))
         o.put("canSubmit", JsonBool(this.canSubmit))
         o.put("degraded", JsonBool(this.degraded))
+        o.put("lessonsMerged", JsonBool(this.lessonsMerged))
         o.put("note", JsonString(this.note))
         o.put("outError", JsonString(this.outError))
         return o
@@ -177,21 +180,58 @@ public func preparePr(projDir: String, projName: String, tokenEnv: String): PrPr
         res.note = "单轮候选超上限 ${MAX_CANDIDATES_PER_PR}，本轮只带前 ${MAX_CANDIDATES_PER_PR} 条（其余留在候选池）——" + res.note
     }
 
-    if (all.size == 0) {
-        res.note = "没有满足门槛的候选经验（次数 ≥2 + 四段齐全 + 未入库）——" + res.note
-        return res
-    }
-
     let dir = prDirOf(projDir, projName)
     let bodyPath = "${dir}/pr-body.md"
     let sugPath = "${dir}/pitfalls-suggestion.md"
     let branchPath = "${dir}/branch.txt"
+    let lessonBlockPath = "${dir}/lessons-suggestion.md"
+    let hasLessonBlock = exists(Path(lessonBlockPath))
+
+    if (all.size == 0 && !hasLessonBlock) {
+        res.note = "没有满足门槛的候选经验（次数 ≥2 + 四段齐全 + 未入库）——" + res.note
+        return res
+    }
+    // ⚠ 候选被 `archive --to repo` 清空、但 repo 经验块在：正文以**经验块为主体**。
+    // 少了这一段，"归档 → 提 PR"这条链在最后一步永远返回"没有候选"，经验块并不进正文
+    // （0.39.114 实测撞到：repoPrReady=true 但 pr-body.md 不存在）
+    if (all.size == 0) {
+        res.branch = "lingqu/lessons/" + projName
+        try {
+            if (!exists(Path(dir))) {
+                Directory.create(Path(dir))
+            }
+            let lb = String.fromUtf8(File.readFrom(lessonBlockPath))
+            File.writeTo(bodyPath, ("# ${projName}：经验沉淀（待合并）\n\n" + lb).toArray())
+            File.writeTo(branchPath, (res.branch + "\n").toArray())
+            res.bodyPath = bodyPath
+            res.lessonsMerged = true
+            res.note = "候选池已清空（经验已归档），正文只带 repo 经验块——" + res.note
+        } catch (e: Exception) {
+            res.outError = "${e}"
+        }
+        return res
+    }
+
     res.branch = prBranchName(projName, all.size)
     try {
         if (!exists(Path(dir))) {
             Directory.create(Path(dir))
         }
-        let body = renderPrBody(projName, all)
+        let body0 = renderPrBody(projName, all)
+        // 阶段 2 打通（0.39.114）：archive --to repo 落下的经验块并进正文，人不用手动搬运
+        var body = body0
+        if (hasLessonBlock) {
+            try {
+                let lb = String.fromUtf8(File.readFrom(lessonBlockPath))
+                body = upsertLessonsSectionOf(body0, lb)
+                res.lessonsMerged = true
+                res.note = "正文已并入 repo 归档的经验块——" + res.note
+            } catch (e: Exception) {
+                // 并块失败不能吞：正文照写，但要把原因带回去（§4-111 期望与结果不一致要说清）
+                let _ = e
+                res.note = "repo 经验块读取失败（正文未并入）——" + res.note
+            }
+        }
         File.writeTo(bodyPath, body.toArray())
         File.writeTo(sugPath, renderPitfallsSuggestion(projName, all).toArray())
         File.writeTo(branchPath, (res.branch + "\n").toArray())
@@ -207,4 +247,141 @@ public func preparePr(projDir: String, projName: String, tokenEnv: String): PrPr
 /** pr 产物目录（与 notes/candidates 同层：`<工程>/.lingqu/pr/<工程>/`，复用 lqPathOf 口径） */
 public func prDirOf(projDir: String, projName: String): String {
     return lqPathOf(projDir, "pr/" + projName)
+}
+
+// ============================================================
+// 阶段 2 打通（0.39.114）：`notes archive --to repo` ↔ `t2h:pr_prepare`
+// ============================================================
+//
+// 之前两件事各干各的：`--to repo` 只回一句「经验留在候选草稿里，等你提 PR」，而 `pr_prepare`
+// 只认**仍未入库**的候选（`candidateLessons` 会跳过 `isLessonArchived`）。于是**刚归档的那批
+// 经验两边都不认**——归档把它移出候选池，pr_prepare 又不读归档 ⇒ 人按提示去提 PR，草稿里
+// 却没有它（§4-136 同族：跑过了，但没进入下一步的输入）。
+//
+// 现在的口径：归档到 repo **当场**产出一份带标记的可合并块 `lessons-suggestion.md`，
+// `pr_prepare` 再把这份块并进 `pr-body.md`。唯一的搬运是"人复核 + 提交"——仍然不自动合并。
+
+public let LESSONS_SECTION_BEGIN: String = "<!-- lingqu:repo-lessons:begin -->"
+public let LESSONS_SECTION_END: String = "<!-- lingqu:repo-lessons:end -->"
+
+/** 可合并的经验块（带标记：upsert 靠它定位，人也靠它一眼看出这段是机器整理的） */
+public func renderRepoLessonsBlock(projName: String, notes: ArrayList<LessonNote>): String {
+    var s = LESSONS_SECTION_BEGIN + "\n\n"
+    s += "## 经验沉淀（${projName}，${notes.size} 条，待合并）\n\n"
+    s += "> 由 lingqu `notes archive --to repo` 整理。入库判据见 `docs/经验入库规则.md`；"
+    s += "落位选型（指纹 / 规则 / 技能 / §4 坑清单）也按它选，别一股脑塞进 AGENTS。\n\n"
+    var i: Int64 = 1
+    for (n in notes) {
+        s += "### ${i}. ${n.title}\n\n"
+        s += "- **现象**：${n.symptom}\n"
+        s += "- **根因**：${n.cause}\n"
+        s += "- **修法**：${n.fix}\n"
+        s += "- **出处**：${n.project}（出现 ${n.occurrences} 次）\n\n"
+        i += 1
+    }
+    s += LESSONS_SECTION_END + "\n"
+    return s
+}
+
+/**
+ * 幂等 upsert：文档里已有标记就**整段替换**，没有就追加到末尾（保留人写的内容）。
+ *
+ * 为什么要幂等：`archive --to repo` / `pr_prepare` 都可能跑多次，直接追加会让同一批经验
+ * 在正文里叠成两份、三份（§4-129 那类"重跑一次就重复"的坑）。
+ */
+public func upsertLessonsSectionOf(doc: String, block: String): String {
+    var start: Int64 = -1
+    var end: Int64 = -1
+    match (doc.indexOf(LESSONS_SECTION_BEGIN)) {
+        case Some(v) => start = v
+        case None => start = -1
+    }
+    match (doc.indexOf(LESSONS_SECTION_END)) {
+        case Some(v) => end = v
+        case None => end = -1
+    }
+    if (start >= 0 && end > start) {
+        let head = doc[0..start]
+        var tail = doc[(end + LESSONS_SECTION_END.size)..]
+        // 块自带收尾换行时，别让 tail 的换行再叠一个——否则重跑一次就多一行，upsert 不幂等
+        if (block.endsWith("\n") && tail.startsWith("\n")) {
+            tail = tail[1..]
+        }
+        return head + block + tail
+    }
+    var out = doc
+    // 别用 `out[(out.size - 1)..out.size]` 判末字符：那是**取最后一个字节**，中文必抛
+    // IllegalArgumentException: Invalid utf8 byte sequence（§4-116 同族）
+    if (out.size > 0 && !out.endsWith("\n")) {
+        out += "\n"
+    }
+    out += "\n" + block
+    return out
+}
+
+/** 归档到 repo 的产物状态（ready / 落点 / 并进了哪份正文 / 说清下一步） */
+public class RepoStageResult {
+    public var ready: Bool = false
+    public var path: String = ""
+    public var mergedInto: String = ""
+    public var note: String = ""
+    public var outError: String = ""
+
+    public init() {}
+
+    public func toJson(): JsonObject {
+        var o = JsonObject()
+        o.put("ready", JsonBool(this.ready))
+        o.put("path", JsonString(this.path))
+        o.put("mergedInto", JsonString(this.mergedInto))
+        o.put("note", JsonString(this.note))
+        o.put("outError", JsonString(this.outError))
+        return o
+    }
+}
+
+/**
+ * `archive --to repo` 的落盘：写 `lessons-suggestion.md`，草稿正文已存在就顺手并进去。
+ *
+ * 空候选不产文件（`ready=false` + 说清原因）——不产空壳让人以为"已经准备好了"（§4-63）。
+ */
+public func stageRepoLessons(projDir: String, projName: String,
+                             notes: ArrayList<LessonNote>): RepoStageResult {
+    let r = RepoStageResult()
+    if (notes.size == 0) {
+        r.note = "本轮没有可归档的经验（候选池为空或都没过门槛）——不产 PR 草稿"
+        return r
+    }
+    let dir = prDirOf(projDir, projName)
+    let p = "${dir}/lessons-suggestion.md"
+    let block = renderRepoLessonsBlock(projName, notes)
+    try {
+        // §4-76：父级不存在要 recursive 建；§4-89：已存在时 recursive create 会抛，先判
+        if (!exists(Path(dir))) {
+            Directory.create(Path(dir), recursive: true)
+        }
+        File.writeTo(p, block.toArray())
+        r.path = p
+        r.ready = true
+    } catch (e: Exception) {
+        r.outError = "${e}"
+        return r
+    }
+    let body = "${dir}/pr-body.md"
+    if (exists(Path(body))) {
+        try {
+            let old = String.fromUtf8(File.readFrom(body))
+            File.writeTo(body, upsertLessonsSectionOf(old, block).toArray())
+            r.mergedInto = body
+        } catch (e: Exception) {
+            r.outError = "${e}"
+            return r
+        }
+    }
+    r.note = if (r.mergedInto == "") {
+        "经验块已落 ${p}；跑 t2h:pr_prepare 会把它并进草稿正文，也可直接贴进 PR"
+    } else {
+        "经验块已落 ${p} 并已并入 ${r.mergedInto}——复核后提交即可"
+    }
+    return r
 }

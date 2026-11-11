@@ -674,6 +674,80 @@ public func judgeSignPreflight(hasConfig: Bool, profileExists: Bool, projectBund
 }
 
 // ============================================================
+// 材料配套性预检（0.39.114）：证书 / .p12 / profile 是不是"一套"
+// ============================================================
+//
+// 实测动机（§4-165）：重签后装机回 `9568322 not trusted app source`，可 sign 落档是
+// `ok=true / canInstallDevice=true`、profile 的 device-ids 里也有本机 UDID——因为
+// **签 HAP 用的证书 ≠ profile 里绑的证书**，而这条链上没有任何环节会报错。
+// 同族的 `11111002 Certificates error` 更直接：profile 绑的那张证书**不是本地 .p12 这把钥匙签的**，
+// 这时重下多少次 .cer 都没用，只能 `--newKeys`。
+//
+// 两件事都能**在跑 hvigor 之前**判出来，代价是读两个文件（§4-77：能前置就前置；
+// agent 的轮次预算稀缺，别让它等三分钟只换来一句 11111002）。
+
+/** 证书不配套时 hvigor 的原话错误码 */
+public let SIGN_CERT_MISMATCH_CODE: String = "11111002"
+
+/** 证书链不可信时装机被拒的错误码（真机那一侧的表现） */
+public let SIGN_UNTRUSTED_INSTALL_CODE: String = "9568322"
+
+/** 材料配套性体检的结论 */
+public class SignMaterialCheck {
+    /** true = 这项通过（或"读不出、不拦"） */
+    public var ok: Bool = false
+    /** true = 必然失败（`11111002`），别去跑 hvigor */
+    public var blocked: Bool = false
+    /** 结论一行 */
+    public var reason: String = ""
+    /** 下一步该跑什么（空 = 不用动） */
+    public var nextStep: String = ""
+
+    public func toJson(): JsonObject {
+        var o = JsonObject()
+        o.put("ok", JsonBool(this.ok))
+        o.put("blocked", JsonBool(this.blocked))
+        o.put("reason", JsonString(this.reason))
+        o.put("nextStep", JsonString(this.nextStep))
+        return o
+    }
+}
+
+/**
+ * 纯判定（不读盘）：profile 绑的那张开发证书，在不在本地 `.cer` 证书链里。
+ *
+ * 三条规则，只有第三条拦：
+ *   ① profile 里读不出证书 → **不拦**（证书格式一变不该让整条链全红，与 `ensureCerMatchesProfile` 同口径）
+ *   ② 本地没有 `.cer` → 拦（签不了，且这是"没材料"不是"材料错"，给的是补材料的路）
+ *   ③ 链里没有这张 → 拦（`11111002` 必然发生；重下 `.cer` 治不好"钥匙不配"，要点明 `--newKeys`）
+ */
+public func judgeMaterialKeys(hasCer: Bool, cerText: String, profileCertPem: String): SignMaterialCheck {
+    let out = SignMaterialCheck()
+    if (profileCertPem == "") {
+        out.ok = true
+        out.reason = "profile 里读不出开发证书，这项跳过（不拦）"
+        return out
+    }
+    if (!hasCer || cerText.trimAscii().size == 0) {
+        out.blocked = true
+        out.reason = "本地没有证书文件（.cer）：hvigor 会报 ${SIGN_CERT_MISMATCH_CODE} Certificates error"
+        out.nextStep = "跑 `lingqu-cli sign --auto` 对本工程签一次（会下载证书并写回 signingConfigs）"
+        return out
+    }
+    if (cerHasCertOf(cerText, profileCertPem)) {
+        out.ok = true
+        out.reason = "本地 .cer 与 profile 绑的是同一张开发证书"
+        return out
+    }
+    out.blocked = true
+    out.reason = "profile 绑的开发证书不在本地 .cer 证书链里：hvigor 会报 ${SIGN_CERT_MISMATCH_CODE} " +
+        "Certificates error（装到真机则表现为 ${SIGN_UNTRUSTED_INSTALL_CODE} not trusted app source）"
+    out.nextStep = "先 `lingqu-cli sign --auto`（会按云端重下 .cer 并复核）；重下后仍不一致说明" +
+        "云端那张证书不是本机 .p12 这把钥匙签的，用 `sign --auto --newKeys` 重生成密钥对再签"
+    return out
+}
+
+// ============================================================
 // T5-4 签名两态（debug / release）+ 上架前强提醒
 // ============================================================
 //

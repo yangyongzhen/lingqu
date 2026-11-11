@@ -453,6 +453,7 @@ public func patchProposalsFromDiagnosis(items: ArrayList<Diagnosis>): ArrayList<
             case "R2-PORT-007" => file = "src-tauri/rust-toolchain.toml"
             case "R2-PORT-008" => file = "src-tauri/.cargo/config.toml"
             case "R2-PORT-016" => file = "src-tauri/Cargo.toml"
+            case "R2-PORT-017" => file = "src-tauri/src/ohos_bridge.rs"
             case "R2-PORT-009" => file = "src-tauri/src/lib.rs"
             case _ => file = ""
         }

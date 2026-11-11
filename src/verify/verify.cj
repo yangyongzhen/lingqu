@@ -161,6 +161,15 @@ public class FeatureInput {
     public var probeNote: String = ""
     /** 实测证据路径（截图 / 版面树 dump），落进条目的 evidence 供复核 */
     public var probeEvidence: ArrayList<String> = ArrayList<String>()
+    /** 桥用的 ArkTS 分发 cmd 名（空 = 这条命令不走桥） */
+    public var bridgeCmd: String = ""
+    /**
+     * 桥**只写了一半**的说明（空 = 没问题 / 不走桥）。
+     *
+     * 这是"Rust 调了 `call_arkts("x")`，但 ArkTS 没有 `case "x"`"那种情形：静态看像落地了、
+     * `cargo build` 也 exit=0，真机点了却毫无反应（`cargo` 不审 ArkTS）。§4-162。
+     */
+    public var bridgeMissing: String = ""
 
     public init(commandName: String, title: String) {
         this.commandName = commandName
@@ -663,6 +672,209 @@ public func commandImplLanded(src: String, fnName: String): Bool {
     return false
 }
 
+// ============================================================
+// 桥的双侧判据（0.39.114 / §4-162）：Rust 侧调了桥 ≠ 真机能用
+// ============================================================
+//
+// 实测动机：把 `rfd::FileDialog` / `explorer` 这类原生 UI 换成桥之后，verify 判 pass、
+// 交叉编译 exit=0，**真机点了没反应**——因为 `.ets` 里根本没有对应的 `cmd` 分支，
+// 而 `cargo build`（含 `--target aarch64-unknown-linux-ohos`）**根本不编译 ArkTS**，
+// 只有 `hvigor`（`lingqu-cli hap`）才会查。
+//
+// 所以"落地"的定义是**两侧都在**：Rust 分支里 `call_arkts("x")`，且 ArkTS 分发器里
+// `case "x":` 存在。少任何半边都不算落地——只查 Rust 半边就是假绿（§4-116 同族）。
+
+/** Rust 分支里往 ArkTS 走的那条调用的 cmd 名（不走桥就给空串） */
+public func bridgeCmdInRustOf(body: String): String {
+    for (m in ["call_arkts(\"", "callArkts(\""]) {
+        let i = findFrom(body, m, 0)
+        if (i >= 0) {
+            let start = i + m.size
+            let end = findFrom(body, "\"", start)
+            if (end > start) {
+                return body[start..end]
+            }
+        }
+    }
+    return ""
+}
+
+/**
+ * ArkTS 分发器里有没有这个 cmd 分支。认现场的真实两种写法：
+ *
+ * - `switch` 形态：`case "pickFile":` / `case 'pickFile':`
+ * - 协议字段形态（habit-tree / m3u8dl 实际就是这么写的）：`parsed.cmd === 'save_card'`
+ *
+ * 判据刻意收紧：命中的那处字符串**前 64 字符内必须出现 `cmd` 或 `case`**——
+ * 否则注释里、别的协议字段里出现同名串就会被当成"实现了"（§4-65 那类假绿）。
+ */
+public func arktsDispatchHasCmdOf(etsSrc: String, cmd: String): Bool {
+    if (cmd == "" || etsSrc == "") {
+        return false
+    }
+    for (form in ["\"${cmd}\"", "'${cmd}'"]) {
+        var from = 0
+        while (true) {
+            let i = findFrom(etsSrc, form, from)
+            if (i < 0) {
+                break
+            }
+            let back = if (i > 64) { i - 64 } else { 0 }
+            let head = etsSrc[back..i]
+            if (findFrom(head, "cmd", 0) >= 0 || findFrom(head, "case", 0) >= 0) {
+                return true
+            }
+            from = i + form.size
+        }
+    }
+    return false
+}
+
+/**
+ * Rust 侧发出去的桥命令名（两种形态都要认，只认一种就会漏掉半个现场）：
+ *
+ * - 字面量形态：`call_arkts("open_url", ...)`
+ * - 协议字段形态：`"cmd": "save_card"` / `cmd: "open_url"`（habit-tree 的 `ohos_bridge.rs`）
+ */
+public func rustBridgeCmdsOf(text: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    if (text == "") {
+        return out
+    }
+    // ① call_arkts("<cmd>"
+    var from = 0
+    while (true) {
+        let i = findFrom(text, "call_arkts(\"", from)
+        if (i < 0) {
+            break
+        }
+        let start = i + "call_arkts(\"".size
+        let e = findFrom(text, "\"", start)
+        if (e <= start) {
+            break
+        }
+        addCmdUnique(out, text[start..e])
+        from = e + 1
+    }
+    // ② "cmd": "<cmd>" 与 cmd: "<cmd>"（冒号必须紧跟，否则会捞到别处的值）
+    for (k in ["\"cmd\": ", "cmd: "]) {
+        var f2 = 0
+        while (true) {
+            let i = findFrom(text, k, f2)
+            if (i < 0) {
+                break
+            }
+            var p = i + k.size
+            while (p < text.size && (text[p] == 32 || text[p] == 9)) {
+                p += 1
+            }
+            if (p < text.size) {
+                let q = text[p]
+                if (q == 34 || q == 39) {
+                    let e = findFrom(text, if (q == 34) { "\"" } else { "'" }, p + 1)
+                    if (e > p + 1) {
+                        addCmdUnique(out, text[(p + 1)..e])
+                        f2 = e + 1
+                        continue
+                    }
+                }
+            }
+            f2 = i + k.size
+        }
+    }
+    return out
+}
+
+/** 命令名只收 [a-z0-9_]（防把注释/句子当成 cmd） */
+func isCmdNameOf(s: String): Bool {
+    if (s.size == 0 || s.size > 40) {
+        return false
+    }
+    for (i in 0..s.size) {
+        let c = s[i]
+        if ((c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95) {
+            continue
+        }
+        return false
+    }
+    return true
+}
+
+func addCmdUnique(out: ArrayList<String>, c: String): Unit {
+    if (isCmdNameOf(c) && !out.contains(c)) {
+        out.add(c)
+    }
+}
+
+/**
+ * 项目级双侧比对：Rust 发出去的 cmd 里，有哪些 ArkTS 分发器**没实现**。
+ *
+ * 这是"桥只写半边"的权威判据（§4-162）：空数组 = 两侧都在，非空 = 真机点了没反应的那几个。
+ */
+public func missingBridgeCmdsOf(rustText: String, etsSrc: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    for (c in rustBridgeCmdsOf(rustText)) {
+        if (!arktsDispatchHasCmdOf(etsSrc, c)) {
+            out.add(c)
+        }
+    }
+    return out
+}
+
+/** 一条命令的桥落地结论（两侧都有才算落地） */
+public class BridgeVerdict {
+    /** Rust 侧确实要往 ArkTS 走（否则这条命令与桥无关，判据不适用） */
+    public var callsBridge: Bool = false
+    /** 两侧都在 */
+    public var landed: Bool = false
+    /** 桥用的 cmd 名 */
+    public var cmd: String = ""
+    /** 结论一行（缺了哪一半要说清，否则界面只有"没落地"三个字） */
+    public var reason: String = ""
+
+    public init() {}
+}
+
+/**
+ * 纯判定：这条命令的桥是不是**两侧都在**。
+ *
+ * 返回的 `callsBridge=false` 表示"不适用"（纯 Rust 逻辑，没有桥），调用方不该拿它扣分；
+ * `callsBridge=true && landed=false` 才是要拦的那种——真机上点了不会有任何反应。
+ */
+public func bridgeTwoSidedOf(rustSrc: String, etsSrc: String, fnName: String): BridgeVerdict {
+    let v = BridgeVerdict()
+    if (fnName == "") {
+        v.reason = "没有命令名，判不了"
+        return v
+    }
+    var cmd = ""
+    for (im in fnImplsOf(rustSrc, fnName)) {
+        let c = bridgeCmdInRustOf(im.body)
+        if (c != "") {
+            cmd = c
+            break
+        }
+    }
+    if (cmd == "") {
+        v.reason = "这个命令不经过 ArkTS 桥"
+        return v
+    }
+    v.callsBridge = true
+    v.cmd = cmd
+    if (etsSrc == "") {
+        v.reason = "Rust 侧调了 call_arkts(\"${cmd}\")，但工程里找不到 ArkTS 分发器（没有含 __ohos_dispatch 的 .ets）"
+        return v
+    }
+    if (!arktsDispatchHasCmdOf(etsSrc, cmd)) {
+        v.reason = "Rust 侧调了 call_arkts(\"${cmd}\")，但 ArkTS 分发器里没有 case \"${cmd}\" 分支——" +
+            "真机点了不会有反应（cargo 不审 ArkTS，只有 hvigor 会审）"
+        return v
+    }
+    v.landed = true
+    v.reason = "两侧都在：Rust call_arkts(\"${cmd}\") + ArkTS case \"${cmd}\""
+    return v
+}
+
 /** 落档里的命中位置（`src-tauri/src/commands.rs:157`）→ 行号（取不到给 0） */
 public func siteLineOf(site: String): Int64 {
     var cut: Int64 = -1
@@ -904,6 +1116,12 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
         it.category = if (f.commandName.startsWith("probe:")) { "smoke" } else { "business" }
         if (f.degradedApi != "") {
             it.evidence.add("命中平台 API：${f.degradedApi}")
+        }
+        if (f.bridgeCmd != "") {
+            it.evidence.add("ArkTS 桥 cmd：${f.bridgeCmd}")
+        }
+        if (f.bridgeMissing != "") {
+            it.evidence.add(f.bridgeMissing)
         }
         if (f.fallbackLanded) {
             it.evidence.add("鸿蒙侧有落地的替代实现（不是空壳分支）")

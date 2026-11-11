@@ -5979,6 +5979,61 @@ withBridge(function(tauri){
       });
     }
   }
+  /* ③ 规则改造：按落档回读摘要（0.39.114）
+   * 只读盘、不重扫：规则明细要靠重跑扫描算，重算得到的是"现在这一刻"的数，
+   * 与 `.lingqu/port/<工程>/decisions.json` 里的对不上（§4-138 的教训）。
+   * 所以这屏回读只给摘要（应用几条 / auto / 需人工 / 写盘没有 / 什么时候），
+   * 规则表位置改说清"要看明细就点预览改造"，绝不拿上一个工程的旧表充数（§4-134 判据②）。 */
+  function renderPortRecord(r){
+    r = r || {};
+    var applied = (typeof r.applied === 'number') ? r.applied : 0;
+    var auto = (typeof r.auto === 'number') ? r.auto : 0;
+    var guide = (typeof r.guide === 'number') ? r.guide : 0;
+    var at = (typeof r.at === 'number' && r.at > 0) ? r.at : 0;
+    var when = at ? new Date(at).toLocaleString() : '';
+    var note = $('portNote');
+    if (!at) {
+      // 只有人工决策、没有 portRun：第三态「看不出改造跑没跑」。
+      // 既不渲染成"跑过了（0 条）"，也不渲染成"没跑过"（§4-63）。
+      $('portApplied').textContent = '—';
+      $('portIdem').textContent = '—';
+      if ($('portStatAuto')) { $('portStatAuto').textContent = '—'; }
+      if ($('portStatPending')) { $('portStatPending').textContent = '—'; }
+      if ($('portStatHuman')) { $('portStatHuman').textContent = '—'; }
+      if ($('portStatElapsed')) { $('portStatElapsed').innerHTML = '—<small>未计时</small>'; }
+      if (note) {
+        note.style.color = 'var(--warn)';
+        note.textContent = String(r.error || '这份落档里没有 portRun 段，看不出改造跑过没有。');
+      }
+    } else {
+      $('portApplied').textContent = String(applied);
+      $('portIdem').textContent = r.apply === true ? '已写盘（可回滚）' : '预览（未写盘）';
+      if ($('portStatAuto')) { $('portStatAuto').textContent = String(auto); }
+      if ($('portStatPending')) { $('portStatPending').textContent = '—'; }  // 待决策数要规则表才数得清
+      if ($('portStatHuman')) { $('portStatHuman').innerHTML = String(guide) + '<small>/ 5</small>'; }
+      // 「耗时」这张卡只放耗时：拿跑的时间点冒充耗时会读成"这次跑了 3 小时"
+      if ($('portStatElapsed')) { $('portStatElapsed').innerHTML = '—<small>未计时</small>'; }
+      if (note) {
+        note.style.color = '';
+        note.textContent = '已按落档回读：本轮应用 ' + applied + ' 条（auto ' + auto + ' / 需人工 ' + guide + '）'
+          + (r.apply === true ? '，已写盘' : '，未写盘')
+          + (when ? '，' + when : '')
+          + '。规则明细要看就点「预览改造」重跑一次（回读不重扫，免得屏幕与落档是两份数）。';
+      }
+      logOnce('port', r.apply === true ? 'ok' : 'cmd',
+        '按落档回读：applied=' + applied + '（auto ' + auto + ' / 需人工 ' + guide + '）'
+          + (when ? ' · ' + when : ''));
+    }
+    var tb = $('portRows');
+    if (tb) {
+      tb.innerHTML = '<tr><td colspan="4" class="muted">回读只给摘要，不重算规则明细——'
+        + '点「预览改造」可重跑一次。</td></tr>';
+    }
+    window.__port = { applied: applied, rules: 0, rulesRaw: [], idempotent: false,
+      auto: auto, guide: guide, toml: '', backup: '', error: String(r.error || ''),
+      recordOnly: true, at: at };
+    return true;
+  }
   function lingquDecide(rule, decision){ recordDecision(rule, decision); }
   window.lingquDecide = lingquDecide;
   /* 错误指纹诊断：命中即给修法（rule 档建议重跑 t2h:port），未命中才走 AI 长尾 */
@@ -6443,6 +6498,14 @@ withBridge(function(tauri){
                reminder: '', releaseProfiles: 0, steps: [] };
   function renderSign(r){
     r = r || {};
+    if (r.recordOnly === true) {
+      // 回读来的结论：记下"读了、读的是哪一代"，ui_report 才有得断言
+      SIGNREC.loaded += 1;
+      SIGNREC.mode = String(r.mode || '');
+      SIGNREC.at = (typeof r.generatedAt === 'number') ? r.generatedAt : -1;
+      SIGNREC.ok = r.ok === true ? 1 : 0;
+      SIGNREC.by = String(r.by || '');
+    }
     SIGN = {
       ok: r.ok === true,
       hasUdid: !!r.udid,
@@ -7641,10 +7704,15 @@ withBridge(function(tauri){
    */
   var STEP_FILL = { n: 0, last: '', err: '' };
   var STEP_SEEN = {};   // 「工程|步骤 → 上次看到跑了没」，只在 ran 由假变真时回读一次
+  // 签名卡按落档回读的痕迹（0.39.114）：loaded>0 才说明"这张卡真的读了落档"，
+  // 光看界面上有数字分不清是人点体检得来的还是回读来的。
+  var SIGNREC = { loaded: 0, mode: '', at: -1, ok: 0, by: '' };
 
   function pathOfStepScreen(step){
-    // 每屏的「工程路径」输入框（⑤ 用 buildPath，⑥ 与部署共用 deployPath）
-    var ids = { scan: 'scanPath', deps: 'depsPath', build: 'buildPath', verify: 'deployPath' };
+    // 每屏的「工程路径」输入框（⑤ 用 buildPath，⑥ 与部署共用 deployPath；
+    // 签名卡长在 ⑤ 屏里，没有独立路径框，也读 buildPath——0.39.114）
+    var ids = { scan: 'scanPath', deps: 'depsPath', build: 'buildPath', verify: 'deployPath',
+                port: 'portPath', sign: 'buildPath' };
     var inp = $(ids[step] || '');
     var p = (inp && inp.value) ? String(inp.value).trim() : '';
     if (p) { return p; }
@@ -7664,7 +7732,12 @@ withBridge(function(tauri){
       scan:   { cmd: 't2h:scan',   render: renderScan,   note: 'scanNote' },
       deps:   { cmd: 't2h:deps',   render: renderDeps,   note: 'depsNote' },
       build:  { cmd: 't2h:build',  render: renderBuild,  note: 'buildNote' },
-      verify: { cmd: 't2h:verify', render: renderVerify, note: 'verNote' }
+      verify: { cmd: 't2h:verify', render: renderVerify, note: 'verNote' },
+      // 0.39.114：③ 规则改造 / ④ 签名补上回读——这两屏原先只认"人点按钮"，
+      // agent 用 lingqu-cli port|sign 干完，屏上仍是「—」（§4-135 判据①）。
+      // append=true：渲染函数自己写结论与"哪一代"，回读来源只许作后缀（§4-104 的教训）。
+      port:   { cmd: 't2h:port',   render: renderPortRecord, note: 'portNote', append: true },
+      sign:   { cmd: 't2h:sign',   render: renderSign,       note: 'signNote', append: true }
     };
     var spec = SPEC[step];
     if (!spec) { return false; }
@@ -7683,6 +7756,9 @@ withBridge(function(tauri){
             // 那是用户真正要读的口径说明。回读来源只作后缀补一句，不许把它整段顶掉
             // （0.39.104 实测：探针只读到「已按落档回读：路径」，通过率口径整个不见了，§4-135 同族）
             noteEl.textContent = String(noteEl.textContent || '') + '　（按落档回读，未重新验证）';
+          } else if (spec.append) {
+            // port / sign：渲染函数自己写结论（应用几条 / 签名态 / 哪一代）——回读来源只追加后缀
+            noteEl.textContent = String(noteEl.textContent || '') + '　（按落档回读，未重新跑）';
           } else {
             noteEl.textContent = fillTxt;
           }
@@ -7729,7 +7805,14 @@ withBridge(function(tauri){
     if (name === 'deps') { try { fillStepFromRecord('deps', 'enter'); } catch (e) {} }
     // 0.39.88：⑤ 构建打包 / ⑥ 真机验证 同理——agent 跑过 build/verify 之后，
     // 屏上不该还写着"还没跑交叉编译 / 尚未验证"（§4-135 判据①：agent 会自己跑的步骤，界面要有回读通道）
-    if (name === 'build') { try { fillStepFromRecord('build', 'enter'); } catch (e) {} }
+    if (name === 'build') {
+      try { fillStepFromRecord('build', 'enter'); } catch (e) {}
+      // 签名卡长在 ⑤ 屏里（没有独立的 sign 屏）：agent 跑过 `lingqu-cli sign` 之后，
+      // 这张卡不该还写着「尚未体检」（0.39.114，§4-135 判据①）
+      try { fillStepFromRecord('sign', 'enter'); } catch (e) {}
+    }
+    // ③ 规则改造：原先只在人点「预览改造 / 应用改造」时才渲染（0.39.114）
+    if (name === 'port') { try { fillStepFromRecord('port', 'enter'); } catch (e) {} }
     if (name === 'verify') { try { fillStepFromRecord('verify', 'enter'); } catch (e) {} }
     if (name !== 'report') { return; }
     // 0.39.98：**先按落档回读**（纯读盘、秒级），屏幕立刻与盘上一致；
@@ -8246,6 +8329,15 @@ withBridge(function(tauri){
       stepFillN: STEP_FILL.n,
       stepFillLast: String(STEP_FILL.last || ''),
       stepFillErr: String(STEP_FILL.err || '').slice(0, 160),
+      // 0.39.114：③ 规则改造 / ④ 签名卡"按落档回读"的痕迹。
+      // 断言口径：portRecLoaded>0 ∧ portRecAt>0（③ 屏不再是「—」）；
+      //           signRecLoaded>0 ∧ signRecMode 非空（签名卡读的是落档，不是"尚未体检"）。
+      portRecLoaded: (window.__port && window.__port.recordOnly === true) ? 1 : 0,
+      portRecApplied: (window.__port && typeof window.__port.applied === 'number') ? window.__port.applied : -1,
+      portRecAt: (window.__port && typeof window.__port.at === 'number') ? window.__port.at : -1,
+      signRecLoaded: SIGNREC.loaded,
+      signRecMode: String(SIGNREC.mode || ''),
+      signRecAt: SIGNREC.at,
       scanBlockers: window.__scanBlockers || 0,
       depsTotal: (window.__deps && window.__deps.total) || 0,
       depsPatch: (window.__deps && window.__deps.patch) || 0,
