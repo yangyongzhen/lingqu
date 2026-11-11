@@ -2,13 +2,16 @@
 
 # 灵渠 · Lingqu
 
-**Tauri 应用 → 鸿蒙 PC 的一站式 AI 迁移台**
+**Tauri 应用 → 鸿蒙 PC 的开箱即用一站式 AI 迁移台**
+
+**开箱即用**——内置 AI 引擎随包分发（SHA256 校验、自动拉起），装上就能用，不用先配一套 agent 运行时；
+**全程可视化**——8 屏工作台把每一步的落档、证据与卡点摊在界面上，不必去翻文件猜它走到哪了。
 
 把「照几千字踩坑笔记手工移植一个 Tauri 应用」变成**一条命令 + 一份带证据的迁移报告**；
 而且**踩过的坑会自己长成下一轮的规则、指纹与技能**。
 
-[![Release](https://img.shields.io/badge/release-v0.39.95-00868B)](./CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-449%20passed-2ea44f)](./scripts/test.sh)
+[![Release](https://img.shields.io/badge/release-v0.39.114-00868B)](./CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-598%20passed-2ea44f)](./scripts/test.sh)
 [![Gates](https://img.shields.io/badge/gates-6%2F6%20green-2ea44f)](#-测试与质量)
 [![Language](https://img.shields.io/badge/language-Cangjie%20%2F%20Rust%20%2F%20ArkTS-00868B)](https://cangjie-lang.cn)
 [![Platform](https://img.shields.io/badge/platform-Windows%20→%20HarmonyOS%20PC-lightgrey)](#-平台与验证范围)
