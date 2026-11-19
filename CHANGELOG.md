@@ -5,6 +5,41 @@
 
 ---
 
+## [0.39.120] - 2026-11-19
+
+**R-1 零干预轮首次实跑：三个验证点全部未达成——飞轮机制在位，但 agent 不会自己用。**
+在应用里对未迁样本 **EcoPaste** 跑「AI 一键迁移」，全程不介入决策：26 轮 / 28 次工具 / 2.35M tokens
+后 `turn_done`，八步停在 **3/8**。
+
+### 取证结果（判据原文见 `docs/需求追踪.md` §五 R-1）
+
+| # | 验证点 | 实测 |
+|---|---|---|
+| 1.1 | agent 自写经验 | `notes/` **目录不存在**（0 文件）⇒ 未发生 |
+| 1.2 | 未命中攒签名 | `diagnose/` **不存在**（0 文件）⇒ 未发生 |
+| 1.3 | 自主提交 PR | `pr/` 0 文件 + 无凭据 ⇒ 未发生 |
+
+### 同轮副产品（R-2 crate 级）
+
+- **TP**：`rfd v0.16.0` build script panic（`You need to choose at least one backend: gtk3 or xdg-portal`）——
+  矩阵本就判 `rfd` 不可用，预测与实际吻合。
+- **FN 候选**：`error[E0609]: no field 'appimage' on type 'Env'`（`tauri-plugin-updater 2.10.1` × fork 版 tauri）——
+  矩阵只标"tauri 系需 patch"，没覆盖**插件**与 fork 的字段漂移。
+- 另两次失败是环境：`spurious network error … 302571 ms with 0 bytes`（0.39.119 的默认镜像已处置）；
+  补镜像后第 3、4 次是**真编到 crate 才炸**，网络关已过。
+
+### 人工介入（A3）
+
+**1 处**：给该工程补 rsproxy 镜像段（与本轮 `R2-PORT-008` 默认值一致）。
+
+### 诚实的边界
+
+- 单样本单轮，不能推广成"agent 永远不写经验"；但足以否定"机制在就一定会用"。
+- 未跑到 `hap/deploy/verify`（build 未过），A4 本轮无新数据；1.3 因无凭据未取证。
+- 两条 R-2 发现**尚未回填**（`tauri-plugin-updater` 字段漂移、`rfd` 说明合并）——留作下一轮。
+
+---
+
 ## [0.39.119] - 2026-11-19
 
 **国内直连 crates.io 卡死这件事，从"每次现场排查"变成"默认配好镜像"。**
