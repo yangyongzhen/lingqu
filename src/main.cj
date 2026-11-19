@@ -1108,6 +1108,16 @@ public class DiagnoseCommand <: CommandHandler {
             ruleArr.add(JsonString(rid))
         }
         res.put("ruleIds", ruleArr)
+        // 0.39.116：指纹清单也回投——「一共几条指纹、编号范围是什么」不再只能靠人数
+        // （`fingerprintLibrary()` 本身就是唯一清单，这里只是它的读者；条数漂移由
+        //  fingerprint_manifest_test 判红，含保留空位 FP-008/FP-009 的编号连续性）。
+        res.put("fingerprintCount", JsonInt(fingerprintCount()))
+        res.put("fingerprintRange", JsonString(fingerprintRangeTextOf()))
+        var fpIdArr = JsonArray()
+        for (fid in fingerprintIds()) {
+            fpIdArr.add(JsonString(fid))
+        }
+        res.put("fingerprintIds", fpIdArr)
         // 0.39.55：**未命中也要落档**——否则"这条错误没人认识"这件事不留痕，下个样本又从零开始。
         // 只在 items 为空时记；同签名累加次数，攒到阈值就提示"该补指纹"。
         var missInfo = JsonObject()

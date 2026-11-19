@@ -5,6 +5,45 @@
 
 ---
 
+## [0.39.116] - 2026-11-19
+
+**给「21 条指纹」装上与规则同款的判据**。0.39.115 收口规则条数时留了一句"指纹侧同款可以照抄"：
+`fingerprintLibrary()` 有 `size`，但「README 说 21 条」**没有任何断言**，文档里也真留着陈旧说法
+（`docs/需求追踪.md` 两处仍是「15 条指纹」）。本轮不新增清单——库本身就是单点，再抄一份只会
+多一个漂移源——只补三类判据：编号连续性、库 ↔ 文档双向、库 ↔ 规则可达性。
+
+### Added
+
+- **指纹清单判据（`src/port/diagnose.cj`）**：`fingerprintIds / fingerprintCount /
+  fingerprintRangeTextOf`（范围串 `FP-001…FP-023` **由库首尾算出**，不与条数脱钩 §4-63）+ 四件能红的判据：
+  - `fingerprintNumberingTextOf`：编号须恰好是 `FP-001..FP-023` **跳过保留空位**
+    （`FP-008/009` 从未存在、不补编）的那一组，无重复 / 缺号 / 越界；
+  - `fingerprintMarkerDupesOf`：marker 撞车（忽略大小写）——撞了则后一条永远命不中；
+  - `fingerprintRuleLinkGapsOf`：`patchKind=rule` 必须指向**已登记**的 `R2-PORT-*`，
+    档位只允许 `rule` / `guide`（否则 agent 拿到的是一条死路）；
+  - `fingerprintDocIdGapsOf / fingerprintCountClaimsOf / fingerprintCountClaimGapsOf`：
+    文档 → 库的**双向**差集——文档引用不存在的编号、文档写着旧条数，都要红。
+- **`t2h:diagnose` 回投 `fingerprintCount / fingerprintRange / fingerprintIds`**——清单有了运行期读者。
+- **`src/tests/fingerprint_manifest_test.cj`（12 条）**：读**真实库与真实文档**，含
+  「保留空位不许有内容」、「具体指纹必须排在泛串之前（`FP-021` < `FP-016`、`FP-022` < `FP-005`）」、
+  四份现状文档（README / 飞轮 / 迁移指南 / 需求追踪）的条数与编号对齐、技能 references 引用的编号都存在。
+
+### Changed
+
+- `docs/需求追踪.md` 两处陈旧条数（C3 行、G16 行）→ 21 条 `FP-001…FP-023`。
+- 单测 605 → **617**；版本三处 0.39.115 → **0.39.116**。
+
+### 诚实的边界
+
+- 判据只保证「有几条、编号怎么排、几处说法对不对得上」，**不保证指纹接得住真实日志**
+  ——那要看 5 个样本的实跑命中率（`docs/需求追踪.md` §五 R-2）。
+- 连续性判据**只看集合、不看数组顺序**：库的顺序是**匹配顺序**（`FP-022` 刻意夹在 `FP-004` 与
+  `FP-005` 之间），把顺序塞进连续性会把这个设计判成漂移——第一版正是这么红的（见 AGENTS §4-169）。
+- 历史记录类文档（`docs/进度记录.md`、`docs/会话交接.md` 的历史段、`docs/实施路线图.md`）里的条数
+  是**写作当时的事实**，刻意不纳入断言集合——判据不许自造历史假红（§4-160）。
+
+---
+
 ## [0.39.115] - 2026-11-11
 
 **把「17 条改造规则」收成一个单点，并给条数装上能红的判据**。起因是上一轮核准文档计数：

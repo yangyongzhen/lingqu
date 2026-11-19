@@ -629,3 +629,323 @@ public func fingerprintDocGapsOf(fps: ArrayList<Fingerprint>, docText: String): 
     }
     return gaps
 }
+
+// ===== 指纹清单与判据（0.39.116）=====
+//
+// 0.39.115 给「17 条改造规则」立了单点清单，并把"文档里的条数"做成能红的判据；
+// 指纹侧做同款收口，但**不另立一份清单**：`fingerprintLibrary()` 本身就是唯一清单，
+// 再抄一份只会多一个漂移源（§4-63：能算出来的就别手写）。
+// 这里补的是三类判据：
+//   ① 编号连续性（含保留空位）—— 只靠"数一遍"发现不了缺号/乱序/重复；
+//   ② 库 ↔ 技能文档 / 门面文档（**双向**）—— 文档引用了不存在的编号、文档写着旧条数都要红；
+//   ③ 库 ↔ 规则清单 —— `patchKind=rule` 的指纹必须指向已登记的 `R2-PORT-*`，
+//      否则 agent 拿到的是一条死路（§4-130：说明书指错地方比没写更坏）。
+//
+// 为什么编号留着空位：`FP-008` / `FP-009` 在 0.13.0 之前就**从未存在**过，不补编是为了让
+// 历史落档/日志里引用的编号永远指同一个东西。所以"连号"判据必须显式跳过这两个，
+// 否则会把一个历史决定判成漂移——判据自造的假红比漏判更消磨人（§4-156 同族）。
+
+/** 保留空位编号：从未存在过、也不补编（跳过后才算连号） */
+public let FP_RESERVED_GAP_IDS: Array<String> = ["FP-008", "FP-009"]
+
+/** 指纹编号清单（**顺序即匹配顺序**：先特异后一般） */
+public func fingerprintIds(): Array<String> {
+    let out = ArrayList<String>()
+    for (fp in fingerprintLibrary()) {
+        out.add(fp.id)
+    }
+    return out.toArray()
+}
+
+/** 指纹条数（库就是单点，不另存一份数字） */
+public func fingerprintCount(): Int64 {
+    return fingerprintLibrary().size
+}
+
+/**
+ * 编号范围文本（如 `FP-001…FP-023`）——**由库首尾算出**，
+ * 文档里引用的就是这个串，所以它不会与条数脱钩（§4-63）。
+ */
+public func fingerprintRangeTextOf(): String {
+    let ids = fingerprintIds()
+    if (ids.size == 0) {
+        return ""
+    }
+    return "${ids[0]}…${ids[ids.size - 1]}"
+}
+
+/** 编号是否在库里 */
+public func fingerprintKnownOf(id: String): Bool {
+    for (fp in fingerprintLibrary()) {
+        if (fp.id == id) {
+            return true
+        }
+    }
+    return false
+}
+
+/** 是否是保留空位编号（存在过？没有——只是不补编） */
+public func fingerprintReservedGapOf(id: String): Bool {
+    for (g in FP_RESERVED_GAP_IDS) {
+        if (g == id) {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * 编号连续性检查：库里的编号必须恰好是 `FP-001..FP-NNN` **跳过保留空位**的那一组，
+ * 无重复、无缺号、无越界；返回空串表示没问题。
+ *
+ * **只看集合、不看数组顺序**：库的数组顺序是**匹配顺序**（具体指纹要排在泛串之前，
+ * 所以 `FP-022` 就夹在 `FP-004` 与 `FP-005` 之间，`FP-021` 排在 `FP-016` 之前）。
+ * 把"顺序"也塞进这条判据，就会把一个刻意的设计判成漂移——这条教训是本轮实测撞到的
+ * （第一版按位比编号，真库当场红）。匹配顺序由单测里的先后断言单独钉住。
+ *
+ * 判据本身用三位补零的字符串比较，不解析数字（§4-116 同族：别逐字节拼字符串再转数字）。
+ */
+public func fingerprintNumberingTextOf(ids: Array<String>): String {
+    let prefix = "FP-"
+    if (ids.size == 0) {
+        return "清单是空的"
+    }
+    var seen = ArrayList<String>()
+    for (id in ids) {
+        if (id.size != prefix.size + 3) {
+            return "编号不是 `FP-` + 三位数字：${id}"
+        }
+        for (s in seen) {
+            if (s == id) {
+                return "编号重复：${id}"
+            }
+        }
+        seen.add(id)
+    }
+    // 按"应有的一组编号"造出期望集合：001 起连号，跳过保留空位
+    let expected = ArrayList<String>()
+    var n: Int64 = 1
+    while (expected.size < ids.size) {
+        if (n > 999) {
+            return "编号超出 FP-999（当前 ${ids.size} 条）"
+        }
+        let want = prefix + pad3Of(n)
+        n += 1
+        if (fingerprintReservedGapOf(want)) {
+            continue
+        }
+        expected.add(want)
+    }
+    for (id in ids) {
+        var hit = false
+        for (w in expected) {
+            if (w == id) {
+                hit = true
+                break
+            }
+        }
+        if (!hit) {
+            return "编号不在连续范围里：${id}（应为 ${expected[0]}…${expected[expected.size - 1]}，跳过保留空位）"
+        }
+    }
+    return ""
+}
+
+/**
+ * marker 撞车检查：同一个 marker（忽略大小写，匹配走小写）出现两次，
+ * 后一条永远不会被命中——诊断会静默归因给前一条。
+ */
+public func fingerprintMarkerDupesOf(fps: ArrayList<Fingerprint>): ArrayList<String> {
+    let out = ArrayList<String>()
+    var keys = ArrayList<String>()
+    var owners = ArrayList<String>()
+    for (fp in fps) {
+        let key = diagLowerOf(fp.marker)
+        var dupAt: Int64 = -1
+        for (j in 0..keys.size) {
+            if (keys[j] == key) {
+                dupAt = j
+                break
+            }
+        }
+        if (dupAt >= 0) {
+            out.add("${fp.id} 与 ${owners[dupAt]} 的 marker 相同（后者永远命不中）：${fp.marker}")
+            continue
+        }
+        keys.add(key)
+        owners.add(fp.id)
+    }
+    return out
+}
+
+/**
+ * 库 ↔ 规则清单：`patchKind=rule` 的指纹必须关联一条**已登记**的 `R2-PORT-*`；
+ * `patchKind` 只允许 rule / guide。返回空数组表示一致。
+ */
+public func fingerprintRuleLinkGapsOf(fps: ArrayList<Fingerprint>): ArrayList<String> {
+    let out = ArrayList<String>()
+    for (fp in fps) {
+        if (fp.patchKind != PK_RULE && fp.patchKind != PK_GUIDE) {
+            out.add("${fp.id} 的 patchKind 既不是 rule 也不是 guide：${fp.patchKind}")
+            continue
+        }
+        if (fp.patchKind != PK_RULE) {
+            continue
+        }
+        if (fp.ruleId.size == 0) {
+            out.add("${fp.id} 是 rule 档却没关联规则编号（诊断只会说'重跑 port'，说不出哪条）")
+        } else if (!portRuleKnownOf(fp.ruleId)) {
+            out.add("${fp.id} 关联的 ${fp.ruleId} 不在规则清单里")
+        }
+    }
+    return out
+}
+
+/**
+ * 从 `text` 的下标 `at`（`FP-` 起点）取编号；**后面不是三位数字就返回空串**。
+ * 守卫的意义同 `r2PortIdFrom`：别把裸前缀切成垃圾串（§4-156 同族）。
+ */
+public func fpIdFrom(text: String, at: Int64): String {
+    let marker = "FP-"
+    let start = at + marker.size
+    if (text.size < start + 3) {
+        return ""
+    }
+    for (i in 0..3) {
+        let c = text[start + i]
+        if (c < 48 || c > 57) {
+            return ""
+        }
+    }
+    return marker + text[start..start + 3]
+}
+
+/** 扫一段文本里出现的全部指纹编号（去重、保序）——文档 ↔ 库 双向校验用 */
+public func fingerprintIdsInTextOf(text: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let marker = "FP-"
+    var rest = text
+    while (true) {
+        var at: Int64 = -1
+        match (rest.indexOf(marker)) {
+            case Some(i) => at = i
+            case None => at = -1
+        }
+        if (at < 0) {
+            break
+        }
+        let id = fpIdFrom(rest, at)
+        if (id.size > 0) {
+            var dup = false
+            for (s in out) {
+                if (s == id) {
+                    dup = true
+                    break
+                }
+            }
+            if (!dup) {
+                out.add(id)
+            }
+        }
+        rest = rest[(at + marker.size)..]
+    }
+    return out
+}
+
+/** 从 `end` 往前跳过空格/星号/反引号，取紧邻的数字串（取不到返回空串） */
+func digitsBeforeOf(text: String, end: Int64): String {
+    let bytes = text.toArray()
+    var i = end - 1
+    while (i >= 0) {
+        let b = bytes[i]
+        if (b == 32 || b == 42 || b == 96) {
+            i -= 1
+            continue
+        }
+        break
+    }
+    let stop = i + 1
+    while (i >= 0) {
+        let b = bytes[i]
+        if (b < 48 || b > 57) {
+            break
+        }
+        i -= 1
+    }
+    let start = i + 1
+    if (start >= stop) {
+        return ""
+    }
+    return text[start..stop]
+}
+
+/** 纯数字串转 Int64（不受地域设置影响；超长串在文档里不会出现） */
+func digitsToInt64Of(run: String): Int64 {
+    var n: Int64 = 0
+    for (b in run.toArray()) {
+        n = n * 10 + Int64(b) - 48
+    }
+    return n
+}
+
+/**
+ * 从文档里抽出「N 条指纹」/「N 条错误指纹」的**条数说法**（去重、保序）。
+ * 只认这两种形态：`21 条指纹` / `21 条错误指纹`；表格里的 `✅ 21 条 |` 不算
+ * （表格那种靠"必须出现 `${count} 条`"的粗判据兜底，见单测）。
+ */
+public func fingerprintCountClaimsOf(text: String): ArrayList<Int64> {
+    let out = ArrayList<Int64>()
+    for (tail in ["条错误指纹", "条指纹"]) {
+        var rest = text
+        while (true) {
+            var at: Int64 = -1
+            match (rest.indexOf(tail)) {
+                case Some(i) => at = i
+                case None => at = -1
+            }
+            if (at < 0) {
+                break
+            }
+            let run = digitsBeforeOf(rest, at)
+            if (run.size > 0) {
+                let n = digitsToInt64Of(run)
+                if (!out.contains(n)) {
+                    out.add(n)
+                }
+            }
+            rest = rest[(at + tail.size)..]
+        }
+    }
+    return out
+}
+
+/**
+ * 文档里的每条「N 条指纹」都应当等于实际条数。返回空数组表示没有说错的条数；
+ * **说错的**按「文档写着 N 条指纹，实际 M 条」逐条列出（不去重成一句，方便直接看出改哪处）。
+ */
+public func fingerprintCountClaimGapsOf(docName: String, docText: String, expected: Int64): ArrayList<String> {
+    let gaps = ArrayList<String>()
+    for (n in fingerprintCountClaimsOf(docText)) {
+        if (n != expected) {
+            gaps.add("${docName} 写着 ${n} 条指纹，实际 ${expected} 条")
+        }
+    }
+    return gaps
+}
+
+/**
+ * 文档 → 库：文档里点名的指纹编号必须真实存在（保留空位不算——那是历史决定，允许被提到）。
+ * 缺口的写法指名「哪个文档引用了哪条不存在的指纹」，agent 一点就能找到。
+ */
+public func fingerprintDocIdGapsOf(docName: String, docText: String): ArrayList<String> {
+    let gaps = ArrayList<String>()
+    for (id in fingerprintIdsInTextOf(docText)) {
+        if (fingerprintReservedGapOf(id)) {
+            continue
+        }
+        if (!fingerprintKnownOf(id)) {
+            gaps.add("${docName} 引用了 ${id}，但指纹库里没有这一条")
+        }
+    }
+    return gaps
+}
