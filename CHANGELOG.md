@@ -5,6 +5,81 @@
 
 ---
 
+## [0.39.128] - 2026-11-19
+
+**EcoPaste 那 5 处「平台限制」里有 3 处是**判据缺陷**；顺带回填一条 R-2 FN。**
+
+### Fixed（判据把"观测不到"当成了"功能不可用"）
+
+- `fnDesktopOnlyOf` 现在也认 `#[cfg(target_os = "windows")]` / `"macos"`——那段在鸿蒙上**根本不编译**，
+  不能算"没有鸿蒙实现"；但**不认** `target_os = "linux"`（鸿蒙的 `target_os` 也是 linux）。
+- `judgeFrontendSite` 两处：① 命中行是 `import …` / `export … from` 的**不是调用点**，不计缺口；
+  ② 函数起点也认箭头函数（`const f = async () => {`），body 窗口内找 `catch`（原来只认 `function `）。
+- 复跑效果：EcoPaste 的 `platform-api` 从「5 处」→ **「2 处」**（`tauri_plugin_opener` 真缺口 +
+  `app_data_dir` 判据没沿 helper 追一层）。
+
+### Added
+
+- **`R2-DEPS-014`**：`tauri-plugin-updater` 与 **OHOS fork 版 tauri** 的字段漂移——插件的 Linux 专属分支
+  （`target_os = "linux"`）会编进鸿蒙，而 fork 的 `Env` 没有 `appimage` 字段
+  （`error[E0609]: no field 'appimage' on type 'Env'`，EcoPaste 实测）。只点 `updater`（证据唯一），
+  **不**把 `tauri-plugin-*` 一律标红（那会砸 Precision）。
+- `cmakeToolchainPathOf`（`envfix.cj`）+ `t2h:build` 显式设置 `CMAKE_TOOLCHAIN_FILE`，
+  落档新增 `cmakeToolchain`。`aws-lc-sys` 这类 CMake 依赖把 `OHOS_NDK_HOME` 当 **SDK 根**
+  再拼 `/native/build/cmake/…`，我们这一路给 `…/ohos/native` 就得到 `native/native`
+  （cc-switch 实测 `…\native/native/build/cmake/ohos.toolchain.cmake` 不存在）。
+
+### Added（在线演示页）
+
+- **`scripts/publish-demo.sh`**：把 `docs/ui-mockup.html` 发布成 **GitHub Pages** 在线演示页——
+  打包站点（`index.html` + `.nojekyll` + README）→ 建仓 → 推 `gh-pages` → 开 Pages → 回写 `homepage`。
+  自检一条硬判据：源页面**出现任何 `src=`/`href=` 外部引用就拒绝发布**（Pages 上取不到相对资源）。
+  `--dry-run` 只打包自检、不联网。凭据只从 `$GITHUB_TOKEN` / `$GH_TOKEN` / `~/.github_token` 读，
+  走 git credential helper，**不写进 remote、不打印**。
+- README 增「🖥 在线预览界面（GitHub Pages）」入口（顶栏徽章 + 导航 + 截图节说明），
+  并标明那一页是**版面与交互示意（示例数据）**，真实数字看真机截图与落档读数。
+- README 陈旧数字一并纠正：release 徽章 `v0.39.115` → `v0.39.128`、单测 `619`/`443` → **623**。
+
+> **为什么演示页单独一个 GitHub 仓**：主库在 AtomGit，Pages 是 GitHub 的能力；
+> 演示页只需一份静态文件，不必把整个源码镜像过去（省得两份源码各漂各的）。
+
+### Changed
+
+- README 样本台账：tauri-mqtt 补真实上游地址（`OpenHarmonyPCDeveloper/ohos_mqtt_client_tauri`），
+  结局改为「补齐 target CC + 修掉过期 SDK 路径后 **`build` `exit=0 / errors=0` 真的编过**」。
+
+### 诚实的边界
+
+- `app_data_dir` 仍是 fail（判据要能沿 helper 追一层，属独立改造），所以 EcoPaste 的 `platform-api`
+  **本轮不会转绿**；`events` 的 `unknown` 要真机逐条触发事件才能消（未测 ≠ 失败）。
+- **R-2 指标没变好**：有效分母 2，回填 `libdbus-sys`(013) 后 Recall 1/2 = **50%**，仍 < 80%，N=2 不具统计意义；
+  `aws-lc-sys` 只修了环境侧的 toolchain 路径，**crate 级结论未复核、也未回填成规则**。
+- 三处判据修正只有单测（`verify_test` 新增 3 组断言）与 EcoPaste 一次复跑的落档读数，
+  **没在第二个工程上复核**"同样的写法不会再假 fail"。
+
+---
+
+## [0.39.127] - 2026-11-19
+
+**给 R-1 一个能判据的位：`t2h:autoport_status` 回投「本轮到底有没有落经验」。**
+
+### Added
+
+- `t2h:autoport_status` 增 `flywheelNotesBytes` / `flywheelNotesPresent`（读
+  `<工程>/.lingqu/notes/<工程>.md` 的体量）。
+
+### 为什么需要这个位
+
+R-1 首轮取证：EcoPaste 连撞 4 次坑，而 `notes` / `diagnose` / `pr` 三个目录**全空**——
+机制在位、agent 不会自己用，但界面上只显示"步骤失败"，**看不出飞轮根本没转**。
+配合任务书纪律「每撞一次坑先 `notes append` / `diagnose` 再重试」（0.39.126），形成"要求 + 观测"两端。
+
+### 诚实的边界
+
+判据只说明"有没有落档"，**不保证经验质量**；修后实测仍为 `false`（那一轮确实没落经验）。
+
+---
+
 ## [0.39.126] - 2026-11-19
 
 **R-2 环境关：`t2h:build` 前加一道 preflight——只报建议 + 自动补 target CC。**
@@ -12,9 +87,12 @@
 ### Added
 
 - `src/compiler/envfix.cj`：`sdkTailOf` / `rewriteStaleSdkLineOf` / `unescapePathOf` / `hasCDepOf`
-  / `fixStaleCargoConfigOf`（**只产建议，不写文件**）/ `ensureTargetCcOf`（依赖树含 C 依赖时补 `[env]`）。
+  / `fixStaleCargoConfigOf`（**只产建议，不写文件**）/ `ensureTargetCcOf`（依赖树含 C 依赖时补 `[env]`）
+  / `posixPathOf`（注入 `[env]` 前把路径归一为正斜杠）。
 - `t2h:build` 把这些结果写进落档 `configFixups` 并在 CLI 打印，`envfix_test` 覆盖 3 组用例
   （`cjpm test` 619 → **622**）。
+- 任务书纪律新增一条：**每撞一次坑先 `notes append` / `diagnose` 再重试**（判据 = 跑完一轮
+  `.lingqu/notes/` 非空；R-1 首轮实测三目录全空 ⇒ 飞轮等于没转）。
 
 ### 为什么"过期路径只报不改"（实测教训）
 

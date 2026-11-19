@@ -10,14 +10,15 @@
 把「照几千字踩坑笔记手工移植一个 Tauri 应用」变成**一条命令 + 一份带证据的迁移报告**；
 而且**踩过的坑会自己长成下一轮的规则、指纹与技能**。
 
-[![Release](https://img.shields.io/badge/release-v0.39.115-00868B)](./CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-619%20passed-2ea44f)](./scripts/test.sh)
+[![Release](https://img.shields.io/badge/release-v0.39.128-00868B)](./CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-623%20passed-2ea44f)](./scripts/test.sh)
 [![Gates](https://img.shields.io/badge/gates-6%2F6%20green-2ea44f)](#-测试与质量)
 [![Language](https://img.shields.io/badge/language-Cangjie%20%2F%20Rust%20%2F%20ArkTS-00868B)](https://cangjie-lang.cn)
 [![Platform](https://img.shields.io/badge/platform-Windows%20→%20HarmonyOS%20PC-lightgrey)](#-平台与验证范围)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
+[![Live Demo](https://img.shields.io/badge/live%20demo-%E5%9C%A8%E7%BA%BF%E9%A2%84%E8%A7%88-6c8cff)](https://yangyongzhen.github.io/lingqu/)
 
-[30 秒了解](#-30-秒了解) · [为什么是它](#-为什么是它) · [AI 自动进化飞轮](#-ai-自动进化飞轮本项目的特色) · [截图](#-截图) · [能做什么](#-能力矩阵) · [快速开始](#-快速开始) · [测试与质量](#-测试与质量) · [架构](#-架构) · [命令表](#-命令表) · [文档](#-文档地图) · [路线](#-路线与质量目标)
+[**🖥 在线预览界面（GitHub Pages）**](https://yangyongzhen.github.io/lingqu/) · [30 秒了解](#-30-秒了解) · [为什么是它](#-为什么是它) · [AI 自动进化飞轮](#-ai-自动进化飞轮本项目的特色) · [截图](#-截图) · [能做什么](#-能力矩阵) · [快速开始](#-快速开始) · [测试与质量](#-测试与质量) · [架构](#-架构) · [命令表](#-命令表) · [文档](#-文档地图) · [路线](#-路线与质量目标)
 
 </div>
 
@@ -29,7 +30,7 @@
 > Its distinguishing feature is a **self-evolution flywheel**: the agent writes its own lessons to
 > `<project>/.lingqu/notes/`, unknown errors accumulate as normalized signatures in
 > `.lingqu/diagnose/misses.jsonl`, and only after human review do they become fingerprints / rules / skills
-> that the next run consumes. 443 unit tests, six local gates, MIT.
+> that the next run consumes. 623 unit tests, six local gates, MIT.
 
 ---
 
@@ -56,7 +57,7 @@
 | **为什么是仓颉** | 外壳（`cj-tauri`）、迁移引擎、AI 引擎（`cjh`）同栈；一个业务包 `src/` 编出桌面与鸿蒙两端产物，没有 Node/Python 运行时依赖 |
 | **特色** | **AI 自动进化飞轮**：经验与未命中错误由 agent 自己落盘，攒够次数后由人裁决进指纹 / 规则 / 技能库，下一轮自动吃上（见 [专章](#-ai-自动进化飞轮本项目的特色)，设计细节见 [`docs/AI自进化飞轮.md`](docs/AI自进化飞轮.md)） |
 | **特色** | **HAP 包自签名机制（纯仓颉实现，全程摆脱 DevEco Studio）**：本地签名链（纯仓颉 AES-128-GCM 解密口令 + 调用 hap-sign-tool）与 AGC 云生成双路线，`sign --auto` 一条命令 → `signed=true` + 真机装机启动——**迁移的最后一公里不依赖任何重型 IDE，一键到真机跑起来** |
-| **现状** | **v0.39.120**：43 个 `t2h:*` 命令 · 22 条 CLI 子命令 · 619 例单测 · 17 条改造规则 · 22 条错误指纹 · 8 步流水线五道门禁全绿；0.39.120 **R-1 零干预轮首次实跑取证：三个验证点全部未达成**（EcoPaste 26 轮后因模型账号 402 余额不足终止，八步停 3/8；`notes`/`diagnose`/`pr` 三个目录全空 ⇒ 机制在位但 agent 不会自己用），如实记档不修口径；0.39.119 把「国内直连 crates.io 卡死」沉淀成**默认镜像**（`R2-PORT-008` 生成的配置带 rsproxy）+ 指纹 `FP-024`；0.39.118 把 PR 提交凭据改成**多源探测**（`LINGQU_GITCODE_TOKEN` / `GITCODE_TOKEN` / `ATOMGIT_TOKEN` / `GH_TOKEN` 任一），探测不到时**不再静默退化**、当场给出三条可操作的开启路径（含"不授权也能自己提"）；0.39.117 **首次真跑 R-2 规则库压力测试**（3 个未归纳样本：盲跑 `deps` 出预测 → 真实交叉编译对照）：抓到 1 个真 FN（`libdbus-sys`，已回填新规则 `R2-DEPS-013` 并补 FP-016 归因），另 2 个样本卡在环境关（样本自带的过期 SDK 路径、C 依赖缺 target CC）⇒ **crate 级分母只有 1，Recall 0/1，如实记为未达标**；0.39.116 给指纹库装上与规则同款的判据——保留空位（`FP-008/009`）下的编号连续、marker 不撞车、`rule` 档必须指向已登记的 `R2-PORT-*`、四份现状文档的条数与编号**双向**对齐（文档引用不存在的编号也红），`docs/需求追踪.md` 里陈旧的两处指纹条数因此被当场纠正；0.39.115 把「17 条改造规则到底是哪 17 条」收成**单点清单**（`src/port/rules.cj`）并用读真实源码/文档的单测钉住——条数或编号一旦漂就红；**已按 A4 新口径（只数移植项）重跑**：habit-tree **100%**（5 项：通 4 / 免判 1）· m3u8dl-tauri **100%**（5 项：通 4 / 免判 1）· rust-music-3 **80%**（历史落档 6 项：通 4 / 未过 1 / 未测 1；样本源码已不在本机）· note-gen-2 **83%**；三个样本那 1 条失败同源——命中的平台 API 在 `#[cfg(target_env="ohos")]` 分支里是 `Ok(None)` 空壳，属**待落地的降级项**。0.39.106 修掉一处让样本"分数虚高"的假绿：扫描器只认 `src-tauri/`，扁平布局工程（rust-music-3）五类清单恒为 0 ⇒ 分母缩成 3 项、可用率算成 100%；0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败；0.39.94 新增 `probe`——agent 自己在真机上**点一下再判定**功能可用性（`dumpLayout → 按文本取 bounds 中心 → uiInput click → 再 dump 比对 → 截图 → 写 probe.json`），技能与任务书同步教会它；0.39.95 修掉环境体检的两处**假缺失**——`hdc` 走了已过期的 `DEVECO_SDK_HOME`、`llvm-mingw` 只认一条写死路径，现在按「真的能跑到」判；0.39.96–0.39.98 让 agent 干完的活**上得了屏**：①②⑤⑥⑦ 五屏进屏按落档回读（纯读盘、不重跑），监管态补第三态「**已交接**」；0.39.100 修掉「`.so` 就在盘上却报没产出」的产物闸假红（现在期望产物名优先，note-gen-2 的 ⑤ 构建第一次整条通过）；0.39.104–0.39.105 修 ⑥ 验证屏的分类与折叠：`smoke` 项不再混进移植主行（主行 9 → 7），摘要与 note 同源统计 |0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败；0.39.94 新增 `probe`——agent 自己在真机上**点一下再判定**功能可用性（`dumpLayout → 按文本取 bounds 中心 → uiInput click → 再 dump 比对 → 截图 → 写 probe.json`），技能与任务书同步教会它；0.39.95 修掉环境体检的两处**假缺失**——`hdc` 走了已过期的 `DEVECO_SDK_HOME`、`llvm-mingw` 只认一条写死路径，现在按「真的能跑到」判（复用 `hdcPathOr()`、按 PATH + 版本化目录找 clang），每项标出**影响哪一步**，不适用当前宿主机的项不再展示；0.39.96–0.39.97 让 agent 干完的活**上得了屏**：① 迁移画像 / ② 依赖扫描 / ⑤ 构建 / ⑥ 验证四屏进屏按落档回读（纯读盘、不重跑），监管态补第三态「**已交接**」——agent 自己收尾时不再显示成「进行中」；0.39.98 给 ⑦ 迁移报告屏补上同一条回读通道（`t2h:report {action:"load"}`），`ui_report` 可用 `reportLoaded/reportSource` 断言「屏上的数字来自落档」；**0.39.100** 修掉一处让整步功亏一篑的**假红**：`.so` 明明就在盘上（33 MB、刚编出来的），产物闸却报「没产出 `libtauri_app_lib.so`」——cargo 的 artifact 列表里 deps 的 hash 中间产物排在前面，旧实现取「第一个 `.so`」拼出了不存在的路径；现在**期望产物名优先**（`lib<name>.so` 即 HAP 真正加载的那个），note-gen-2 的 ⑤ 构建**第一次整条通过**（`assetDiff.matched=12`，此前一个前端键都没比上） |
+| **现状** | **v0.39.128**：43 个 `t2h:*` 命令 · 22 条 CLI 子命令 · 623 例单测 · 17 条改造规则 · 22 条错误指纹 · 8 步流水线五道门禁全绿；0.39.120 **R-1 零干预轮首次实跑取证：三个验证点全部未达成**（EcoPaste 26 轮后因模型账号 402 余额不足终止，八步停 3/8；`notes`/`diagnose`/`pr` 三个目录全空 ⇒ 机制在位但 agent 不会自己用），如实记档不修口径；0.39.119 把「国内直连 crates.io 卡死」沉淀成**默认镜像**（`R2-PORT-008` 生成的配置带 rsproxy）+ 指纹 `FP-024`；0.39.118 把 PR 提交凭据改成**多源探测**（`LINGQU_GITCODE_TOKEN` / `GITCODE_TOKEN` / `ATOMGIT_TOKEN` / `GH_TOKEN` 任一），探测不到时**不再静默退化**、当场给出三条可操作的开启路径（含"不授权也能自己提"）；0.39.117 **首次真跑 R-2 规则库压力测试**（3 个未归纳样本：盲跑 `deps` 出预测 → 真实交叉编译对照）：抓到 1 个真 FN（`libdbus-sys`，已回填新规则 `R2-DEPS-013` 并补 FP-016 归因），另 2 个样本卡在环境关（样本自带的过期 SDK 路径、C 依赖缺 target CC）⇒ **crate 级分母只有 1，Recall 0/1，如实记为未达标**；0.39.116 给指纹库装上与规则同款的判据——保留空位（`FP-008/009`）下的编号连续、marker 不撞车、`rule` 档必须指向已登记的 `R2-PORT-*`、四份现状文档的条数与编号**双向**对齐（文档引用不存在的编号也红），`docs/需求追踪.md` 里陈旧的两处指纹条数因此被当场纠正；0.39.115 把「17 条改造规则到底是哪 17 条」收成**单点清单**（`src/port/rules.cj`）并用读真实源码/文档的单测钉住——条数或编号一旦漂就红；**已按 A4 新口径（只数移植项）重跑**：habit-tree **100%**（5 项：通 4 / 免判 1）· m3u8dl-tauri **100%**（5 项：通 4 / 免判 1）· rust-music-3 **80%**（历史落档 6 项：通 4 / 未过 1 / 未测 1；样本源码已不在本机）· note-gen-2 **83%**；三个样本那 1 条失败同源——命中的平台 API 在 `#[cfg(target_env="ohos")]` 分支里是 `Ok(None)` 空壳，属**待落地的降级项**。0.39.106 修掉一处让样本"分数虚高"的假绿：扫描器只认 `src-tauri/`，扁平布局工程（rust-music-3）五类清单恒为 0 ⇒ 分母缩成 3 项、可用率算成 100%；0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败；0.39.94 新增 `probe`——agent 自己在真机上**点一下再判定**功能可用性（`dumpLayout → 按文本取 bounds 中心 → uiInput click → 再 dump 比对 → 截图 → 写 probe.json`），技能与任务书同步教会它；0.39.95 修掉环境体检的两处**假缺失**——`hdc` 走了已过期的 `DEVECO_SDK_HOME`、`llvm-mingw` 只认一条写死路径，现在按「真的能跑到」判；0.39.96–0.39.98 让 agent 干完的活**上得了屏**：①②⑤⑥⑦ 五屏进屏按落档回读（纯读盘、不重跑），监管态补第三态「**已交接**」；0.39.100 修掉「`.so` 就在盘上却报没产出」的产物闸假红（现在期望产物名优先，note-gen-2 的 ⑤ 构建第一次整条通过）；0.39.104–0.39.105 修 ⑥ 验证屏的分类与折叠：`smoke` 项不再混进移植主行（主行 9 → 7），摘要与 note 同源统计 |0.39.90 补了「后端已停止响应」的自检与提示；0.39.91 修掉三处**工具自身**的假红/假绿：指纹闸只认 `assets/` 布局、`ohpm.bat` 在 Windows 上不能直启、轮次预算只改内存不落文件；0.39.92 打通整条真机链路（`sign --auto` → signed HAP → 装机启动 → verify 100%），并补上「命令做成了却不落档」这处假失败；0.39.94 新增 `probe`——agent 自己在真机上**点一下再判定**功能可用性（`dumpLayout → 按文本取 bounds 中心 → uiInput click → 再 dump 比对 → 截图 → 写 probe.json`），技能与任务书同步教会它；0.39.95 修掉环境体检的两处**假缺失**——`hdc` 走了已过期的 `DEVECO_SDK_HOME`、`llvm-mingw` 只认一条写死路径，现在按「真的能跑到」判（复用 `hdcPathOr()`、按 PATH + 版本化目录找 clang），每项标出**影响哪一步**，不适用当前宿主机的项不再展示；0.39.96–0.39.97 让 agent 干完的活**上得了屏**：① 迁移画像 / ② 依赖扫描 / ⑤ 构建 / ⑥ 验证四屏进屏按落档回读（纯读盘、不重跑），监管态补第三态「**已交接**」——agent 自己收尾时不再显示成「进行中」；0.39.98 给 ⑦ 迁移报告屏补上同一条回读通道（`t2h:report {action:"load"}`），`ui_report` 可用 `reportLoaded/reportSource` 断言「屏上的数字来自落档」；**0.39.100** 修掉一处让整步功亏一篑的**假红**：`.so` 明明就在盘上（33 MB、刚编出来的），产物闸却报「没产出 `libtauri_app_lib.so`」——cargo 的 artifact 列表里 deps 的 hash 中间产物排在前面，旧实现取「第一个 `.so`」拼出了不存在的路径；现在**期望产物名优先**（`lib<name>.so` 即 HAP 真正加载的那个），note-gen-2 的 ⑤ 构建**第一次整条通过**（`assetDiff.matched=12`，此前一个前端键都没比上） |
 
 ---
 
@@ -134,7 +135,7 @@
 | atomMqtt | [qq8864/atomMqtt](https://gitcode.com/qq8864/atomMqtt) | 仅签名体检落档 | 扁平布局；未进 8 步流水线 |
 | atomgitcli | [nutpi/atomgitcli](https://atomgit.com/nutpi/atomgitcli) | 仅签名体检落档 | **非 Tauri 工程**（Rust CLI），作为工具链体检对象纳入 |
 | mark_note | 本地样本（未记录上游） | **R-2 压测已出结果**：`deps` 497 条（判 13 不可用 / 9 需 patch）；`build` exit 101——唯一 crate 级失败点 `libdbus-sys`（矩阵原判"可用"⇒ **FN**，已回填 `R2-DEPS-013`） | Tauri v2 + `src-tauri` 布局 |
-| tauri-mqtt-client-ohos | 本地样本（tauri/tao 走 `richerfu` fork） | **R-2 压测已出结果**：`deps` 555 条（判 10 不可用 / 7 需 patch）；`build` exit 101——`ring` 卡在**工具链**（缺 target CC，不是 crate 问题，不进分母） | 网络长连接 + fork 依赖形态 |
+| tauri-mqtt-client-ohos | [OpenHarmonyPCDeveloper/ohos_mqtt_client_tauri](https://atomgit.com/OpenHarmonyPCDeveloper/ohos_mqtt_client_tauri) | **R-2 压测已出结果**：`deps` 555 条（判 10 不可用 / 7 需 patch）；补齐 target CC 与修掉过期 SDK 路径后 **`build` `exit=0 / errors=0` 真的编过**（"不可用"预测一条都没被触发，待查是过度预测还是被 cfg 排除） | 网络长连接 + fork 依赖形态 |
 | EcoPaste | [EcoPasteHub/EcoPaste](https://github.com/EcoPasteHub/EcoPaste) | **真机跑通（正式自签版）**：`sign --auto` 出含本机 UDID 的 profile（包名 `com.ayangweb.eco_paste`）→ `hap` `signed=true` → `install`/`start` 成功 → **onboarding 从 1/6 走到 6/6、主界面列表渲染出空态**；`verify` 出 stats（移植项 7、covered 6） | 跨平台剪贴板管理工具（Rust + Tauri，7.6k★）；移植中修掉 5 处桌面专属 builder 方法 + 2 个启动期致命坑（`tauri-plugin-log` 的 `LogDir` EPERM、路径 API 返回不可写路径） |
 | dbx | [t8y2/dbx](https://github.com/t8y2/dbx) | ⬜ **排队待测** | 轻量跨平台数据库客户端（Rust + Tauri + Vue，100+ 数据库，30.9k★） |
 | HuLa | [HuLaSpark/HuLa](https://github.com/HuLaSpark/HuLa) | ⬜ **排队待测** | 跨平台即时通讯桌面应用（Rust + Vue3 + Tauri，7.8k★；多窗口 / 托盘 / 全局快捷键 / 音视频，原生能力位最全的一个） |
@@ -191,6 +192,12 @@ rust-music 迁移中，右侧 AI 助手面板正在落笔经验（`hashline_edit
 ---
 
 ## 📸 截图
+
+> **🖥 想先点一下看看？** [**在线预览界面（GitHub Pages）**](https://yangyongzhen.github.io/lingqu/) ——
+> 8 屏工作台的**可交互静态页**（`docs/ui-mockup.html` 原样发布，单文件、零外部依赖，手机也能看）。
+> ⚠️ 那一页是**版面与交互示意**（示例数据），不是某次真实运行的结果；
+> 真实数字看下面的真机截图与 `docs/进度记录.md` 里的落档读数。
+> 维护：改完 `docs/ui-mockup.html` 后跑 `./scripts/publish-demo.sh` 重新发布
 
 **① 工作台（真实窗口，1280×840）** — 左栏 8 屏导航与六项徽标、中栏当前步骤、右栏 AI 面板；
 顶栏是当前工程，AI 引擎状态在页脚（`WS 已连接 / 引擎 running`）。
