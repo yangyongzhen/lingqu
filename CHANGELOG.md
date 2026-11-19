@@ -39,6 +39,10 @@
 - README 增「🖥 在线预览界面（GitHub Pages）」入口（顶栏徽章 + 导航 + 截图节说明），
   并标明那一页是**版面与交互示意（示例数据）**，真实数字看真机截图与落档读数。
 - README 陈旧数字一并纠正：release 徽章 `v0.39.115` → `v0.39.128`、单测 `619`/`443` → **623**。
+- **已发布（2026-11-20）**：仓 `yangyongzhen/lingqu` 建好、`gh-pages` 推送、Pages 构建完成，
+  <https://yangyongzhen.github.io/lingqu/> 与 `/ui-mockup.html` 实测均 **200**——README 里的演示链接不再是 404。
+  后续更新：改 `docs/ui-mockup.html` 后重跑 `GIT_CONFIG_GLOBAL=/dev/null bash scripts/publish-demo.sh`
+  （必须绕开本机 `ghfast.top` 的 URL 改写；凭据在 `~/.github_token`，来源 credential store）。
 
 > **为什么演示页单独一个 GitHub 仓**：主库在 AtomGit，Pages 是 GitHub 的能力；
 > 演示页只需一份静态文件，不必把整个源码镜像过去（省得两份源码各漂各的）。
