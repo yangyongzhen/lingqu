@@ -127,6 +127,16 @@ public func testRuleTableVerdicts(): Unit {
     applyRule(dbus, patched)
     @Assert(dbus.verdict, D_NO)
     @Assert(dbus.rule, "R2-DEPS-013")
+    // tauri 插件漂移：必须判"需patch"并点出 fork 对齐（EcoPaste 实测的 FN）
+    let upd = DepItem("tauri-plugin-updater", "2.10.1")
+    applyRule(upd, patched)
+    @Assert(upd.verdict, D_PATCH)
+    @Assert(upd.rule, "R2-DEPS-014")
+    @Assert(upd.alternative.contains("ohos"), true)
+    // 但**不许**把整个 tauri-plugin-* 家族一律标红（那是过度预测，会砸 Precision）
+    let other = DepItem("tauri-plugin-os", "2.3.0")
+    applyRule(other, patched)
+    @Assert(other.rule != "R2-DEPS-014")
     // 条件可用：reqwest / dirs
     let rq = DepItem("reqwest", "0.12")
     applyRule(rq, patched)

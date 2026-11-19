@@ -57,6 +57,26 @@ public func posixPathOf(p: String): String {
 }
 
 /**
+ * 由 NDK 目录推出 **CMake toolchain 文件**路径（纯函数，存在的判定交给调用方）。
+ *
+ * 2026-11-19 cc-switch 实测：`aws-lc-sys` 的 CMake 构建死在
+ * `D:\…\openharmony\native/native/build/cmake/ohos.toolchain.cmake`
+ * —— 因为它把 `OHOS_NDK_HOME` 当 **SDK 根**再拼 `/native/build/cmake/…`，
+ * 而我们这一路给的是 `…/openharmony/native`（多了一层 native）。
+ * 两种口径都吃：入参以 `/native` 结尾就补 `/build/cmake/…`，否则补 `/native/build/cmake/…`。
+ */
+public func cmakeToolchainPathOf(ndk: String): String {
+    if (ndk == "") {
+        return ""
+    }
+    let base = posixPathOf(ndk)
+    if (base.endsWith("/native")) {
+        return base + "/build/cmake/ohos.toolchain.cmake"
+    }
+    return base + "/native/build/cmake/ohos.toolchain.cmake"
+}
+
+/**
  * 把 TOML/JSON 字符串里的**转义反斜杠**还原成单反斜杠。
  *
  * 2026-11-19 实测教训：cc-switch 的 `.cargo/config.toml` 里路径是 `D:\\oh\\…\\clang.exe`（双反斜杠），

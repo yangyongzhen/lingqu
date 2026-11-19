@@ -2480,6 +2480,17 @@ public class BuildCommand <: CommandHandler {
                 }
                 res.put("configFixups", fixArr)
             }
+            // CMake toolchain 显式钉住：`aws-lc-sys` 之类的 CMake 依赖会把 OHOS_NDK_HOME 当 SDK 根
+            // 再拼 `/native/build/cmake/…`，我们若给 `…/native` 就得到 `native/native`（2026-11-19 实测）。
+            // 直接按"存在的那个文件"设变量，谁的口径都不用猜。
+            if (ndkForFix != "") {
+                let tc = cmakeToolchainPathOf(ndkForFix)
+                if (exists(Path(tc))) {
+                    setVariable("CMAKE_TOOLCHAIN_FILE_aarch64_unknown_linux_ohos", tc)
+                    setVariable("CMAKE_TOOLCHAIN_FILE", tc)
+                    res.put("cmakeToolchain", JsonString(tc))
+                }
+            }
             try {
                 let argv = ["build", "--release", "--target", target, "--message-format=json"]
                 let (code, rawOut, rawErr) = executeWithOutput(cargoBin, argv, workingDirectory: Path(srcDir))

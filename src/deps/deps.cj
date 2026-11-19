@@ -237,6 +237,20 @@ func isDesktopSysBusCrate(name: String): Bool {
     return false
 }
 
+/**
+ * tauri 插件与 **OHOS fork 版 tauri** 的字段漂移（2026-11-19 EcoPaste 实测的 FN）。
+ *
+ * `tauri-plugin-updater 2.10.1` 的 AppImage 分支用 `target_os = "linux"` 判定，
+ * 而鸿蒙的 `target_os` 同样是 linux ⇒ 编进 `tauri Env.appimage`，可 fork 的 `Env` 没这个字段：
+ * `error[E0609]: no field 'appimage' on type 'Env'`。
+ * 矩阵原先只把 `tauri` 系标成"需 patch"，没管**插件**与 fork 的版本/字段漂移。
+ *
+ * 只点 `updater`（实测证据唯一），不把 `tauri-plugin-*` 一律标红——那会变成过度预测（§4-158 的反向）。
+ */
+func isTauriPluginDriftCrateOf(name: String): Bool {
+    return name == "tauri-plugin-updater"
+}
+
 public func applyRule(item: DepItem, patched: HashSet<String>): Unit {
     let name = item.name
 
@@ -308,6 +322,15 @@ public func applyRule(item: DepItem, patched: HashSet<String>): Unit {
         item.decide(D_NO, "R2-DEPS-013",
             "系统总线 / 桌面会话类依赖，OHOS 无 D-Bus（2026-11-19 mark_note 实测：build script 走 pkg-config 找 dbus-1 必失败）",
             "换不依赖系统总线的实现（如 zbus 走纯 Rust）或把该能力降级 / 经 ArkTS 桥接系统能力；不要给交叉编译硬配 PKG_CONFIG_SYSROOT_DIR")
+        return
+    }
+
+    // 2c) tauri 插件与 **OHOS fork 版 tauri** 的字段/版本漂移
+    //     （2026-11-19 EcoPaste 实测的 FN：tauri-plugin-updater 2.10.1 ⇒ no field `appimage` on type `Env`）
+    if (isTauriPluginDriftCrateOf(name)) {
+        item.decide(D_PATCH, "R2-DEPS-014",
+            "tauri 插件与 OHOS fork 版 tauri 的字段可能漂移：插件的 Linux 专属分支会编进鸿蒙（target_os 也是 linux），而 fork 的 tauri 缺对应字段",
+            "先确认插件版本与 fork 的 tauri 对得上；对不上就 vendor 一份、把 Linux 专属分支按 `not(target_env = \"ohos\")` 收窄，再用 [patch.crates-io] 挂上；或用 cfg 门控让鸿蒙侧不引入该插件")
         return
     }
 

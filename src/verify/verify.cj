@@ -611,8 +611,18 @@ public func fnDesktopOnlyOf(src: String, lineNo: Int64): Bool {
         if (!t.startsWith("#[")) {
             break
         }
-        if (t.contains("cfg") && t.contains("ohos") && t.contains("not(")) {
-            return true
+        if (t.contains("cfg")) {
+            if (t.contains("ohos") && t.contains("not(")) {
+                return true
+            }
+            // `#[cfg(target_os = "windows")]` / `"macos"`：这段在鸿蒙上根本不编译，不算"没落地"。
+            // 2026-11-19 EcoPaste 实测：`is_scheduled_task_exists()` 全是 `#[cfg(target_os = "windows")]`，
+            // 却被判成"没有鸿蒙实现"⇒ platform-api 冤枉地 fail（§4-157 同族：观测缺陷当功能缺陷）。
+            // **不能**把 `target_os = "linux"` 当桌面专属——鸿蒙的 target_os 也是 linux。
+            if (t.contains("target_os") && (t.contains("windows") || t.contains("macos")) &&
+                !t.contains("ohos")) {
+                return true
+            }
         }
         j -= 1
     }
@@ -962,6 +972,16 @@ public func siteLineOf(site: String): Int64 {
  */
 public func judgeFrontendSite(src: String, lineNo: Int64): (Bool, String) {
     let lines = src.split("\n", -1)
+    // ⓿ 命中行如果是 `import` / `export … from`，那**根本不是调用点**——
+    //    2026-11-19 EcoPaste 实测：`App.tsx:1` 与 `useAppTheme.ts:2` 都是
+    //    `import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"`，
+    //    却被当成"平台 API 调用"判缺口（§4-157 同族：观测缺陷当功能缺陷）。
+    if (lineNo - 1 < lines.size) {
+        let hit = lines[lineNo - 1].trimAscii()
+        if (hit.startsWith("import ") || (hit.startsWith("export ") && hit.contains(" from "))) {
+            return (false, "命中行是 import 语句，不是调用点，不计缺口")
+        }
+    }
     // ① 命中行的字节偏移（用来界定"往上找函数"的范围）
     var off: Int64 = 0
     var k: Int64 = 0
@@ -969,23 +989,29 @@ public func judgeFrontendSite(src: String, lineNo: Int64): (Bool, String) {
         off = off + lines[k].size + 1
         k += 1
     }
-    // ② 最近的函数/箭头函数起点
+    // ② 最近的函数起点：`function ` 与**箭头函数**（`const f = async () => {`）都要认。
+    //    只认 `function ` 会把 EcoPaste 的 `const initializeAppMetadata = async () => {`
+    //    判成"找不到所属函数"，而它里面明明有 try/catch 兜底。
     var start: Int64 = -1
-    var s = findFrom(src, "function ", 0)
-    while (s >= 0 && s <= off) {
-        start = s
-        s = findFrom(src, "function ", s + 1)
+    var idx: Int64 = 0
+    while (idx < lineNo - 1 && idx < lines.size) {
+        let t = lines[idx].trimAscii()
+        if (t.contains("function ") || (t.contains("=>") && (t.endsWith("{") || t.endsWith("=> {")))) {
+            start = idx
+        }
+        idx += 1
     }
     if (start < 0) {
         return (true, "找不到命中点所属函数（无法判定有没有兜底）")
     }
-    // ③ 取该函数块体，看有没有 catch
-    let brace = findFrom(src, "{", start)
-    if (brace < 0) {
-        return (true, "找不到函数体（无法判定有没有兜底）")
+    // ③ 从函数起点往后 60 行内看有没有 catch：前端落地的形态就是 try/catch 兜底
+    var body = ""
+    var m = start
+    while (m < lines.size && m < start + 60) {
+        body += lines[m] + "\n"
+        m += 1
     }
-    let (bs, be) = bodyRangeOf(src, brace)
-    if (src[bs..be].contains("catch")) {
+    if (body.contains("catch")) {
         return (false, "调用点所在函数有 try/catch 兜底，平台不支持时走回落（前端降级已落地）")
     }
     return (true, "调用点所在函数没有 try/catch 兜底，平台不支持时直接抛错/静默失败")

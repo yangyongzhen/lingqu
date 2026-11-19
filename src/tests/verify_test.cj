@@ -709,6 +709,12 @@ public func testJudgeFrontendSiteFallback(): Unit {
     @Expect(judgeFrontendSite(text, 4)[0], false)
     // 没有兜底 → 缺口
     @Expect(judgeFrontendSite(text, 10)[0], true)
+    // ⓵ 命中行是 import 语句 → 根本不是调用点，不计缺口（EcoPaste App.tsx:1 实测）
+    let imp = "import { getCurrentWebviewWindow } from \"@tauri-apps/api/webviewWindow\";\nexport const x = 1;\n"
+    @Expect(judgeFrontendSite(imp, 1)[0], false)
+    // ⓶ 箭头函数里带 try/catch → 也算落地（EcoPaste `const initializeAppMetadata = async () => {`）
+    let arrow = "const initializeAppMetadata = async () => {\n  try {\n    const v = await getVersion();\n  } catch {\n    /* 回落 */\n  }\n};\n"
+    @Expect(judgeFrontendSite(arrow, 3)[0], false)
 }
 
 @Test
@@ -736,4 +742,18 @@ public func testCommandImplLandedAcceptsInBodyCfg(): Unit {
     @Expect(commandImplLanded(inBody, "pick_m3u8_file"), false)
     // 压根没有鸿蒙分支 → 没落地
     @Expect(commandImplLanded(inBody, "no_such_fn"), false)
+}
+
+@Test
+public func testDesktopOnlyRecognizesOtherOsCfg(): Unit {
+    // `#[cfg(target_os = "windows")]` 的函数在鸿蒙上根本不编译 ⇒ 应算桌面专属，
+    // 不能判成"没有鸿蒙实现"（2026-11-19 EcoPaste 实测：platform-api 因此冤枉 fail）
+    let win = "#[cfg(target_os = \"windows\")]\nfn is_scheduled_task_exists() -> bool {\n    Command::new(\"schtasks\").output().is_ok()\n}\n"
+    @Expect(fnDesktopOnlyOf(win, 3), true)
+    // 但 `target_os = "linux"` **不是**桌面专属——鸿蒙的 target_os 也是 linux
+    let linux = "#[cfg(target_os = \"linux\")]\nfn f() -> bool {\n    Command::new(\"x\").status().is_ok()\n}\n"
+    @Expect(fnDesktopOnlyOf(linux, 3), false)
+    // 原有形态（not(...ohos...)）仍要认
+    let notOhos = "#[cfg(not(all(target_os = \"linux\", target_env = \"ohos\")))]\nfn g() -> bool {\n    true\n}\n"
+    @Expect(fnDesktopOnlyOf(notOhos, 3), true)
 }
