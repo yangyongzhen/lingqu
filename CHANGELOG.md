@@ -35,6 +35,9 @@
   凭据来自本机 git credential store（上轮只查了 gh CLI / 环境变量 / `~/.github_token` 三处，
   漏了它）；更新方式：改 `docs/ui-mockup.html` 后
   `GIT_CONFIG_GLOBAL=/dev/null bash scripts/publish-demo.sh`（绕开本机 ghfast.top 的 URL 改写）。
+- README 演示页入口补**形态说明**（顶部导航 + 截图节两处）：网页仅为界面演示，本项目实际形态是
+  **桌面应用**（**内嵌智能体、开箱即用**——单个可执行文件、AI 引擎随包、双击可运行，唯一要配的是
+  模型 API Key）——避免被误读成 Web 应用。
 
 ### Fixed（环境适配）
 
