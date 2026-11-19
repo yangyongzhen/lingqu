@@ -160,8 +160,8 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
     // 的首个失败就是 glib-sys 的 build script —— 根因是 wry/tao 仍是 registry 版本、
     // 拉进了 GTK/glib 桌面依赖链（未迁移工程的必经之路）。
     lib.add(Fingerprint("FP-016", "pkg-config has not been configured to support cross-compilation",
-        "某个 C 依赖的 build script 交叉编译时找不到 pkg-config 配置。**先看紧随其后的 custom build command 是哪条 crate**：glib-sys/gtk 系 → 通常是 wry/tao 还是 registry 版本、拉进 GTK/glib 桌面依赖链；openssl-sys → 见 FP-021（那是 reqwest 默认特性，不是 GTK）",
-        "glib-sys/gtk 系：重跑 t2h:port（R2-PORT-006 patch 掉 wry/tao）即可根除；openssl-sys：走 FP-021 / R2-PORT-016。两者都**不要**去给交叉编译硬配 pkg-config",
+        "某个 C 依赖的 build script 交叉编译时找不到 pkg-config 配置。**先看紧随其后的 custom build command 是哪条 crate**：glib-sys/gtk 系 → 通常是 wry/tao 还是 registry 版本、拉进 GTK/glib 桌面依赖链；libdbus-sys/dbus（2026-11-19 mark_note 实测）→ 系统总线类 crate，OHOS 无 D-Bus，patch tauri 也去不掉，得换实现或降级（R2-DEPS-013）；openssl-sys → 见 FP-021（那是 reqwest 默认特性，不是 GTK）",
+        "glib-sys/gtk 系：重跑 t2h:port（R2-PORT-006 patch 掉 wry/tao）即可根除；libdbus-sys/dbus：换 zbus 或降级/桥接系统能力（别指望 patch tauri，也别硬配 pkg-config）；openssl-sys：走 FP-021 / R2-PORT-016。三者都**不要**去给交叉编译硬配 pkg-config",
         "R2-PORT-006", PK_RULE))
     lib.add(Fingerprint("FP-017", "failed to run custom build command for",
         "C 依赖 crate 的 build script 失败（交叉编译缺 sysroot / pkg-config / 目标平台不支持）",

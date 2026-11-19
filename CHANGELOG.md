@@ -5,6 +5,53 @@
 
 ---
 
+## [0.39.117] - 2026-11-19
+
+**R-2 首次真跑：判据终于执行了，但分母只有 1——如实记成"未达标"，并把抓到的 FN 回填。**
+`docs/需求追踪.md` §五 的原话是"不可用清单与真实编译失败吻合 ≥80% **一次都没执行过**"。
+本轮挑三个**未被规则库归纳过**的样本（`cc-switch-harmonyos` / `mark_note` /
+`tauri-mqtt-client-ohos`，均 0 个 `lingqu:` 标记 = 未迁移原始状态），先盲跑 `deps` 落预测，
+再跑真实交叉编译对照。
+
+### Added
+
+- **`R2-DEPS-013` 系统总线（D-Bus）类不可用规则**（`src/deps/deps.cj` 的 `isDesktopSysBusCrate`）：
+  `libdbus-sys` / `dbus` / `secret-service`。**替代建议与 GTK 族分开写**——GTK 那族重跑 `port`
+  就能根除（wry/tao patch 后根本不进依赖树），dbus 系即便 tauri 全 patch 也还在树里，
+  必须换 zbus 或降级/桥接系统能力。`deps_test` 补 3 条断言（含"不许抄 wry/tao 建议"的反向断言）。
+- **README「样本台账」**：把**测过的 10 个样本**（含只做静态评测/压测中的）与**排队待测**的
+  `EcoPaste` / `dbx` / `HuLa` 列成一张表，每行写"测到哪一步"并注明证据落档位置。
+
+### Changed
+
+- **FP-016 归因补 dbus 一支**：`pkg-config has not been configured to support cross-compilation`
+  这条 marker 现在会先看紧随其后的 crate 名——`glib-sys/gtk` 系 → 重跑 port；
+  `libdbus-sys/dbus` → 换实现或降级；`openssl-sys` → 见 FP-021。
+
+### R-2 首次执行结果（如实，不修口径）
+
+| 样本 | 预测（条数） | 真实失败点 | 归类 |
+|---|---|---|---|
+| cc-switch-harmonyos | 724：713 可用 / 11 不可用 | `aws-lc-sys`：`ToolNotFound … sdk/**HarmonyOS-NEXT-DB6**/…clang.exe` | 环境（样本 `.cargo/config.toml` 指向过期 SDK） |
+| mark_note | 497：477 可用 / 11 不可用 / 9 需 patch | `libdbus-sys`：pkg-config 交叉编译未配置 | **crate 级 → FN** |
+| tauri-mqtt-client-ohos | 555：538 可用 / 10 不可用 / 7 需 patch | `ring`：宿主 `cc` 找不到 OHOS sysroot 的 `assert.h` | 工具链（缺 target CC） |
+
+- **Recall = TP/(TP+FN) = 0/1 = 0%**（分母 N=1，**不具统计意义**）；`Precision = 0/0`——
+  21 条"判不可用"**一条都没被触发**（cargo 在第一个错误处就停，GTK 链没轮到编译），
+  既不记 TP 也不记 FP，如实标「未触发」。
+- **未达标原因**：3 个样本里 2 个卡在**环境关**，fail-fast 让预测无法被触发 ⇒ 有效分母只剩 1。
+
+### 诚实的边界
+
+- 两处环境级缺陷**只记录、未修**（`AGENTS.md` §4-171 / §4-172）：样本自带 `.cargo/config.toml`
+  的过期 SDK 路径会盖掉工具推导值；未迁移工程的 C 依赖缺 target CC 时直接死在 `cc`。
+- 协议 §2.3 的"解掉第一个失败再复跑"迭代（≤3 轮）**本轮未做**——这是把分母做大的关键。
+- **R-1 只做了准备**：随包 cjh 1.6.12 已拉起（`/api/health` 200），零干预轮的实施路径确认是
+  应用 IPC（`t2h:autoport_start` → 页面经 WS 下发任务书），**未开跑**；且 1.3「自主提交 PR」
+  因 `LINGQU_GITCODE_TOKEN` 未设置而**无法取证**。
+
+---
+
 ## [0.39.116] - 2026-11-19
 
 **给「21 条指纹」装上与规则同款的判据**。0.39.115 收口规则条数时留了一句"指纹侧同款可以照抄"：

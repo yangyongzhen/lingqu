@@ -115,6 +115,18 @@ public func testRuleTableVerdicts(): Unit {
     let r = DepItem("rfd", "0.15.4")
     applyRule(r, patched)
     @Assert(r.verdict, D_NO)
+    // 系统总线（D-Bus）类：2026-11-19 mark_note 实测的**唯一** crate 级失败点（R-2 抓到并回填的 FN）
+    let db = DepItem("libdbus-sys", "0.2.7")
+    applyRule(db, patched)
+    @Assert(db.verdict, D_NO)
+    @Assert(db.rule, "R2-DEPS-013")
+    @Assert(db.alternative.contains("zbus"), true)
+    // 替代表述**不许**抄 GTK 那族：dbus 换 tauri patch 也去不掉，非要说是"重跑 port 就好"就是误导
+    @Assert(db.alternative.contains("wry/tao"), false)
+    let dbus = DepItem("dbus", "0.9.7")
+    applyRule(dbus, patched)
+    @Assert(dbus.verdict, D_NO)
+    @Assert(dbus.rule, "R2-DEPS-013")
     // 条件可用：reqwest / dirs
     let rq = DepItem("reqwest", "0.12")
     applyRule(rq, patched)

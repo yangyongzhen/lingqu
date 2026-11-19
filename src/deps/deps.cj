@@ -215,6 +215,28 @@ func isDesktopGtkCrate(name: String): Bool {
     return false
 }
 
+/**
+ * 系统总线（D-Bus）/ 桌面会话类依赖。
+ *
+ * 2026-11-19 R-2 压测补：`mark_note` 交叉编译的**唯一** crate 级失败点是 `libdbus-sys`
+ * （build script 走 pkg-config 找 `dbus-1`，必然收到
+ * `pkg-config has not been configured to support cross-compilation`），
+ * 而矩阵此前按"表外 crate 默认直编"判它**可用** ⇒ 一次真 FN。
+ *
+ * 与 GTK 那族的区别（所以另立一条、不并进 `isDesktopGtkCrate`）：
+ * GTK/glib 链的根因是"wry/tao 没 patch"（patch 后根本不进依赖树）；
+ * dbus 系即便 tauri 全 patch 也仍会在依赖树里（宿主的通知/凭据/媒体等能力用它），
+ * 必须换实现或降级，而不是"重跑 port 就好"。
+ */
+func isDesktopSysBusCrate(name: String): Bool {
+    for (k in ["libdbus-sys", "dbus", "secret-service"]) {
+        if (name == k) {
+            return true
+        }
+    }
+    return false
+}
+
 public func applyRule(item: DepItem, patched: HashSet<String>): Unit {
     let name = item.name
 
@@ -277,6 +299,15 @@ public func applyRule(item: DepItem, patched: HashSet<String>): Unit {
         item.decide(D_NO, "R2-DEPS-012",
             "桌面 GTK/glib 依赖链，OHOS 无对应平台库（2026-10-30 实测：未 patch 时交叉编译前 8 个失败点全在这条链上）",
             "根因在上游：把 wry/tao patch 成 OHOS fork（R2-PORT-006）后这些 crate 根本不会进依赖树；不要试图给它们配 pkg-config")
+        return
+    }
+
+    // 2b) 系统总线（D-Bus）类：**patch 掉 tauri 也解决不了**，必须换实现/降级。
+    //     证据见 isDesktopSysBusCrate 的注释（mark_note 实测：唯一 crate 级失败点是 libdbus-sys）。
+    if (isDesktopSysBusCrate(name)) {
+        item.decide(D_NO, "R2-DEPS-013",
+            "系统总线 / 桌面会话类依赖，OHOS 无 D-Bus（2026-11-19 mark_note 实测：build script 走 pkg-config 找 dbus-1 必失败）",
+            "换不依赖系统总线的实现（如 zbus 走纯 Rust）或把该能力降级 / 经 ArkTS 桥接系统能力；不要给交叉编译硬配 PKG_CONFIG_SYSROOT_DIR")
         return
     }
 
