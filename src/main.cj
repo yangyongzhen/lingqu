@@ -6281,16 +6281,6 @@ public class AutoPortStopCommand <: CommandHandler {
         var res = JsonObject()
         res.put("ok", JsonBool(true))
         res.put("wasActive", JsonBool(was))
-        // 飞轮有没有真的转：跑完一轮 `.lingqu/notes/<工程>.md` 还是空的，就说明"撞了坑没落经验"。
-        // 2026-11-19 R-1 首轮实测：EcoPaste 连撞 4 次坑，notes / diagnose / pr 三个目录**全空**，
-        // 光看"步骤失败"是发现不了这件事的，所以把体量回投出来当判据。
-        let notesFile = resolveLqPath(path, "notes/${name}.md")
-        var notesBytes: Int64 = 0
-        if (exists(Path(notesFile))) {
-            notesBytes = File.readFrom(notesFile).size
-        }
-        res.put("flywheelNotesBytes", JsonInt(notesBytes))
-        res.put("flywheelNotesPresent", JsonBool(notesBytes > 0))
         eprintln("[lingqu][autoport] stop wasActive=${was}")
         return res
     }
