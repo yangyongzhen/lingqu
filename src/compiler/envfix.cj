@@ -43,6 +43,19 @@ public func quotedValueOf(line: String): String {
     return ""
 }
 
+/** 反斜杠归一成正斜杠（写进 TOML 基本字符串前必须做：`D:\oh` 里的 `\o` 不是合法转义） */
+public func posixPathOf(p: String): String {
+    var out = ""
+    for (b in p.toArray()) {
+        if (b == 92) {
+            out += "/"
+        } else {
+            out += String.fromUtf8([b])
+        }
+    }
+    return out
+}
+
 /**
  * 把 TOML/JSON 字符串里的**转义反斜杠**还原成单反斜杠。
  *
@@ -204,11 +217,14 @@ public func ensureTargetCcOf(configPath: String, ndk: String, lockText: String):
     }
     // 与 R2-PORT-008 生成的 `[env]` 片段**逐字一致**（此处内联而不是 import lingqu.port，
     // 避免 compiler ↔ port 的包依赖成环；两边改动要同步，见 toolchain.cj 的 cargoEnvOnlyToml）。
+    // 注意：写进 TOML 基本字符串的路径**必须正斜杠**（`D:\oh` 里的 `\o` 不是合法转义，
+    // 实测把 tauri-mqtt 的配置写成解析失败）。
+    let ndkP = posixPathOf(ndk)
     var frag = "\n[env]\n"
-    frag += "OHOS_NDK_HOME = \"${ndk}\"\n"
-    frag += "CC_aarch64_unknown_linux_ohos = \"${ndk}/llvm/bin/clang\"\n"
-    frag += "AR_aarch64_unknown_linux_ohos = \"${ndk}/llvm/bin/llvm-ar\"\n"
-    frag += "CFLAGS_aarch64_unknown_linux_ohos = \"-target aarch64-linux-ohos --sysroot=${ndk}/sysroot -D__MUSL__\"\n"
+    frag += "OHOS_NDK_HOME = \"${ndkP}\"\n"
+    frag += "CC_aarch64_unknown_linux_ohos = \"${ndkP}/llvm/bin/clang\"\n"
+    frag += "AR_aarch64_unknown_linux_ohos = \"${ndkP}/llvm/bin/llvm-ar\"\n"
+    frag += "CFLAGS_aarch64_unknown_linux_ohos = \"-target aarch64-linux-ohos --sysroot=${ndkP}/sysroot -D__MUSL__\"\n"
     try {
         let bak = configPath + ".lingqu-bak"
         if (exists(Path(configPath)) && !exists(Path(bak))) {
