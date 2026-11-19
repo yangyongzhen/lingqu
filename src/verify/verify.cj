@@ -284,6 +284,26 @@ func unwrapToValue(code: String): String {
         out.add(c)
         i += 1
     }
+    return asciiSafeOf(out.toArray())
+}
+
+/**
+ * 宽容解码（0.39.122）：样本源码可能是 **GBK / 非 UTF-8**（中文注释极常见），
+ * 逐字节硬解会抛 `IllegalArgumentException: Invalid utf8 byte sequence`——
+ * 2026-11-19 EcoPaste 真机 `verify` 就死在这里（§4-113 / §4-116 同族）。
+ *
+ * 本函数只用来"看代码形状"（查空壳实现），所以**只保留 ASCII、非 ASCII 换 `?`**：
+ * 丢掉中文不影响判据，但保住"不抛"这条底线。
+ */
+func asciiSafeOf(bytes: Array<Byte>): String {
+    let out = ArrayList<Byte>()
+    for (b in bytes) {
+        if (b < 128) {
+            out.add(b)
+        } else {
+            out.add(UInt8(63))
+        }
+    }
     return String.fromUtf8(out.toArray())
 }
 

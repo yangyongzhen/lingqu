@@ -204,7 +204,7 @@ func lastProjectFromReport(): String {
         return ""
     }
     try {
-        return lastProjectOf(String.fromUtf8(File.readFrom(p)))
+        return lastProjectOf(lenientUtf8(File.readFrom(p)))
     } catch (e: Exception) {
         let _ = e
         return ""
@@ -437,7 +437,7 @@ func scanRecordResponse(path: String): JsonObject {
     }
     var root = JsonValue.fromStr("{}")
     try {
-        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+        root = JsonValue.fromStr(lenientUtf8(File.readFrom(outFile)))
     } catch (e: Exception) {
         res.put("ok", JsonBool(false))
         res.put("loaded", JsonBool(false))
@@ -488,7 +488,7 @@ func depsRecordResponse(path: String): JsonObject {
     }
     var root = JsonValue.fromStr("{}")
     try {
-        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+        root = JsonValue.fromStr(lenientUtf8(File.readFrom(outFile)))
     } catch (e: Exception) {
         res.put("ok", JsonBool(false))
         res.put("loaded", JsonBool(false))
@@ -531,7 +531,7 @@ func buildRecordResponse(path: String): JsonObject {
     }
     var root = JsonValue.fromStr("{}")
     try {
-        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+        root = JsonValue.fromStr(lenientUtf8(File.readFrom(outFile)))
     } catch (e: Exception) {
         res.put("ok", JsonBool(false))
         res.put("loaded", JsonBool(false))
@@ -600,7 +600,7 @@ func verifyRecordResponse(path: String): JsonObject {
     }
     var root = JsonValue.fromStr("{}")
     try {
-        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+        root = JsonValue.fromStr(lenientUtf8(File.readFrom(outFile)))
     } catch (e: Exception) {
         res.put("ok", JsonBool(false))
         res.put("loaded", JsonBool(false))
@@ -722,7 +722,7 @@ public class ScanCommand <: CommandHandler {
         if (baselinePath.size > 0) {
             if (exists(Path(baselinePath))) {
                 try {
-                    let bl = parseBaseline(String.fromUtf8(File.readFrom(baselinePath)))
+                    let bl = parseBaseline(lenientUtf8(File.readFrom(baselinePath)))
                     if (bl.total() > 0) {
                         blOpt = Some(bl)
                     } else {
@@ -831,7 +831,7 @@ public class DecisionsCommand <: CommandHandler {
         var items = JsonArray()
         try {
             if (exists(Path(file))) {
-                let root = JsonValue.fromStr(String.fromUtf8(File.readFrom(file)))
+                let root = JsonValue.fromStr(lenientUtf8(File.readFrom(file)))
                 match (root.kind()) {
                     case JsonKind.JsObject =>
                         match (root.asObject().get("items")) {
@@ -1075,7 +1075,7 @@ public class DiagnoseCommand <: CommandHandler {
         let logPath = argStr(args, "logPath", "")
         if (logText.size == 0 && logPath.size > 0) {
             try {
-                logText = String.fromUtf8(File.readFrom(logPath))
+                logText = lenientUtf8(File.readFrom(logPath))
             } catch (e: Exception) {
                 res.put("ok", JsonBool(false))
                 res.put("error", JsonString("读日志文件失败：${e}"))
@@ -1263,7 +1263,7 @@ func bridgeSidesOutcome(projPath: String, srcTauriDir: String): RuleOutcome {
     var rustText = ""
     for (f in rsFiles) {
         try {
-            rustText += String.fromUtf8(File.readFrom(f)) + "\n"
+            rustText += lenientUtf8(File.readFrom(f)) + "\n"
         } catch (e: Exception) {
             let _ = e
         }
@@ -1363,7 +1363,7 @@ public class PortCommand <: CommandHandler {
 
         var before = ""
         try {
-            before = String.fromUtf8(File.readFrom(tomlPath))
+            before = lenientUtf8(File.readFrom(tomlPath))
         } catch (e: Exception) {
             res.put("ok", JsonBool(false))
             res.put("error", JsonString("读 ${tomlPath} 失败：${e}"))
@@ -1392,7 +1392,7 @@ public class PortCommand <: CommandHandler {
         let confPath = "${srcTauriDir}/tauri.conf.json"
         if (exists(Path(confPath))) {
             try {
-                frontendDist = jsonStringFieldOf(String.fromUtf8(File.readFrom(confPath)), "frontendDist")
+                frontendDist = jsonStringFieldOf(lenientUtf8(File.readFrom(confPath)), "frontendDist")
             } catch (e: Exception) {
                 frontendDist = ""
             }
@@ -1472,7 +1472,7 @@ public class PortCommand <: CommandHandler {
                     if (o.id == "R2-PORT-009" && o.applied) {
                         let p = if (exists(Path("${srcTauriDir}/src/lib.rs"))) { "${srcTauriDir}/src/lib.rs" } else { "${srcTauriDir}/src/main.rs" }
                         backupFile(p, "${backupPath}/${BAK_LIBRS}")
-                        let old = String.fromUtf8(File.readFrom(p))
+                        let old = lenientUtf8(File.readFrom(p))
                         File.writeTo(p, (old + o.after).toArray())
                         wroteAny = true
                     }
@@ -1480,7 +1480,7 @@ public class PortCommand <: CommandHandler {
                         // 与 009 同一文件：009 先追加函数定义，010 再在 setup 块内接线
                         let p = if (exists(Path("${srcTauriDir}/src/lib.rs"))) { "${srcTauriDir}/src/lib.rs" } else { "${srcTauriDir}/src/main.rs" }
                         backupFile(p, "${backupPath}/${BAK_LIBRS}")
-                        let old = String.fromUtf8(File.readFrom(p))
+                        let old = lenientUtf8(File.readFrom(p))
                         File.writeTo(p, applySetupWiring(old).toArray())
                         wroteAny = true
                     }
@@ -1508,7 +1508,7 @@ public class PortCommand <: CommandHandler {
                     if (o.id == "R2-PORT-011" && o.applied) {
                         let p = "${frontend}/index.html"
                         backupFile(p, "${backupPath}/${BAK_INDEX}")
-                        let old = String.fromUtf8(File.readFrom(p))
+                        let old = lenientUtf8(File.readFrom(p))
                         // 注到 <head> 之后（业务 script 之前）——habit-tree 同位置
                         let headEnd = indexOfOr(old, "</head>")
                         var newText = old
@@ -1675,7 +1675,7 @@ public class RevertCommand <: CommandHandler {
                     continue
                 }
                 try {
-                    let bakText = String.fromUtf8(File.readFrom(bak))
+                    let bakText = lenientUtf8(File.readFrom(bak))
                     File.writeTo(target, bakText.toArray())
                     restored.add(JsonString(target))
                 } catch (e: Exception) {
@@ -1692,7 +1692,7 @@ public class RevertCommand <: CommandHandler {
                 let revConf = "${revSrc}/tauri.conf.json"
                 if (exists(Path(revConf))) {
                     try {
-                        revDist = jsonStringFieldOf(String.fromUtf8(File.readFrom(revConf)), "frontendDist")
+                        revDist = jsonStringFieldOf(lenientUtf8(File.readFrom(revConf)), "frontendDist")
                     } catch (e: Exception) {
                         revDist = ""
                     }
@@ -1721,7 +1721,7 @@ public class RevertCommand <: CommandHandler {
                 return res
             }
             try {
-                let bak = String.fromUtf8(File.readFrom(legacy))
+                let bak = lenientUtf8(File.readFrom(legacy))
                 File.writeTo(tomlPath, bak.toArray())
                 restored.add(JsonString(tomlPath))
             } catch (e: Exception) {
@@ -2373,7 +2373,7 @@ public class UiReportCommand <: CommandHandler {
                 File.writeTo(snap, text.toArray())
                 var prev = ""
                 if (exists(Path(logf))) {
-                    prev = String.fromUtf8(File.readFrom(logf))
+                    prev = lenientUtf8(File.readFrom(logf))
                 }
                 // 上一行没以换行结尾（上次写到一半挂了）时先补一个，避免两行粘连
                 var line = oneline
@@ -2710,7 +2710,7 @@ public func resolveDistDirOf(projectDir: String, srcDir: String): String {
     var dist = ""
     if (exists(Path(conf))) {
         try {
-            let text = String.fromUtf8(File.readFrom(conf))
+            let text = lenientUtf8(File.readFrom(conf))
             // tauri v2：`build.frontendDist`；v1 与部分模板是顶层键，两个都认
             dist = jsonStringPathOf(text, "build.frontendDist")
             if (dist == "") {
@@ -2795,7 +2795,7 @@ func lastBuildErrorCountOf(projectDir: String): Int64 {
         return -1
     }
     try {
-        let root = JsonValue.fromStr(String.fromUtf8(File.readFrom(f)))
+        let root = JsonValue.fromStr(lenientUtf8(File.readFrom(f)))
         match (root.kind()) {
             case JsonKind.JsObject =>
                 match (root.asObject().get("errorCount")) {
@@ -2940,7 +2940,7 @@ public class HapCommand <: CommandHandler {
             var moduleName = ""
             if (exists(Path(entryAbility))) {
                 try {
-                    moduleName = entryModuleNameOf(String.fromUtf8(File.readFrom(entryAbility)))
+                    moduleName = entryModuleNameOf(lenientUtf8(File.readFrom(entryAbility)))
                 } catch (e: Exception) {
                     let _ = e
                 }
@@ -2987,7 +2987,7 @@ public class HapCommand <: CommandHandler {
             let appJson = "${ohosDir}/AppScope/app.json5"
             if (exists(Path(appJson))) {
                 try {
-                    preProjectBundle = json5ValueAfter(String.fromUtf8(File.readFrom(appJson)), "bundleName")
+                    preProjectBundle = json5ValueAfter(lenientUtf8(File.readFrom(appJson)), "bundleName")
                 } catch (e: Exception) {
                     let _ = e
                 }
@@ -2995,7 +2995,7 @@ public class HapCommand <: CommandHandler {
             let bp = "${ohosDir}/build-profile.json5"
             if (exists(Path(bp))) {
                 try {
-                    let proj = parseProjSigning(String.fromUtf8(File.readFrom(bp)))
+                    let proj = parseProjSigning(lenientUtf8(File.readFrom(bp)))
                     hasSignCfg = proj.hasSigningConfigs && proj.signingConfigName != ""
                     cfgProfilePath = resolveProjectPath(proj.profilePath, ohosDir)
                 } catch (e: Exception) {
@@ -3307,7 +3307,7 @@ public class SignCommand <: CommandHandler {
             }
             var origin = ""
             try {
-                origin = String.fromUtf8(File.readFrom(bpPath))
+                origin = lenientUtf8(File.readFrom(bpPath))
             } catch (e: Exception) {
                 res3.put("ok", JsonBool(false))
                 res3.put("error", JsonString("读 ${bpPath} 失败：${e}"))
@@ -3454,7 +3454,7 @@ public class SignCommand <: CommandHandler {
             let appJson = "${ohosDir}/AppScope/app.json5"
             if (exists(Path(appJson))) {
                 try {
-                    bundle = json5ValueAfter(String.fromUtf8(File.readFrom(appJson)), "bundleName")
+                    bundle = json5ValueAfter(lenientUtf8(File.readFrom(appJson)), "bundleName")
                 } catch (e: Exception) {
                     let _ = e
                 }
@@ -3611,7 +3611,7 @@ public class SignCommand <: CommandHandler {
         var buildProfileError = ""
         if (buildProfile != "" && exists(Path(buildProfile))) {
             try {
-                projText = String.fromUtf8(File.readFrom(buildProfile))
+                projText = lenientUtf8(File.readFrom(buildProfile))
             } catch (e: Exception) {
                 buildProfileError = "读不到 ${buildProfile}：${e}"
             }
@@ -3661,7 +3661,7 @@ public class SignCommand <: CommandHandler {
         let appJson = if (ohosDir == "") { "" } else { hostPath("${ohosDir}/AppScope/app.json5") }
         if (appJson != "" && exists(Path(appJson))) {
             try {
-                bundleName = json5ValueAfter(String.fromUtf8(File.readFrom(appJson)), "bundleName")
+                bundleName = json5ValueAfter(lenientUtf8(File.readFrom(appJson)), "bundleName")
             } catch (e: Exception) {
                 let _ = e
             }
@@ -3739,7 +3739,7 @@ public class SignCommand <: CommandHandler {
                         m.profile = candidatePath
                         appliedName = m.name
                         try {
-                            let origin = String.fromUtf8(File.readFrom(buildProfile))
+                            let origin = lenientUtf8(File.readFrom(buildProfile))
                             let (newText, err) = applySigningConfig(origin, m)
                             if (err != "") {
                                 applyError = err
@@ -4338,7 +4338,7 @@ func reportRecordResponse(path: String): JsonObject {
     }
     var root = JsonValue.fromStr("{}")
     try {
-        root = JsonValue.fromStr(String.fromUtf8(File.readFrom(outFile)))
+        root = JsonValue.fromStr(lenientUtf8(File.readFrom(outFile)))
     } catch (e: Exception) {
         res.put("ok", JsonBool(false))
         res.put("loaded", JsonBool(false))
@@ -4497,7 +4497,7 @@ func signMaterialCheckResponse(projPathIn: String): JsonObject {
     }
     var projText = ""
     try {
-        projText = String.fromUtf8(File.readFrom(buildProfile))
+        projText = lenientUtf8(File.readFrom(buildProfile))
     } catch (e: Exception) {
         res.put("ok", JsonBool(false))
         res.put("error", JsonString("读 ${buildProfile} 失败：${e}"))
@@ -4512,7 +4512,7 @@ func signMaterialCheckResponse(projPathIn: String): JsonObject {
     let hasCer = certPath != "" && exists(Path(certPath))
     if (hasCer) {
         try {
-            cerText = String.fromUtf8(File.readFrom(certPath))
+            cerText = lenientUtf8(File.readFrom(certPath))
         } catch (e: Exception) {
             let _ = e
         }
@@ -5227,7 +5227,7 @@ func splitSamplePaths(raw: String): ArrayList<String> {
     var buf = ArrayList<Byte>()
     for (b in raw.toArray()) {
         if (b == 124 || b == 44) {
-            let s = String.fromUtf8(buf.toArray()).trimAscii()
+            let s = lenientUtf8(buf.toArray()).trimAscii()
             if (s != "") {
                 out.add(s)
             }
@@ -5236,7 +5236,7 @@ func splitSamplePaths(raw: String): ArrayList<String> {
             buf.add(b)
         }
     }
-    let last = String.fromUtf8(buf.toArray()).trimAscii()
+    let last = lenientUtf8(buf.toArray()).trimAscii()
     if (last != "") {
         out.add(last)
     }
@@ -6442,7 +6442,7 @@ public class DeployCommand <: CommandHandler {
                 let appJson = "${ohosDir}/AppScope/app.json5"
                 if (exists(Path(appJson))) {
                     try {
-                        bundleName = json5ValueAfter(String.fromUtf8(File.readFrom(appJson)), "bundleName")
+                        bundleName = json5ValueAfter(lenientUtf8(File.readFrom(appJson)), "bundleName")
                     } catch (e: Exception) {
                         let _ = e
                     }
@@ -6708,7 +6708,7 @@ func findDonorMaterial(p12Path: String, explicitDonor: String): Option<DonorHit>
     for (p in candidates) {
         var text = ""
         try {
-            text = String.fromUtf8(File.readFrom(p))
+            text = lenientUtf8(File.readFrom(p))
         } catch (e: Exception) {
             let _ = e
             continue

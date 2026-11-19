@@ -79,7 +79,10 @@ public func extractAssetKeys(data: Array<UInt8>): ArrayList<String> {
         while (j < data.size && isKeyChar(data[j])) {
             j += 1
         }
-        let key = String.fromUtf8(data[i..j])
+        // 0.39.122：这里是**从 .so 二进制里**取资源键，非 UTF-8 字节一定会有——
+        // 硬解会抛 `Invalid utf8 byte sequence`（2026-11-19 EcoPaste 真机 verify 死在这）。
+        // 资源键本来就是 ASCII 路径，非 ASCII 字节换成 '?' 不影响比对。
+        let key = lenientUtf8(data[i..j])
         if (isAssetExt(key) && !out.contains(key)) {
             out.add(key)
         }

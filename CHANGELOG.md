@@ -5,6 +5,34 @@
 
 ---
 
+## [0.39.122] - 2026-11-19
+
+**EcoPaste 真机走通"签名 → 装机 → 启动"，但应用**起来即退**；`verify` 另撞 UTF-8 崩溃（部分已修）。**
+
+### Added / Fixed（工具侧）
+
+- `verify` 的 UTF-8 崩溃逐点收紧：`src/verify/verify.cj` 的代码形状解码改 `asciiSafeOf`（非 ASCII 换 `?`）；
+  `src/main.cj` 35 处 `String.fromUtf8(File.readFrom(` + 2 处 `String.fromUtf8(buf.toArray())` 换 `lenientUtf8`；
+  `src/compiler/fingerprint.cj` 从 `.so` 二进制取资源键处换 `lenientUtf8`（二进制必有非法字节，硬解必抛）。
+
+### 真机结果（设备 192.168.3.105:46163）
+
+| 段 | 结果 |
+|---|---|
+| 签名 | 本机无 `com.ayangweb.eco_paste` 材料 ⇒ 临时复用 `com.codexu.NoteGen`（profile 含本机 UDID），`signed=true` / 21,680,885 B |
+| 装机 | ✅ `install bundle successfully` |
+| 启动 | ✅ `ability started` |
+| 前台 | ❌ 仍是 `com.ohos.sceneboard`，**截图证明停在桌面** |
+| 崩溃 | hilog 有 `EntryAbility … OnDetachFromFrameNode` + `cppcrash-*.json`，但 faultlog **Permission denied**，正文未取到 |
+| verify | ⛔ 仍报 `Invalid utf8 byte sequence`（`--screenshot false` 也崩、`build --verifyOnly` 正常 ⇒ 不在指纹闸/截图） |
+
+### 诚实的边界
+
+**"装机成功"≠"跑起来了"**：进程被拉起后立刻退出，根因未取到，所以 A4 无 EcoPaste 数字。
+`verify` 的崩溃只修掉 3 处、**未根除**，不能算修好。
+
+---
+
 ## [0.39.121] - 2026-11-19
 
 **EcoPaste 移植从 3/8 推到 6/8：build 出 `.so`、HAP 出包，deploy 卡在签名。**

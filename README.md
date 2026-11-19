@@ -134,7 +134,7 @@
 | atomgitcli | [nutpi/atomgitcli](https://atomgit.com/nutpi/atomgitcli) | 仅签名体检落档 | **非 Tauri 工程**（Rust CLI），作为工具链体检对象纳入 |
 | mark_note | 本地样本（未记录上游） | **R-2 压测已出结果**：`deps` 497 条（判 13 不可用 / 9 需 patch）；`build` exit 101——唯一 crate 级失败点 `libdbus-sys`（矩阵原判"可用"⇒ **FN**，已回填 `R2-DEPS-013`） | Tauri v2 + `src-tauri` 布局 |
 | tauri-mqtt-client-ohos | 本地样本（tauri/tao 走 `richerfu` fork） | **R-2 压测已出结果**：`deps` 555 条（判 10 不可用 / 7 需 patch）；`build` exit 101——`ring` 卡在**工具链**（缺 target CC，不是 crate 问题，不进分母） | 网络长连接 + fork 依赖形态 |
-| EcoPaste | [EcoPasteHub/EcoPaste](https://github.com/EcoPasteHub/EcoPaste) | **已推进到 6/8**：`build` ✅ `exit=0`（`libeco_paste_lib.so`）、`hap` ✅ **21,442,290 B**（两个 `.so` 进包）；`sign`/`deploy` 卡在**本机无该包名签名材料**，`verify` 因此未跑 | 跨平台剪贴板管理工具（Rust + Tauri，7.6k★）；移植中修掉 5 处桌面专属 builder 方法（`center`/`maximizable`/`decorations` 等被 fork 用 `cfg(desktop)` 门控） |
+| EcoPaste | [EcoPasteHub/EcoPaste](https://github.com/EcoPasteHub/EcoPaste) | **真机装了、报了启动，但起来即退**：`build` ✅（`libeco_paste_lib.so`）、`hap` ✅ 21,680,885 B（`signed=true`，临时复用 note-gen 材料）、`install bundle successfully` + `ability started` ✅，但前台仍是桌面（截图 `/e/tmp/eco3.jpeg`）、hilog 有 `cppcrash` 而 faultlog 权限不足 ⇒ 根因未取到；`verify` 另撞工具侧 UTF-8 崩溃（已修 4 处、未根除） | 跨平台剪贴板管理工具（Rust + Tauri，7.6k★）；移植中修掉 5 处桌面专属 builder 方法 |
 | dbx | [t8y2/dbx](https://github.com/t8y2/dbx) | ⬜ **排队待测** | 轻量跨平台数据库客户端（Rust + Tauri + Vue，100+ 数据库，30.9k★） |
 | HuLa | [HuLaSpark/HuLa](https://github.com/HuLaSpark/HuLa) | ⬜ **排队待测** | 跨平台即时通讯桌面应用（Rust + Vue3 + Tauri，7.8k★；多窗口 / 托盘 / 全局快捷键 / 音视频，原生能力位最全的一个） |
 
