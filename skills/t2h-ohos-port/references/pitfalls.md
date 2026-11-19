@@ -125,3 +125,18 @@
 - **修法**：改走 tauri 的转出 —— `use tauri::ohos::openharmony_ability::get_main_thread_env;`
   （同一个 crate、同一个 rev，无需动 Cargo.toml / Cargo.lock）。指纹 **FP-022**。
 
+### 16. `Downloading crates ...` 卡十几分钟 / `spurious network error`
+- **现象**：`cargo build` 长时间没有任何输出，界面可能已报"停滞"；也可能是
+  `warning: spurious network error (N tries remaining): [28] Timeout was reached
+  (Operation timed out after 302571 milliseconds with 0 bytes received)`。
+- **判据**（三条一起看，别只盯界面）：`rustc.exe` **一个都没起**、cargo 累计 CPU 几乎为 0、
+  `registry/cache` 大小**不涨**，且 cargo 持着到 `146.75.x.x:443`（**Fastly = crates.io CDN**）的连接。
+  三条齐了就是网络，**不是**工具挂死、也**不是**代码问题
+  （2026-11-19 EcoPaste 实测：卡 **18 分钟**后自己通了，期间一度被判成工具故障）。
+- **修法**：配国内镜像——`R2-PORT-008` 生成的 `.cargo/config.toml` **默认已带 rsproxy 稀疏索引**
+  （`[source.crates-io] replace-with = "cn-rsproxy"` + `sparse+https://rsproxy.cn/index/`）；
+  老工程手配 `[source.*]` 或设 HTTP 代理。指纹 **FP-024**。
+- **两个边界**：① 镜像只覆盖 **registry** 依赖，**git 依赖**（从 github 拉 tauri/wry 的 fork）
+  不受益，另需 ghproxy / `url.<base>.insteadOf` 或代理；② 已经在跑的 cargo **不会重读配置**，
+  改完必须重跑；③ 卡住时**没有**报错文本，光靠指纹接不住"静默卡死"，得靠上面那三条现场判据。
+
