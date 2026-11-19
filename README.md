@@ -141,6 +141,13 @@
 > 台账口径：**只登记真的跑过命令的样本**，跑失败也照写（环境拦、工具链缺、样本自身坏都算结果）。
 > 新样本进队时先补 `scan` + `deps`（纯静态、可复跑），再决定是否进 8 步流水线。
 
+**真机实拍 —— EcoPaste 首次在鸿蒙 PC 上真正跑起来**（进程常驻 + ArkWeb 渲染，onboarding 首页 1/6）：
+
+![EcoPaste 在鸿蒙 PC 上运行](docs/imgs/ecopaste-ohos-running.jpg)
+
+> 这张图是"起来即退"修掉之后取的：此前 `install bundle successfully` + `ability started` 都成功、
+> 但进程 10ms 就退、界面停在桌面（判据见 `AGENTS.md` §4-175）。**装机成功 ≠ 跑起来了。**
+
 ---
 
 ## 🚀 AI 自动进化飞轮（本项目的特色）

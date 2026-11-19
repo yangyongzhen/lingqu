@@ -140,3 +140,62 @@
   不受益，另需 ghproxy / `url.<base>.insteadOf` 或代理；② 已经在跑的 cargo **不会重读配置**，
   改完必须重跑；③ 卡住时**没有**报错文本，光靠指纹接不住"静默卡死"，得靠上面那三条现场判据。
 
+### 17. 「起来即退」：装机/启动都"成功"，进程 10ms 消失且 hilog 无应用侧日志
+- **现象**：`hdc install` 回 `install bundle successfully`、`aa start` 回 `ability started`，
+  但 `ps -ef` 里没有进程、`uitest dumpLayout` 只有 `com.ohos.sceneboard`、**hilog 一条应用日志都没有**、
+  沙箱里的 `panic.log` 也不更新。**别把"装机成功 / 启动成功"当成"跑起来了"。**
+- **为什么什么都没留下**：崩在 `run()` 里但**早于 `setup`**（插件初始化阶段），
+  而 `eprintln` 在鸿蒙不进 hilog、setup 里的 panic hook 也来不及装。
+- **第一步永远是**：在 `run()` **第一行**装一个**不依赖 `App`** 的早期 panic hook，写
+  `/data/storage/el2/base/files/panic-early.log`（hdc 可直接 `file recv` 取回）。
+  装上它就一次抓到原因，否则只能猜。
+- **两个已实测的真凶**（2026-11-19 EcoPaste）：
+  | 真凶 | 原文 | 修法 |
+  |---|---|---|
+  | `tauri-plugin-log` 的 `TargetKind::LogDir` 在鸿蒙建目录 EPERM | `PluginInitialization("log", "Operation not permitted (os error 1)")` | 鸿蒙下改 `TargetKind::Folder` 指向 `/data/storage/el2/base/files/logs` |
+  | `app_local_data_dir()` **不报错**却返回桌面风格 `/storage/Users/currentUser/.local/share/…` | 应用日志：`window state store initialization failed: … Operation not permitted` ⇒ setup `Err` ⇒ 退出 | 鸿蒙下**不信返回值**，固定落 `/data/storage/el2/base/files` |
+- **判据**：`Err` 与"成功返回一个不可写路径"是**两种失败**——只兜 `Err` 兜不住后者（§4-38 同族）。
+- **验收**：进程常驻 + `dumpLayout` 里有自己的 bundleName + **截图看得见界面**（三样缺一不算跑起来）。
+
+### 18. `no method named center/decorations/maximizable…`：fork 里方法在，但被 `cfg(desktop)` 门控
+- **现象**：`WebviewWindowBuilder` 上一串方法报"不存在"，可你在 fork 源码里 `grep "pub fn center"` **明明有**。
+- **判据**：看它落在**哪个 `impl` 块**——`crates/tauri/src/webview/webview_window.rs` 里
+  `#[cfg(desktop)]` 的 impl 从 446 行起（`center` / `maximizable` / `minimizable` / `focused` /
+  `decorations` / `always_on_top` / `skip_taskbar` / `shadow`），非门控 impl 在 814 行起
+  （`title` / `inner_size` / `min_inner_size` / `resizable` / `visible` / `focusable`）与 914 行起
+  （`accept_first_mouse` / `transparent` / `disable_drag_drop_handler`）。
+- **改法**：按门控拆链，鸿蒙侧保留可用方法：
+  ```rust
+  let builder = WebviewWindowBuilder::new(..).title(..).inner_size(..).resizable(false);
+  #[cfg(not(target_env = "ohos"))]
+  let builder = builder.decorations(false).shadow(false).skip_taskbar(true).center();
+  #[cfg(target_env = "ohos")]
+  let builder = builder;
+  ```
+  同类：`WebviewWindow::cursor_position` → OHOS 版函数直接 `Ok(None)`；`set_always_on_top` → no-op。
+- **别做**：把整段删掉改桌面行为（那会让桌面端回归）；也别改 fork 源码（换环境就丢）。
+
+### 19. 签名：**优先自签名**；`11014003 Init keystore failed` 是什么意思
+- **首选（也是默认路径）**：`lingqu-cli sign --login`（浏览器授权一次）→
+  `lingqu-cli sign --auto --path .` ——自动拿证书、生成**含本机 UDID** 的 debug profile 并写回
+  `signingConfigs`，不需要 DevEco。之后 `hap` 出 `signed=true`，`deploy` 能装。
+  **能自签名就自签名**：复用别工程的材料会把应用装成**别人的包名**，验收时不成立。
+- **离线/CI 兜底才考虑复用本机已有材料**（且必须标注"这是本地验证手段，不是交付路径"）：
+  ① profile 按 `bundleName` 签发、`device-ids` 必须含本机 UDID
+  （`grep -l "<UDID>" ~/.ohos/config/*.p7b` → `grep -ao "bundle-name[^,]*"`）；
+  ② 目标工程 `AppScope/app.json5` 的 bundleName 改成该材料的包名、**`versionCode` 抬高**（否则判降级）；
+  ③ 抄 `signingConfigs` 整块（含密文 `storePassword`/`keyPassword`）并确认 `products[].signingConfig` 指向它。
+- **`11014003 Init keystore failed`** = **口令密文与 `.p12` 不配套**（或这组密文已失效）。
+  正确处置是 `sign --auto --newKeys` 换一套自己掌口令的材料；**别猜口令、别改密文、别反复重下证书**。
+- 相关：`00303074` 包名与 profile 不一致、`9568322` 设备不信任该证书（见 `signing.md` 与 FP-018/FP-023）。
+
+### 20. crate 级版本漂移：插件与 fork 版 tauri 对不上（不是编译参数问题）
+- **现象**：`error[E0609]: no field 'appimage' on type 'Env'`，位置在 registry 里的
+  `tauri-plugin-updater-2.10.1/src/lib.rs` —— 因为鸿蒙的 `target_os` 也是 `linux`，
+  插件把 Linux 专属分支编进来了，而 OHOS fork 的 `Env` 没有 `appimage` 字段。
+- **修法**：**vendor 一份插件并按 `not(target_env = "ohos")` 收窄那几处 cfg**，
+  用 `[patch.crates-io] tauri-plugin-updater = { path = "vendor/…" }` 挂上；
+  或在鸿蒙侧直接不引入该插件（`cfg(not(target_env = "ohos"))` 的门控依赖）。
+- **同类**：`rfd` 的 build script panic（`You need to choose at least one backend: gtk3 or xdg-portal`）
+  ⇒ 鸿蒙侧不要引入依赖 rfd 的插件（如 `tauri-plugin-dialog`），改用 ArkTS 文件选择桥接。
+

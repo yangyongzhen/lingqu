@@ -5,6 +5,38 @@
 
 ---
 
+## [0.39.123] - 2026-11-19
+
+**「起来即退」查明并修复：`log` 插件 EPERM + 桌面风格路径不可写。EcoPaste 真机首次真正跑起来。**
+
+### 怎么定位的
+
+真机三段（install / start / hilog）都"成功"，但进程 10ms 消失、**hilog 无任何应用侧输出**、
+沙箱 panic.log 不更新 ⇒ 崩在 `run()` 且早于 `setup`。破局手段是给样例加一个
+**不依赖 App 的早期 panic hook**（`run()` 第一行，落 `/data/storage/el2/base/files/panic-early.log`），
+第一次启动就抓到真凶。
+
+### Fixed（样本侧两处）
+
+| # | 真凶 | 修法 |
+|---|---|---|
+| ① | `tauri-plugin-log` 的 `TargetKind::LogDir` 在鸿蒙建目录 **EPERM** ⇒ `PluginInitialization("log", "Operation not permitted (os error 1)")` 直接 panic | 鸿蒙下改 `TargetKind::Folder` 指向 `/data/storage/el2/base/files/logs` |
+| ② | `app_local_data_dir()` **不报错**却返回 `/storage/Users/currentUser/.local/share/…`，`create_dir_all` EPERM ⇒ `WindowStateStore::new` 失败 ⇒ setup Err ⇒ 退出 | 鸿蒙下不信返回值，`bootstrap_dir` 固定落 `/data/storage/el2/base/files` |
+
+**教训**：第一版只兜了"返回 Err"，但鸿蒙上它是**成功返回一个不可写路径**——"没报错"不等于"可用"。
+
+### 真机结果（192.168.3.105:46163）
+
+进程常驻（`com.codexu.NoteGen` + `:render`）、前台有它、**截图确认 ArkWeb 出 onboarding 首页**
+（`E:/tmp/eco_ok.jpeg`：Welcome to EcoPaste / 1/6 / Start setup）。
+
+### 诚实的边界
+
+签名用的是临时复用的 `com.codexu.NoteGen` 材料（本机无该工程自己的），正式包名要 `sign --login`；
+`verify` 的 UTF-8 崩溃仍未根除；onboarding 之后的业务功能未逐项实测。
+
+---
+
 ## [0.39.122] - 2026-11-19
 
 **EcoPaste 真机走通"签名 → 装机 → 启动"，但应用**起来即退**；`verify` 另撞 UTF-8 崩溃（部分已修）。**
