@@ -1,6 +1,7 @@
 package lingqu
 
 import lingqu.verify.*
+import lingqu.compiler.*
 import std.collection.*
 import std.env.*
 import std.fs.*
@@ -80,7 +81,7 @@ func readJsonOrNone(p: String): Option<JsonValue> {
         return None
     }
     try {
-        let text = String.fromUtf8(File.readFrom(p))
+        let text = lenientUtf8(File.readFrom(p))
         return Some(JsonValue.fromStr(text))
     } catch (e: Exception) {
         let _ = e
@@ -127,7 +128,8 @@ func collectVerifyInput(projName: String, projPath: String): ChecklistInput {
     // ② 迁移画像（扫描）：清单规模来自这里
     // 读侧一律走 resolveLqPath（工程优先、CWD 兜底）：0.38.0 起落档落在 <工程>/.lingqu/，
     // 还按相对 CWD 读会**读到上一次或别的工程的旧档**——实测把"刚部署成功"报成"装上了但没起来"。
-    match (readJsonOrNone(resolveLqPath(projPath, "scan/${projName}.json"))) {
+    let scanOpt = readJsonOrNone(resolveLqPath(projPath, "scan/${projName}.json"))
+    match (scanOpt) {
         case Some(scan) =>
             let items = objFieldOf(scan, "items")
             inp.commandCount = arraySizeFieldOf(items, "commands")
@@ -211,7 +213,7 @@ func readProjectSrc(projPath: String, rel: String): String {
         return ""
     }
     try {
-        return String.fromUtf8(File.readFrom(p))
+        return lenientUtf8(File.readFrom(p))
     } catch (e: Exception) {
         let _ = e
         return ""
@@ -264,7 +266,7 @@ func readArktsDispatcherOf(projPath: String): String {
     for (f in files) {
         var t = ""
         try {
-            t = String.fromUtf8(File.readFrom(f))
+            t = lenientUtf8(File.readFrom(f))
         } catch (e: Exception) {
             let _ = e
         }
@@ -512,14 +514,14 @@ func collectEvidence(projName: String, projPath: String, hdc: String, serial: St
         try {
             let (code, out, errOut) = executeWithOutput(hdc,
                 ["-t", serial, "shell", "snapshot_display", "-f", remote])
-            ev.log += "[evidence] snapshot exit=${code}\n" + String.fromUtf8(out) + String.fromUtf8(errOut) + "\n"
+            ev.log += "[evidence] snapshot exit=${code}\n" + lenientUtf8(out) + lenientUtf8(errOut) + "\n"
         } catch (e: Exception) {
             ev.log += "[evidence] snapshot 起不来：${e}\n"
         }
         let local = "${dir}/${name}"
         try {
             let (code, out, errOut) = executeWithOutput(hdc, ["-t", serial, "file", "recv", remote, local])
-            ev.log += "[evidence] recv exit=${code}\n" + String.fromUtf8(out) + String.fromUtf8(errOut) + "\n"
+            ev.log += "[evidence] recv exit=${code}\n" + lenientUtf8(out) + lenientUtf8(errOut) + "\n"
         } catch (e: Exception) {
             ev.log += "[evidence] recv 起不来：${e}\n"
         }
@@ -534,7 +536,7 @@ func collectEvidence(projName: String, projPath: String, hdc: String, serial: St
     try {
         let (code, out, errOut) = executeWithOutput(hdc,
             ["-t", serial, "shell", "ls", "/data/log/faultlog/faultlogger/"])
-        let text = String.fromUtf8(out) + String.fromUtf8(errOut)
+        let text = lenientUtf8(out) + lenientUtf8(errOut)
         ev.log += "[evidence] faultlog exit=${code}\n" + text + "\n"
         // 只认像崩溃记录的行：`ls` 权限不足时的 "Permission denied" 绝不能算成崩溃
         // （这是真机实测踩到的坑，见 verify.cj 的 countCrashRecords）

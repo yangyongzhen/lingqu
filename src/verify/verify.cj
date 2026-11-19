@@ -404,6 +404,31 @@ public class FnImpl {
  * 注意 `not(...)` 里也含 `ohos` 字样，所以判"鸿蒙分支"必须是 **含 ohos 且不含 not(**
  * ——否则桌面实现会被误认成鸿蒙实现，判据直接反了。
  */
+/**
+ * 按字节区间切片，但**边界自动落到 UTF-8 字符起始处**。
+ *
+ * 2026-11-19 真机实测：`fnImplsOf` 直接 `src[a..b]` 切源码，而样本源码里有中文注释，
+ * 一旦切在多字节字符中间就抛 `IllegalArgumentException: Invalid utf8 byte sequence`——
+ * EcoPaste 的 `read_clipboard` 那条就是这么把整个 `verify` 打挂的（§4-113 同族）。
+ */
+func safeSliceOf(s: String, from: Int64, to: Int64): String {
+    let bytes = s.toArray()
+    var a = if (from < 0) { 0 } else { from }
+    var b = if (to > bytes.size) { bytes.size } else { to }
+    // 起点右移：跳过续字节（0x80..0xBF），让 a 落在字符首字节
+    while (a > 0 && a < bytes.size && bytes[a] >= 128 && bytes[a] <= 191) {
+        a += 1
+    }
+    // 终点左移：同理，别切在续字节上
+    while (b > a && b < bytes.size && bytes[b] >= 128 && bytes[b] <= 191) {
+        b -= 1
+    }
+    if (b <= a) {
+        return ""
+    }
+    return s[a..b]
+}
+
 public func fnImplsOf(src: String, fnName: String): ArrayList<FnImpl> {
     let impls = ArrayList<FnImpl>()
     let needle = "fn " + fnName
@@ -432,14 +457,14 @@ public func fnImplsOf(src: String, fnName: String): ArrayList<FnImpl> {
                 }
                 j -= 1
             }
-            let attr = src[attrStart..i]
+            let attr = safeSliceOf(src, attrStart, i)
             let cfg = lastCfgAttrOf(attr)
             let brace = findFrom(src, "{", i)
             if (brace >= 0) {
                 let (bs, be) = bodyRangeOf(src, brace)
                 let impl = FnImpl()
                 impl.isOhos = cfg.contains("ohos") && !cfg.contains("not(")
-                impl.body = src[bs..be]
+                impl.body = safeSliceOf(src, bs, be)
                 impls.add(impl)
             }
         }
