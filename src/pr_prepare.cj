@@ -113,6 +113,8 @@ public class PrPrepareResult {
     public var outError: String = ""
     /** 正文里并进了 `archive --to repo` 落下的经验块（阶段 2 打通，0.39.114） */
     public var lessonsMerged: Bool = false
+    /** 没凭据时"怎么开"的可操作路径（0.39.118：不再只丢一句"未设置环境变量"） */
+    public var howToEnable: String = ""
 
     public func toJson(): JsonObject {
         var o = JsonObject()
@@ -124,6 +126,7 @@ public class PrPrepareResult {
         o.put("canSubmit", JsonBool(this.canSubmit))
         o.put("degraded", JsonBool(this.degraded))
         o.put("lessonsMerged", JsonBool(this.lessonsMerged))
+        o.put("howToEnable", JsonString(this.howToEnable))
         o.put("note", JsonString(this.note))
         o.put("outError", JsonString(this.outError))
         return o
@@ -135,6 +138,66 @@ public class PrPrepareResult {
  * 评审就变成"信任 AI"而不是"逐条复核"。超出部分截断进 note，下轮再提。
  */
 public let MAX_CANDIDATES_PER_PR: Int64 = 5
+
+/**
+ * 提交凭据的**环境变量名**（顺序即优先级）。
+ *
+ * 0.39.118：原先只认 `LINGQU_GITCODE_TOKEN` 一个——用户当场点破这不合理：
+ * "否则单靠个人意愿，未必现实"。一个变量没设就把"能不能发 PR"判死，
+ * 等于把飞轮闭合的那一步交给运气（R-1 的 1.3 就是因此一直拿不到证据）。
+ * 现在把同义变量都认上，探测不到时**不再静默退化**，而是给出可操作的开启路径。
+ */
+public let SUBMIT_TOKEN_ENVS: Array<String> = [
+    "LINGQU_GITCODE_TOKEN", "GITCODE_TOKEN", "ATOMGIT_TOKEN", "GH_TOKEN"
+]
+
+/** 凭据探测结果：有则带来源（便于回投与排障），无则空串 */
+public class SubmitAuth {
+    public var token: String = ""
+    public var source: String = ""
+    public var available: Bool = false
+    public var howToEnable: String = ""
+
+    public func toJson(): JsonObject {
+        var o = JsonObject()
+        // 只回投"有没有 / 从哪来"，**绝不回投 token 本身**
+        o.put("available", JsonBool(this.available))
+        o.put("source", JsonString(this.source))
+        o.put("howToEnable", JsonString(this.howToEnable))
+        return o
+    }
+}
+
+/** 环境变量名清单（只读副本，供界面/文档与单测对齐，避免两处各写一份） */
+public func submitTokenEnvNamesOf(): Array<String> {
+    return SUBMIT_TOKEN_ENVS
+}
+
+/**
+ * 没凭据时该怎么说：**给出能动手的三条路**，而不是一句"未设置环境变量"。
+ * 第三条（自己提）必须写——不授权也该有出路，否则等于拿授权要挟用户。
+ */
+public func submitEnableHintOf(): String {
+    return "开一条就行：① 导出个人访问令牌（认 LINGQU_GITCODE_TOKEN / GITCODE_TOKEN / " +
+        "ATOMGIT_TOKEN / GH_TOKEN 任一）；② 本机登录 atomgit CLI，让工具代管凭据后重跑；" +
+        "③ 不想授权也没关系——`pr-body.md` 已生成，自己提同样有效"
+}
+
+/** 多源探测提交凭据（IO：读环境变量），返回值里**只带来源与提示，不带 token 值** */
+public func resolveSubmitAuth(): SubmitAuth {
+    let auth = SubmitAuth()
+    for (name in SUBMIT_TOKEN_ENVS) {
+        let v = envOr(name, "")
+        if (v.size > 0) {
+            auth.token = v
+            auth.source = "env:${name}"
+            auth.available = true
+            return auth
+        }
+    }
+    auth.howToEnable = submitEnableHintOf()
+    return auth
+}
 
 /**
  * 阶段 2 编排：筛候选 → 产三份文件 → 按 token 状态标记 canSubmit/degraded。
@@ -168,13 +231,16 @@ public func preparePr(projDir: String, projName: String, tokenEnv: String): PrPr
     }
     res.prepared = all.size
 
-    // token 只走环境变量：有则 canSubmit（可直接走 gitcode CLI 提交），无则退化本地产物
+    // 0.39.118：凭据由 `resolveSubmitAuth()` **多源**探测（四个同义环境变量），这里只按结果分支。
+    // 探测不到时**不静默退化**：把"怎么开"当场写进 note 与 howToEnable 字段（§4-129：要人做一件事，
+    // 就得把可点的东西摆到面前），第三条路明确给出"不授权也能自己提"。
     if (tokenEnv != "") {
         res.canSubmit = true
-        res.note = "检测到 LINGQU_GITCODE_TOKEN：产物可直接提交（分支与人评由你把关）"
+        res.note = "检测到提交凭据：产物可直接提交（分支与人评由你把关）"
     } else {
         res.degraded = true
-        res.note = "未设 LINGQU_GITCODE_TOKEN：退化为本地产物——人复核后自行提交"
+        res.howToEnable = submitEnableHintOf()
+        res.note = "未检测到 AtomGit / GitCode 提交凭据，已退化为本地产物——" + res.howToEnable
     }
     if (truncated) {
         res.note = "单轮候选超上限 ${MAX_CANDIDATES_PER_PR}，本轮只带前 ${MAX_CANDIDATES_PER_PR} 条（其余留在候选池）——" + res.note

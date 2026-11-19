@@ -140,3 +140,21 @@ public func testPreparePrDedupesAndCapsPerRound(): Unit {
     // 启动刷新语义说明在正文末尾（不热替换）
     @Assert(body.contains("下次启动"), true)
 }
+
+@Test
+public func testSubmitAuthIsMultiSourceNotOneVar(): Unit {
+    // 0.39.118：凭据**不再只认一个环境变量**——只认单个的话，"能不能发 PR"就成了个人自觉。
+    let names = submitTokenEnvNamesOf()
+    @Assert(names.contains("LINGQU_GITCODE_TOKEN"), true)
+    @Assert(names.contains("GITCODE_TOKEN"), true)
+    @Assert(names.contains("ATOMGIT_TOKEN"), true)
+    @Expect(names.size >= 3, true)
+    // 探测不到时必须**可操作**：给开启路径 + 明确"不授权也能自己提"（否则等于拿授权要挟用户）
+    let hint = submitEnableHintOf()
+    @Expect(hint.contains("LINGQU_GITCODE_TOKEN"), true)
+    @Expect(hint.contains("atomgit"), true)
+    @Expect(hint.contains("pr-body.md"), true)
+    // 结果对象必须带这个字段（界面据此显示"怎么开"，而不是只剩一句"退化为本地产物"）
+    let empty = PrPrepareResult()
+    @Expect(empty.howToEnable, "")
+}

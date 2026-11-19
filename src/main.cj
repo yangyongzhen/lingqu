@@ -1183,9 +1183,13 @@ public class PrPrepareCommand <: CommandHandler {
             path = "."
         }
         let projName = sanitizeFileName(projectNameOf(path))
-        let token = envOr("LINGQU_GITCODE_TOKEN", "")
-        let r = preparePr(path, projName, token)
+        // 0.39.118：凭据**多源**探测（LINGQU_GITCODE_TOKEN / GITCODE_TOKEN / ATOMGIT_TOKEN / GH_TOKEN），
+        // 并把"从哪来 / 怎么开"一起回投——只认单一变量的做法会把"能不能发 PR"变成个人自觉。
+        let auth = resolveSubmitAuth()
+        let r = preparePr(path, projName, auth.token)
         var res = r.toJson()
+        res.put("tokenSource", JsonString(auth.source))
+        res.put("tokenAvailable", JsonBool(auth.available))
         res.put("ok", JsonBool(r.outError == ""))
         res.put("project", JsonString(projName))
         if (r.outError != "") {

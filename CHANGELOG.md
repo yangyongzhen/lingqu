@@ -5,6 +5,31 @@
 
 ---
 
+## [0.39.118] - 2026-11-19
+
+**提交凭据不再只认一个环境变量**。起因是用户点破：`LINGQU_GITCODE_TOKEN` 没设就把"能不能发 PR"
+判死，「否则单靠个人意愿，未必现实」——这等于把飞轮闭合的那一步交给运气（R-1 的 1.3 因此一直没证据）。
+
+### Changed
+
+- **`SUBMIT_TOKEN_ENVS` + `resolveSubmitAuth()`（`src/pr_prepare.cj`）**：`LINGQU_GITCODE_TOKEN` /
+  `GITCODE_TOKEN` / `ATOMGIT_TOKEN` / `GH_TOKEN` 四个同义变量**按顺序**探测，命中即用；
+  `t2h:pr_prepare` 回投 `tokenSource` / `tokenAvailable`——**只报来源，绝不回投 token 值**。
+- **探测不到时不再静默退化**：`note` 与新增字段 `howToEnable` 当场给出三条可操作的开启路径
+  （① 导出个人访问令牌 ② 本机登录 atomgit CLI 由它代管 ③ **不授权也行**——`pr-body.md` 已生成，
+  自己提同样有效）。依据 §4-129：要人做一件事，就得把能动手的东西摆到面前。
+- `pr_prepare_test` 补用例：变量名清单不止一条、提示里三种路径都在、结果对象带 `howToEnable`。
+
+### 诚实的边界
+
+- 探测源仍只有 **环境变量 + atomgit CLI 代管**两类，**没有**做 AtomGit 浏览器 OAuth；
+  `t2h:sign_login` 那套回环登录只覆盖 AGC。
+- 界面目前只是把 `howToEnable` 当文本显示，**尚未做成可点按钮**（下一步；
+  真正的"主动发起 PR"按钮要接提交命令，属独立一轮）。
+- R-1 的 1.3 仍无证据：本轮改的是"凭据好不好拿"，不是"已经提过一次 PR"。
+
+---
+
 ## [0.39.117] - 2026-11-19
 
 **R-2 首次真跑：判据终于执行了，但分母只有 1——如实记成"未达标"，并把抓到的 FN 回填。**
