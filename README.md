@@ -134,7 +134,7 @@
 | juCang / 聚藏 | [qq8864/juCang](https://atomgit.com/qq8864/juCang) | HAP 出包 + 真机启动；旧口径 85% | `events` 项待真机实测 |
 | atomMqtt | [qq8864/atomMqtt](https://gitcode.com/qq8864/atomMqtt) | 仅签名体检落档 | 扁平布局；未进 8 步流水线 |
 | atomgitcli | [nutpi/atomgitcli](https://atomgit.com/nutpi/atomgitcli) | 仅签名体检落档 | **非 Tauri 工程**（Rust CLI），作为工具链体检对象纳入 |
-| mark_note | 本地样本（未记录上游） | **R-2 压测已出结果**：`deps` 497 条（判 13 不可用 / 9 需 patch）；`build` exit 101——唯一 crate 级失败点 `libdbus-sys`（矩阵原判"可用"⇒ **FN**，已回填 `R2-DEPS-013`） | Tauri v2 + `src-tauri` 布局 |
+| mark_note | [qq8864/mark_note](https://atomgit.com/qq8864/mark_note) | **R-2 压测已出结果**：`deps` 497 条（判 13 不可用 / 9 需 patch）；`build` exit 101——唯一 crate 级失败点 `libdbus-sys`（矩阵原判"可用"⇒ **FN**，已回填 `R2-DEPS-013`） | 墨记 MarkNote（Tauri v2 + Rust `satteri` + React 19）；`src-tauri` 布局 |
 | tauri-mqtt-client-ohos | [OpenHarmonyPCDeveloper/ohos_mqtt_client_tauri](https://atomgit.com/OpenHarmonyPCDeveloper/ohos_mqtt_client_tauri) | **R-2 压测已出结果**：`deps` 555 条（判 10 不可用 / 7 需 patch）；补齐 target CC 与修掉过期 SDK 路径后 **`build` `exit=0 / errors=0` 真的编过**（"不可用"预测一条都没被触发，待查是过度预测还是被 cfg 排除） | 网络长连接 + fork 依赖形态 |
 | EcoPaste | [EcoPasteHub/EcoPaste](https://github.com/EcoPasteHub/EcoPaste) | **真机跑通（正式自签版）**：`sign --auto` 出含本机 UDID 的 profile（包名 `com.ayangweb.eco_paste`）→ `hap` `signed=true` → `install`/`start` 成功 → **onboarding 从 1/6 走到 6/6、主界面列表渲染出空态**；`verify` 出 stats（移植项 7、covered 6） | 跨平台剪贴板管理工具（Rust + Tauri，7.6k★）；移植中修掉 5 处桌面专属 builder 方法 + 2 个启动期致命坑（`tauri-plugin-log` 的 `LogDir` EPERM、路径 API 返回不可写路径） |
 | dbx | [t8y2/dbx](https://github.com/t8y2/dbx) | ⬜ **排队待测** | 轻量跨平台数据库客户端（Rust + Tauri + Vue，100+ 数据库，30.9k★） |
