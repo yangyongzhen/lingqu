@@ -5,6 +5,41 @@
 
 ---
 
+## [0.39.121] - 2026-11-19
+
+**EcoPaste 移植从 3/8 推到 6/8：build 出 `.so`、HAP 出包，deploy 卡在签名。**
+AI 那条路被 402 断掉后用确定性流水线接着做，样本 `lingqu-workspaces/EcoPaste`。
+
+### Fixed（样本侧，5 处平台 API 缺口）
+
+`commands/drag.rs` 的 `current_platform()`（OHOS 无分支 ⇒ 返回 `()`）、
+`window/position.rs` 的 `cursor_position`、`window/preview.rs` 与
+`window/mod.rs`（偏好/更新/引导窗）的 `center`/`maximizable`/`minimizable`/`decorations`/
+`shadow`/`skip_taskbar`/`focused`/`always_on_top`、`hide_window` 的 OHOS 分支返回类型不匹配。
+
+### 关键发现（AGENTS §4-174）
+
+这些 builder 方法在 fork 源码里**都存在**，只是被 `#[cfg(desktop)]` 门控
+（desktop 专属 impl 从 446 行起、非门控 impl 在 814 行起）——
+"编译报 no method" 不等于 "fork 没实现"，判据是**查它落在哪个 impl 块里**。
+
+### 结果
+
+| 步 | 结果 |
+|---|---|
+| build | ✅ `exit=0 / errors=0 / gates=true`，产物 `libeco_paste_lib.so`，前端指纹匹配 2 键 |
+| hap | ✅ `built=true / errorCount=0 / 21,442,290 B`，`libs/arm64-v8a` 里两个 `.so` 齐；hvigorfile 钩子已注掉 |
+| sign | ⛔ 本机无 `com.ayangweb.eco_paste` 的材料，脚手架 `signingConfigs` 为空 |
+| deploy | ⛔ 设备在线（`192.168.3.105:46163`）但只产出 unsigned HAP，契约找 `entry-default-signed.hap` |
+| verify / report | 未跑（没装机，不出假数字） |
+
+### 诚实的边界
+
+签名与装机需要人参与（`sign --login` 浏览器授权一次）。本轮不声称"移植完成"——
+**能编、能出包，但还没装到设备上跑起来**；A4 因此无 EcoPaste 数据。
+
+---
+
 ## [0.39.120] - 2026-11-19
 
 **R-1 零干预轮首次实跑：三个验证点全部未达成——飞轮机制在位，但 agent 不会自己用。**
