@@ -5,6 +5,30 @@
 
 ---
 
+## [0.39.126] - 2026-11-19
+
+**R-2 环境关：`t2h:build` 前加一道 preflight——只报建议 + 自动补 target CC。**
+
+### Added
+
+- `src/compiler/envfix.cj`：`sdkTailOf` / `rewriteStaleSdkLineOf` / `unescapePathOf` / `hasCDepOf`
+  / `fixStaleCargoConfigOf`（**只产建议，不写文件**）/ `ensureTargetCcOf`（依赖树含 C 依赖时补 `[env]`）。
+- `t2h:build` 把这些结果写进落档 `configFixups` 并在 CLI 打印，`envfix_test` 覆盖 3 组用例
+  （`cjpm test` 619 → **622**）。
+
+### 为什么"过期路径只报不改"（实测教训）
+
+第一版是直接改写 `.cargo/config.toml`，结果**把样本配置改坏**：TOML 里路径是
+`D:\\oh\\…\\clang.exe`（双反斜杠转义），`exists()` 判不过、尾巴识别也失效，替换后生成坏行。
+转义反解还没做扎实之前，宁可只输出 `旧 → <NDK>/<尾巴>` 的建议，让人/agent 去改（§4-42 同族）。
+
+### 诚实的边界
+
+**R-2 分母仍未变大**：三个样本的配置还没按建议改，所以还没编到 crate 级；
+`ensureTargetCcOf` 只有实现 + 单测，尚未在 tauri-mqtt 上实跑验证。
+
+---
+
 ## [0.39.125] - 2026-11-19
 
 **EcoPaste 改用正式自签，并在真机上走完 onboarding 到主界面。**

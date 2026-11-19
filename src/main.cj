@@ -2457,6 +2457,29 @@ public class BuildCommand <: CommandHandler {
                     ndkHome = ndk
                 }
             }
+            // 0.39.126（R-2 环境关）：交叉编译前先修两件"必然挡路"的事，修了什么要留下证据。
+            //  ① 工程自带的 .cargo/config.toml 里可能有**过期 SDK 路径**（工程配置优先级高于
+            //     我们从环境推导的值）⇒ 路径必须存在才采用，否则按推导 NDK 重写同一尾巴；
+            //  ② 依赖树有 C 依赖但工程缺 target CC ⇒ 补 [env] 段，否则 cc-rs 拿宿主 cc 必失败。
+            let ndkForFix = if (ndkHome != "") { ndkHome } else { envOr("NATIVE_OHOS_SDK", "") }
+            let cfgPath = firstExistingPath([srcDir + "/.cargo/config.toml", srcDir + "/.cargo/config"])
+            var fixups = ArrayList<String>()
+            if (ndkForFix != "" && cfgPath != "") {
+                for (f in fixStaleCargoConfigOf(cfgPath, ndkForFix)) {
+                    fixups.add("过期 SDK 路径（需手改，本工具不自动改写）：${f}")
+                }
+                if (ensureTargetCcOf(cfgPath, ndkForFix, readTextOrEmpty(srcDir + "/Cargo.lock"))) {
+                    fixups.add("依赖树含 C 依赖但缺 target CC：已补 [env] CC_aarch64_unknown_linux_ohos")
+                }
+            }
+            if (fixups.size > 0) {
+                var fixArr = JsonArray()
+                for (f in fixups) {
+                    eprintln("[build] 环境关已修：${f}")
+                    fixArr.add(JsonString(f))
+                }
+                res.put("configFixups", fixArr)
+            }
             try {
                 let argv = ["build", "--release", "--target", target, "--message-format=json"]
                 let (code, rawOut, rawErr) = executeWithOutput(cargoBin, argv, workingDirectory: Path(srcDir))
