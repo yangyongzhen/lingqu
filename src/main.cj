@@ -6263,6 +6263,16 @@ public class AutoPortStatusCommand <: CommandHandler {
         o.put("handoff", JsonBool(handoff))
         o.put("verdict", JsonString(verdict))
         o.put("escalation", JsonString(escalation))
+        // 飞轮有没有真的转（R-1 判据位）：跑完一轮 `.lingqu/notes/<工程>.md` 还是空的，
+        // 就说明"撞了坑没落经验"。2026-11-19 首轮实测：EcoPaste 连撞 4 次坑，
+        // notes / diagnose / pr 三目录全空，而界面上只显示"步骤失败"，看不出这件事。
+        let notesFile = resolveLqPath(path, "notes/${name}.md")
+        var notesBytes: Int64 = 0
+        if (exists(Path(notesFile))) {
+            notesBytes = File.readFrom(notesFile).size
+        }
+        o.put("flywheelNotesBytes", JsonInt(notesBytes))
+        o.put("flywheelNotesPresent", JsonBool(notesBytes > 0))
         o.put("rows", arr)
         return o
     }
