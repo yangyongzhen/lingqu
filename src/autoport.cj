@@ -474,6 +474,10 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     }
 
     d += "## 纪律（说错一句就露馅）\n"
+    d += "- **`build` 长时间没输出先看是不是在下载依赖**：`rustc.exe` 一个都没起、cargo CPU 近 0、\n"
+    d += "  `registry/cache` 不涨 ⇒ 是 crates.io（Fastly）卡了，**不是工具挂死**。先等 2~3 分钟，\n"
+    d += "  仍不动就配国内镜像（`R2-PORT-008` 生成的 `.cargo/config.toml` 已默认带 rsproxy）\n"
+    d += "  或设代理后重跑；**别把它诊断成代码问题**，也别对同一网络原样重试。\n"
     d += "- **平台限制 ≠ 失败**：鸿蒙没有的能力登记为限制，不算 bug，更不许写\"已修复\"；\n"
     d += "- **未验证 ≠ 通过**：没证据的项写 unknown；\n"
     d += "- 改代码前先 `git status` 看看工作区；**别动与迁移无关的文件**；\n"

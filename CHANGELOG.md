@@ -5,6 +5,38 @@
 
 ---
 
+## [0.39.119] - 2026-11-19
+
+**国内直连 crates.io 卡死这件事，从"每次现场排查"变成"默认配好镜像"。**
+起因是 EcoPaste 首轮真实迁移：`cargo build` 卡在 `Downloading crates ...` **18 分钟零字节**，
+界面已经报「停滞」，而现场是 `rustc.exe` 一个没起、cargo CPU 近 0、`registry/cache` 不涨、
+连接落在 `146.75.x.x:443`（Fastly = crates.io CDN）。
+
+### Added
+
+- **`R2-PORT-008` 生成的 `.cargo/config.toml` 默认带 rsproxy 稀疏索引**
+  （`cargoMirrorSection()`）：`[source.crates-io] replace-with = "cn-rsproxy"` +
+  `sparse+https://rsproxy.cn/index/`。一个工程配一次，后面 `port` → `build` → agent 重跑都不用再等跨境 CDN。
+  **纯 env 片段（`cargoEnvOnlyToml`）刻意不带**——那是追加给"已有配置"的工程，不该悄悄改掉别人的源替换。
+- **指纹 `FP-024`**：marker `spurious network error`，归因"国内直连 crates.io 抖动/超时"，
+  修法指向镜像/代理，并明确**不要**判成代码或工具 bug。
+
+### Changed
+
+- 指纹 21 → **22 条**（`FP-001…FP-024`，008/009 仍是空位）；README / 飞轮 / 迁移指南 / 需求追踪 同步。
+- `R2-PORT-008` 的清单标题补上"国内镜像"。
+
+### 诚实的边界
+
+- **卡住时并不产生 `spurious network error`**，所以光有指纹接不住"静默卡死"——
+  真正的判据是"`rustc`=0 + CPU 近 0 + 缓存不涨 + 连到 Fastly"（已写进 `AGENTS.md` §4-173）。
+- 镜像只覆盖 registry 依赖；**git 依赖**（EcoPaste 会从 github 拉 tauri 的 fork）不受益，
+  仍需 ghproxy/`.insteadOf` 或代理。
+- 本轮改动未在本机跑完整五道闸（用户正在应用里跑 EcoPaste 迁移，门禁第 ④ 闸会结束 `main.exe`）——
+  只跑了 ①②（`build` 零警告 + 单测全绿）；③④⑤ 待那轮结束后补跑。
+
+---
+
 ## [0.39.118] - 2026-11-19
 
 **提交凭据不再只认一个环境变量**。起因是用户点破：`LINGQU_GITCODE_TOKEN` 没设就把"能不能发 PR"

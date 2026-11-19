@@ -51,7 +51,7 @@ public func portRules(): ArrayList<PortRule> {
     out.add(PortRule("R2-PORT-005", "追加 [target.'cfg(target_env = \"ohos\")'.dependencies] 段", false))
     out.add(PortRule("R2-PORT-006", "追加 [patch.crates-io] / [patch.\"harmony-contrib\"] 段", false))
     out.add(PortRule("R2-PORT-007", "生成 rust-toolchain.toml（gnullvm + aarch64-unknown-linux-ohos）", false))
-    out.add(PortRule("R2-PORT-008", "生成 .cargo/config.toml（linker + [env] C 依赖交叉编译环境）", false))
+    out.add(PortRule("R2-PORT-008", "生成 .cargo/config.toml（linker + [env] C 依赖交叉编译环境 + 国内镜像）", false))
     out.add(PortRule("R2-PORT-009", "lib.rs 注入沙箱路径解析 + panic hook", false))
     out.add(PortRule("R2-PORT-010", "setup 接线（install_panic_hook）", false))
     out.add(PortRule("R2-PORT-011", "index.html 注入 localStorage polyfill", false))

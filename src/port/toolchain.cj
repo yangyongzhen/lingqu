@@ -76,6 +76,33 @@ public func cargoConfigToml(sdkNative: String): String {
     s += "CC_aarch64_unknown_linux_ohos = \"${sdk}/llvm/bin/clang\"\n"
     s += "AR_aarch64_unknown_linux_ohos = \"${sdk}/llvm/bin/llvm-ar\"\n"
     s += "CFLAGS_aarch64_unknown_linux_ohos = \"-target aarch64-linux-ohos --sysroot=${sdk}/sysroot -D__MUSL__\"\n"
+    s += cargoMirrorSection()
+    return s
+}
+
+/**
+ * 国内镜像段（0.39.119）：**默认给上**。
+ *
+ * 现场（2026-11-19 EcoPaste 首轮真实迁移）：`cargo build` 卡在 `Downloading crates ...`
+ * 整整 **18 分钟**一个字节没进——`static.crates.io` / `index.crates.io` 都走 Fastly
+ * （连接落在 `146.75.x.x:443`），国内直连经常慢、抖，甚至挂到 cargo 自己超时。
+ * 那时的现场极易误诊：`rustc.exe` **一个都没起**、cargo CPU 几乎为 0、`registry/cache`
+ * 大小不动——看着像"工具挂死"，其实是网络。
+ *
+ * 所以迁移台生成 `.cargo/config.toml` 时顺手把 **rsproxy 稀疏索引**配上：一个工程配一次，
+ * 后面 `port` → `build` → agent 自己重跑都不再等跨境 CDN。不想用就删掉这两段（或换成自己的源）。
+ */
+public func cargoMirrorSection(): String {
+    var s = ""
+    s += "\n"
+    s += "# === lingqu: R2-PORT-008 国内镜像 ===\n"
+    s += "# crates.io 走 Fastly，国内直连常卡在 `Downloading crates ...`（2026-11-19 实测 18 分钟才通）；\n"
+    s += "# 换 rsproxy 稀疏索引后同一工程秒级起步。不想用就删掉这两段（或改成你自己的源）。\n"
+    s += "[source.crates-io]\n"
+    s += "replace-with = \"cn-rsproxy\"\n"
+    s += "\n"
+    s += "[source.cn-rsproxy]\n"
+    s += "registry = \"sparse+https://rsproxy.cn/index/\"\n"
     return s
 }
 

@@ -202,6 +202,16 @@ public func fingerprintLibrary(): ArrayList<Fingerprint> {
         "换一套自己能掌握口令的材料重签：`lingqu-cli sign --auto --newKeys --path .`（旧材料改名留底），再重跑 t2h:hap / deploy。**别去重下 .cer、别改包名**——证书换成新的、钥匙还是旧的，重下多少次都对不上",
         "", PK_GUIDE))
 
+    // FP-024（0.39.119，EcoPaste 首轮实测）：`cargo build` 卡在下载依赖，18 分钟零字节。
+    // 现场判据：`rustc.exe` 一个都没起、cargo CPU 几乎为 0、`registry/cache` 不涨、
+    // 连接落在 `146.75.x.x:443`（Fastly = crates.io CDN）——极易被误诊成"工具挂死"。
+    // marker 取 cargo 自己的错误原文（唯一）；**卡住时并没有这条报错**，所以任务书侧
+    // 另有"先看是不是在下载"的纪律，两条一起才治得住。
+    lib.add(Fingerprint("FP-024", "spurious network error",
+        "crates.io 连接抖动/超时：国内直连 `static.crates.io`、`index.crates.io`（Fastly CDN）经常慢、抖、断；表现是 `Downloading crates ...` 长时间不动，或直接报 spurious network error / failed to download from",
+        "配国内镜像（R2-PORT-008 生成的 .cargo/config.toml 默认已带 rsproxy 稀疏索引）或设 HTTP 代理后重跑；git 依赖走 github 时另需 ghproxy/.insteadOf。**不要**判成代码或工具 bug，也不要对同一网络原样重试",
+        "", PK_GUIDE))
+
     return lib
 }
 
