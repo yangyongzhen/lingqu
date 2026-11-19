@@ -5,6 +5,43 @@
 
 ---
 
+## [0.39.125] - 2026-11-19
+
+**EcoPaste 改用正式自签，并在真机上走完 onboarding 到主界面。**
+
+### Changed
+
+- **签名回到自签名路径**：`sign --login`（授权一次）→ `sign --auto`，生成 `auto_debug_40574614`
+  与**含本机 UDID** 的 debug profile，包名 `com.ayangweb.eco_paste`，写回 `build-profile.json5`
+  （原件备份 `.lingqu-autosign.bak`）。上一轮为验证临时复用的别人材料已从 `.lingqu-bak` 还原。
+- 技能层第 19 条口径同步为「**优先自签名**，复用材料只作离线兜底」。
+
+### 真机结果（192.168.3.105:46163）
+
+`hap` `built=true/gates=true`（真实包名）→ `install` ✅ → `ability started` ✅ → 进程常驻、前台是本应用 →
+**onboarding 1/6 → 6/6 → 主界面**（剪贴板列表渲染出 `No clipboard history yet` / `0 items`）→
+`verify` 跑通（total=7 / featurePass=5 / covered=6 / fail=1 / unknown=1）。
+
+### 诚实的边界
+
+业务功能只抽查到「主界面渲染 + onboarding 全流程可点」，**没有真的走 复制→记录→搜索→回贴**；
+verify 的 1 fail / 1 unknown 未逐项定性；R-2 环境关与 R-1 任务书纪律仍未做。
+
+---
+
+## [0.39.124] - 2026-11-19
+
+**真机 `verify` 崩溃修好：根因是「按字节切源码」切在多字节字符中间。**
+
+- 定位手段：先排除指纹闸与截图（`--screenshot false` 照崩）→ 把 scan 落档临时挪走变绿
+  ⇒ 崩在 scan 段 → 段内用 `eprintln` 标记（`println` 会被异常吞掉）收窄到
+  `bridgeTwoSidedOf` → `fnImplsOf`。
+- 修法：新增 `safeSliceOf`（切片边界自动落到 UTF-8 字符起始），`fnImplsOf` 两处切片改用它；
+  `verify_feed.cj` 9 处 `String.fromUtf8(File.readFrom(...))` 统一换 `lenientUtf8`。
+- 证据：真机 verify 不再抛异常，EcoPaste 落档出 stats（total=7 / featurePass=5 / covered=6）。
+
+---
+
 ## [0.39.123] - 2026-11-19
 
 **「起来即退」查明并修复：`log` 插件 EPERM + 桌面风格路径不可写。EcoPaste 真机首次真正跑起来。**
