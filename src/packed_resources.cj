@@ -104,6 +104,28 @@ public class LingquAssetResolver <: AssetResolver {
         return None
     }
 
+    /**
+     * 按字节取内容：图标 / 音频这类二进制资产（框架 issue #13：`readText` 只能装文本）。
+     *
+     * 0.39.129 起本地框架（cj-tauri 2.4.0+）的 `AssetResolver` 要求本方法；
+     * 旧框架下它是多余方法，无害。内嵌主页只有文本（HTML），从 base64 解出的文本转字节，
+     * 与 `readText` 同源；磁盘资产按原始字节读。
+     */
+    public func readBytes(name: String): Option<Array<Byte>> {
+        if (PACKED_UI_B64.size > 0 && isMainPage(name)) {
+            return Some(decodeBase64(PACKED_UI_B64).toArray())
+        }
+        let p = Path(root + "/" + name)
+        try {
+            if (exists(p)) {
+                return Some(File.readFrom(p))
+            }
+        } catch (e: Exception) {
+            let _ = e
+        }
+        return None
+    }
+
     /** `ui/index.html` 与 `index.html` 都认（清单里写的是前者） */
     func isMainPage(name: String): Bool {
         return name == "ui/index.html" || name == "index.html"

@@ -247,6 +247,66 @@ func collectEtsUnder(dir: String, depth: Int64, out: ArrayList<String>): Unit {
     }
 }
 
+/** 限深收集 `.rs` 源文件内容（判据沿 helper 追一层要用；跳过与 collectEtsUnder 同款重目录 + gen） */
+func collectRsContents(dir: String, depth: Int64, out: ArrayList<String>): Unit {
+    if (depth <= 0 || !exists(Path(dir))) {
+        return
+    }
+    var infos: Array<FileInfo> = []
+    try {
+        infos = Directory.readFrom(dir)
+    } catch (e: Exception) {
+        let _ = e
+        return
+    }
+    for (info in infos) {
+        let nm = info.name
+        if (nm == "node_modules" || nm == "oh_modules" || nm == ".git" || nm == "target" ||
+            nm == "build" || nm == ".hvigor" || nm == "gen") {
+            continue
+        }
+        let full = dir + cjhPathSep() + nm
+        if (info.isDirectory()) {
+            collectRsContents(full, depth - 1, out)
+        } else if (nm.size > 3 && nm[(nm.size - 3)..nm.size] == ".rs") {
+            var t = ""
+            try {
+                t = lenientUtf8(File.readFrom(full))
+            } catch (e: Exception) {
+                let _ = e
+            }
+            if (t != "") {
+                out.add(t)
+            }
+        }
+    }
+}
+
+/** 工程里 Rust 源码的内容集合：src-tauri/src 优先，扁平工程的 src 兜底（都没有 → 空集，追不动） */
+func readAllRsOf(projPath: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    for (r in ["src-tauri/src", "src"]) {
+        collectRsContents(projPath + cjhPathSep() + r, 10, out)
+    }
+    return out
+}
+
+/** 把候选 helper 名 → 定义所在源文填进 resolved（工程内找不到的不放，判据按"没追到"处理） */
+func fillHelperSrcs(names: ArrayList<String>, contents: ArrayList<String>,
+    resolved: HashMap<String, String>): Unit {
+    for (nm in names) {
+        if (nm == "" || resolved.contains(nm)) {
+            continue
+        }
+        for (t in contents) {
+            if (fnImplsOf(t, nm).size > 0) {
+                resolved.add(nm, t)
+                break
+            }
+        }
+    }
+}
+
 /**
  * 工程里的 ArkTS 分发器正文（含 `__ohos_dispatch` 的 `.ets` 拼起来；找不到给空串）。
  *
@@ -299,6 +359,11 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
 
     // 平台 API 名单（判"这条命令碰没碰平台专有能力"要用）
     let apiNames = ArrayList<String>()
+    // 0.39.129：判据沿 helper 追一层的素材——工程 Rust 源码读一次（没有 .rs 时追不动，
+    // 行为与旧判据一致）。EcoPaste 现场：命令层调 core::paths::app_data_dir()，
+    // 鸿蒙回沙箱逻辑在 helper 里，只看命中文件会冤枉 fail（§4-157 同族）。
+    let rsContents = readAllRsOf(projPath)
+    let helperSrcs = HashMap<String, String>()
     // ArkTS 分发器只读一次：桥的双侧判据要用它（§4-162；cargo 不审 ArkTS，别只查 Rust 半边）
     let arktsDispatch = readArktsDispatcherOf(projPath)
     let platArr = objFieldOf(items, "platform")
@@ -361,7 +426,8 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                             let src = readProjectSrc(projPath, siteFileOf(firstArrayItemOf(v, "sites")))
                             if (src != "") {
                                 f.degradedApi = firstApiHitIn(src, nm, apiNames)
-                                f.fallbackLanded = commandImplLanded(src, nm)
+                                fillHelperSrcs(helperCallNamesOf(src, nm), rsContents, helperSrcs)
+                                f.fallbackLanded = commandImplLandedWith(src, nm, helperSrcs)
                                 // 桥命令必须**两侧都在**：Rust 调了 call_arkts("x")，ArkTS 得有 case "x"。
                                 // 只写半边时 cargo 照样 exit=0，真机点了没反应（§4-162）。
                                 let bv = bridgeTwoSidedOf(src, arktsDispatch, nm)
@@ -446,7 +512,9 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                 let (gap, why) = if (isFrontend) {
                     judgeFrontendSite(src, siteLineOf(p.site))
                 } else {
-                    judgePlatformSite(src, siteLineOf(p.site))
+                    fillHelperSrcs(helperCallNamesOf(src, enclosingFnOf(src, siteLineOf(p.site))),
+                        rsContents, helperSrcs)
+                    judgePlatformSiteWith(src, siteLineOf(p.site), helperSrcs)
                 }
                 p.fallbackLanded = !gap
                 p.note = why

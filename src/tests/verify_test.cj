@@ -757,3 +757,91 @@ public func testDesktopOnlyRecognizesOtherOsCfg(): Unit {
     let notOhos = "#[cfg(not(all(target_os = \"linux\", target_env = \"ohos\")))]\nfn g() -> bool {\n    true\n}\n"
     @Expect(fnDesktopOnlyOf(notOhos, 3), true)
 }
+
+@Test
+public func testHelperCallNamesInExtractsPathCallOnly(): Unit {
+    // `core::paths::app_data_dir(` → 路径限定调用，取末段（EcoPaste storage.rs 的现场形态）。
+    // 注：`PathBuf::from(` 这类 std 路径也会被收（都是 `::` 调用），但取数层在工程源码里
+    // 找不到 `fn from` 的定义，自然追不到——所以这里夹具只放目标调用，size 才可断言为 1。
+    let body = "let dir = core::paths::app_data_dir()?;\nOk(dir)\n"
+    let names = helperCallNamesIn(body)
+    @Expect(names.size, 1)
+    @Expect(names.contains("app_data_dir"), true)
+    // 方法调用与裸调用不收：tauri 的 `app.path().app_data_dir()` 是平台 API 本身，工程源码里
+    // 不会有它的定义；泛型 turbofish 的 `(` 前不是标识符，也不收
+    let noisy = "let a = app.path().app_data_dir();\nlet b = plain_call();\nlet c = foo::<T>(1);\n"
+    let names2 = helperCallNamesIn(noisy)
+    @Expect(names2.size, 0)
+    // 重复调用去重
+    let dup = "let a = core::paths::app_data_dir();\nlet b = paths::app_data_dir();\n"
+    @Expect(helperCallNamesIn(dup).size, 1)
+}
+
+@Test
+public func testJudgePlatformSiteFollowsHelper(): Unit {
+    // EcoPaste `app_data_dir` 现场（0.39.128 记录的形态）：命令层无 cfg 分支，逻辑在 helper 里
+    let cmd = "fn storage_cmd() -> Result<String, String> {\n" +
+        "    let dir = core::paths::app_data_dir()?;\n" +
+        "    Ok(dir)\n" +
+        "}\n"
+    let helper = "pub fn app_data_dir() -> Result<String, String> {\n" +
+        "    #[cfg(target_env = \"ohos\")]\n" +
+        "    {\n" +
+        "        Ok(String::from(\"/data/storage/el2/base/files\"))\n" +
+        "    }\n" +
+        "    #[cfg(not(target_env = \"ohos\"))]\n" +
+        "    {\n" +
+        "        Ok(String::from(\"~/.local/share\"))\n" +
+        "    }\n" +
+        "}\n"
+    // 旧判据（不追 helper）：仍是缺口——口径不许悄悄变（0.39.128 的假 fail 就是它）
+    let (gap0, why0) = judgePlatformSite(cmd, 2)
+    @Expect(gap0, true)
+    @Expect(why0.contains("没有落地的鸿蒙实现"), true)
+    // 追到 helper：体内鸿蒙分支落地 → 不算缺口，note 点名 helper
+    var m = HashMap<String, String>()
+    m.add("app_data_dir", helper)
+    let (gap, why) = judgePlatformSiteWith(cmd, 2, m)
+    @Expect(gap, false)
+    @Expect(why.contains("app_data_dir"), true)
+    // helper 没有鸿蒙分支 → 仍是缺口，但要说清追过了谁
+    var m2 = HashMap<String, String>()
+    m2.add("app_data_dir", "pub fn app_data_dir() -> Result<String, String> {\n    Ok(String::from(\"/tmp\"))\n}\n")
+    let (gap2, why2) = judgePlatformSiteWith(cmd, 2, m2)
+    @Expect(gap2, true)
+    @Expect(why2.contains("helper"), true)
+    // 整函数 cfg 的 helper 也算落地
+    var m3 = HashMap<String, String>()
+    m3.add("app_data_dir",
+        "#[cfg(target_env = \"ohos\")]\npub fn app_data_dir() -> Result<String, String> {\n    Ok(String::from(\"/data/storage/el2/base/files\"))\n}\n")
+    let (gap3, why3) = judgePlatformSiteWith(cmd, 2, m3)
+    @Expect(gap3, false)
+    @Expect(why3.contains("app_data_dir"), true)
+}
+
+@Test
+public func testCommandImplLandedFollowsHelper(): Unit {
+    let cmd = "fn storage_cmd() -> Result<String, String> {\n" +
+        "    let dir = crate::core::paths::app_data_dir()?;\n" +
+        "    Ok(dir)\n" +
+        "}\n"
+    let helper = "pub fn app_data_dir() -> Result<String, String> {\n" +
+        "    #[cfg(target_env = \"ohos\")]\n" +
+        "    {\n" +
+        "        Ok(String::from(\"/data/storage/el2/base/files\"))\n" +
+        "    }\n" +
+        "    #[cfg(not(target_env = \"ohos\"))]\n" +
+        "    {\n" +
+        "        Ok(String::from(\"~/.local/share\"))\n" +
+        "    }\n" +
+        "}\n"
+    // 旧口径：命令层没有 cfg → 没落地（不追 helper 时）
+    @Expect(commandImplLanded(cmd, "storage_cmd"), false)
+    var m = HashMap<String, String>()
+    m.add("app_data_dir", helper)
+    @Expect(commandImplLandedWith(cmd, "storage_cmd", m), true)
+    // helper 缺鸿蒙分支 → 仍没落地
+    var m2 = HashMap<String, String>()
+    m2.add("app_data_dir", "pub fn app_data_dir() -> Result<String, String> {\n    Ok(String::from(\"/tmp\"))\n}\n")
+    @Expect(commandImplLandedWith(cmd, "storage_cmd", m2), false)
+}

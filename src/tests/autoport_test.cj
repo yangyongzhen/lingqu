@@ -485,3 +485,40 @@ public func testJsonStringPathOfMissing(): Unit {
     @Assert(jsonStringPathOf("[]", "build.frontendDist"), "")
     @Assert(jsonStringPathOf("not json at all", "build.frontendDist"), "")
 }
+
+/*
+ * 0.39.129：R-1 监管态提醒——连撞 ≥2 步而 notes 还是空的，界面必须说出来
+ * （0.39.120 实测缺口：EcoPaste 连撞 4 次坑，界面只写"步骤失败"）。
+ */
+func mkSkippedRow(step: String, why: String): MigrateRow {
+    let r = mkAutoRow(step, true, false, "")
+    r.skipped = why
+    return r
+}
+
+@Test
+public func testFlywheelHintNeedsTwoFailuresAndEmptyNotes(): Unit {
+    // notes 已有内容 → agent 在用飞轮，不提醒（哪怕有失败）
+    let withNotes = ArrayList<MigrateRow>()
+    withNotes.add(mkAutoRow("build", true, false, "compile error"))
+    withNotes.add(mkAutoRow("hap", true, false, "hvigor failed"))
+    @Assert(flywheelHintOf(withNotes, true), "")
+    // 只有 1 步失败 → 还不算"连撞"，不提醒
+    let one = ArrayList<MigrateRow>()
+    one.add(mkAutoRow("build", true, false, "compile error"))
+    @Assert(flywheelHintOf(one, false), "")
+    // 连撞 2 步 + notes 空 → 提醒，且点名落经验通道
+    let two = ArrayList<MigrateRow>()
+    two.add(mkAutoRow("build", true, false, "compile error"))
+    two.add(mkAutoRow("hap", true, false, "hvigor failed"))
+    let hint = flywheelHintOf(two, false)
+    @Assert(hint.contains("notes"), true)
+    @Assert(hint.contains("diagnose"), true)
+    @Assert(hint.contains("R-1"), true)
+    // 跳过是环境事实（没设备/用户停了），不算撞坑：跳 3 步也不提醒
+    let skippedOnly = ArrayList<MigrateRow>()
+    skippedOnly.add(mkSkippedRow("deploy", "未连接真机"))
+    skippedOnly.add(mkSkippedRow("verify", "未连接真机"))
+    skippedOnly.add(mkSkippedRow("report", "用户停了"))
+    @Assert(flywheelHintOf(skippedOnly, false), "")
+}

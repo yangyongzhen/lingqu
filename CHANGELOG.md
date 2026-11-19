@@ -5,7 +5,52 @@
 
 ---
 
-## [0.39.128] - 2026-11-19
+## [0.39.129] - 2026-11-20
+
+**Linux 会话三件套：`app_data_dir` 判据沿 helper 追一层（0.39.128 唯一没修的判据缺陷）+ `R2-DEPS-015` 回填 + R-1 监管态提醒；顺带适配框架 2.4.0 的 `readBytes` 接口、演示页落地收尾。**
+
+### Added（判据追 helper 一层——修掉"间接落地"被冤枉 fail 的那半）
+
+- **`judgePlatformSiteWith` / `commandImplLandedWith`**（`src/verify/verify.cj`）：命中函数本身
+  没有鸿蒙分支时，沿函数体里的**路径限定调用**（`core::paths::app_data_dir(` → `app_data_dir`）
+  追一层 helper，用同一套判据再判一次；**只追一层**，不递归。取数层（`verify_feed.cj`）读工程
+  `src-tauri/src`（扁平工程兜底 `src`，跳 gen/target/oh_modules 等重目录）的 `.rs` 喂给判据。
+  EcoPaste `app_data_dir` 的现场（命令层无 cfg、鸿蒙回沙箱逻辑在 helper 里）从此不再冤枉 fail。
+  旧函数 `judgePlatformSite` / `commandImplLanded` 委托 + 空映射，**口径不变**。
+  单测 3 条；**红证明**：短路追层循环后两个新用例当场红，还原回绿。
+- **`R2-DEPS-015`**（`src/deps/deps.cj` 的 `isCMakeToolchainCrateOf`）：CMake 系 C 依赖
+  （`aws-lc-sys` / `aws-lc-rs`）——build script 把 `OHOS_NDK_HOME` 当 SDK 根，不显式传
+  `CMAKE_TOOLCHAIN_FILE` 会拼出 `<NDK>/native/native/…` 必失败（2026-11-19 cc-switch 实测的
+  FN，本轮回填）。档位"需patch"：修法是 toolchain（`t2h:build` 0.39.128 起自动钉住），
+  **不是** [patch]；钉上后 crate 级能否编过**未复核**，如实跟进。R-2 口径上该 FN 回填后
+  Recall 记 2/2（N=2 仍无统计意义）。`deps_test` 补判定 + 反向断言（别的 crate 不许被卷进来）。
+- **R-1 监管态提醒**（`autoport.cj` 的 `flywheelHintOf` + ④ 屏）：连撞 ≥2 步而
+  `.lingqu/notes/` 还是空的 → 界面提醒"让 agent 先落经验再重试"。判据：失败步 =
+  `ran && !ok && skipped == ""`（跳过是环境事实，不算撞坑）；notes 有内容不提醒。
+  `t2h:autoport_status` 回投 `flywheelHint`，`ui_report.flywheelHint` 可断言（两处联动），
+  探针 `LINGQU_UI_PROBE=flywheelhint`。0.39.120 的实测缺口（EcoPaste 连撞 4 次坑，
+  界面只写"步骤失败"）就此补上。
+- **演示页落地（收掉 0.39.128 的遗留）**：仓 `yangyongzhen/lingqu` 建好、`gh-pages` 已推、
+  Pages 构建 built，<https://yangyongzhen.github.io/lingqu/> 与 `/ui-mockup.html` 实测 **200**。
+  凭据来自本机 git credential store（上轮只查了 gh CLI / 环境变量 / `~/.github_token` 三处，
+  漏了它）；更新方式：改 `docs/ui-mockup.html` 后
+  `GIT_CONFIG_GLOBAL=/dev/null bash scripts/publish-demo.sh`（绕开本机 ghfast.top 的 URL 改写）。
+
+### Fixed（环境适配）
+
+- `LingquAssetResolver` 补 **`readBytes`**：本机 cj-tauri 框架 **2.4.0 起** `AssetResolver`
+  接口新增按字节取资产的方法（issue #13：`readText` 只能装文本），旧代码在升级后的框架上
+  直接编不过（`unimplemented interface function 'readBytes'`）。内嵌主页从 base64 文本转字节、
+  磁盘资产按原始字节读；旧框架下它是多余方法，无害。
+
+### 诚实的边界
+
+- 判据追层只覆盖"工程内能找到 `fn <helper>` 定义"的形态；跨 crate / 宏生成的鸿蒙分支追不到。
+- `R2-DEPS-015` 是**预测**：本机无 OHOS SDK，aws-lc-sys 钉上 toolchain 后能否编过未复核，
+  R-2 的 Recall 2/2 要等复跑才是最终账。
+- R-1 提醒本轮只有单测 + 探针取证，**真迁移轮里 `flywheelHint` 实跑出现**要等下一轮
+  （Linux 无真机）。
+
 
 **EcoPaste 那 5 处「平台限制」里有 3 处是**判据缺陷**；顺带回填一条 R-2 FN。**
 

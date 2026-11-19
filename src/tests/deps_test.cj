@@ -137,6 +137,20 @@ public func testRuleTableVerdicts(): Unit {
     let other = DepItem("tauri-plugin-os", "2.3.0")
     applyRule(other, patched)
     @Assert(other.rule != "R2-DEPS-014")
+    // CMake 系 C 依赖：判"需patch"并点出 CMAKE_TOOLCHAIN_FILE（cc-switch 实测的 FN，0.39.129 回填）
+    let aws = DepItem("aws-lc-sys", "0.44.0")
+    applyRule(aws, patched)
+    @Assert(aws.verdict, D_PATCH)
+    @Assert(aws.rule, "R2-DEPS-015")
+    @Assert(aws.alternative.contains("CMAKE_TOOLCHAIN_FILE"), true)
+    // aws-lc-rs 默认后端就是 aws-lc-sys → 同规则
+    let awsr = DepItem("aws-lc-rs", "0.28.1")
+    applyRule(awsr, patched)
+    @Assert(awsr.rule, "R2-DEPS-015")
+    // 但别的 crate 不许被卷进来（过度预测会砸 Precision）
+    let plain = DepItem("serde_json", "1.0")
+    applyRule(plain, patched)
+    @Assert(plain.rule != "R2-DEPS-015")
     // 条件可用：reqwest / dirs
     let rq = DepItem("reqwest", "0.12")
     applyRule(rq, patched)

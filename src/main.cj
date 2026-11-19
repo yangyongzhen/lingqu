@@ -2006,6 +2006,8 @@ public class UiReportCommand <: CommandHandler {
         o.put("railFail", JsonString(argStr(args, "railFail", "")))
         o.put("aiPortDirective", JsonInt(argInt(args, "aiPortDirective", 0)))
         o.put("aiPortCli", JsonString(argStr(args, "aiPortCli", "")))
+        // R-1 提醒是否在展示（0.39.129）：flywheelHint 非空即提醒中（前端 reportUi 同名字段回投）
+        o.put("flywheelHint", JsonString(argStr(args, "flywheelHint", "")))
         // 换工程清理（0.39.86）：用户实测「换了个新工程，AI 自动迁移还是上次执行完的状态、不能点」。
         // 断言口径：projSwitches>0 且 projResets==projSwitches（每次切换都清过）且 aiPortBtn=1（按钮恢复可点）。
         o.put("projSwitches", JsonInt(argInt(args, "projSwitches", 0)))
@@ -6284,6 +6286,8 @@ public class AutoPortStatusCommand <: CommandHandler {
         }
         o.put("flywheelNotesBytes", JsonInt(notesBytes))
         o.put("flywheelNotesPresent", JsonBool(notesBytes > 0))
+        // R-1 观测侧（0.39.129）：连撞 ≥2 步而 notes 空 → 界面提醒（flywheelHintOf 纯函数单测钉住）
+        o.put("flywheelHint", JsonString(flywheelHintOf(rows, notesBytes > 0)))
         o.put("rows", arr)
         return o
     }

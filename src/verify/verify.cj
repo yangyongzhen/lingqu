@@ -684,7 +684,68 @@ public func hasLandedOhosBlockIn(body: String): Bool {
  * 旧判据直接落"无法判定 → 没落地"，于是明明 `resolve_app_data_dir()` 在鸿蒙上返回沙箱路径，
  * 移植项 `platform-api` 还是判 fail。
  */
-public func judgePlatformSite(src: String, lineNo: Int64): (Bool, String) {
+/**
+ * 函数体里「路径限定调用」的末段函数名（候选 helper）：`core::paths::app_data_dir(` → `app_data_dir`。
+ *
+ * 只认 `::` 紧邻的标识符（Rust 的路径调用），**不认**方法调用（`.app_data_dir(`）与裸调用——
+ * 后两者噪声太大：tauri 的 `app.path().app_data_dir()` 是平台 API 本身，工程源码里不会有它的定义。
+ * 泛型 `foo::<T>(` 的 `(` 前不是标识符，自然跳过。纯函数，便于单测。
+ */
+public func helperCallNamesIn(body: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    var i: Int64 = 0
+    while (i < body.size) {
+        if (body[i] == 40) { // '('
+            var e = i - 1
+            while (e >= 0 && isIdentByteOf(body[e])) {
+                e -= 1
+            }
+            let s = e + 1
+            if (i > s && s >= 2 && body[s - 1] == 58 && body[s - 2] == 58) { // "::"
+                var nb = ArrayList<Byte>()
+                var k = s
+                while (k < i) {
+                    nb.add(body[k])
+                    k += 1
+                }
+                let nm = String.fromUtf8(nb.toArray())
+                if (!out.contains(nm)) {
+                    out.add(nm)
+                }
+            }
+        }
+        i += 1
+    }
+    return out
+}
+
+/** `fnName` 各实现体里的候选 helper（去重合并）。fnName 为空返回空集合——别让 `fn ` 裸匹配所有函数。 */
+public func helperCallNamesOf(src: String, fnName: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    if (fnName == "") {
+        return out
+    }
+    for (im in fnImplsOf(src, fnName)) {
+        for (nm in helperCallNamesIn(im.body)) {
+            if (!out.contains(nm)) {
+                out.add(nm)
+            }
+        }
+    }
+    return out
+}
+
+/**
+ * 同 `judgePlatformSite`，但**允许沿命中函数体里的路径限定调用追一层 helper**（0.39.129）。
+ *
+ * 为什么：EcoPaste `app_data_dir` 的现场（2026-11-19）——命令层 `storage.rs` 调的是工程自己的
+ * `core::paths::app_data_dir()`，鸿蒙回沙箱的逻辑在 helper 里，命令层自然没有 cfg 分支，
+ * 旧判据只看命中文件 ⇒ "间接落地"被冤枉成 fail（§4-157 同族：观测缺陷当功能缺陷）。
+ *
+ * `helperSrcs`：helper 函数名 → 定义所在源文件全文（取数层负责填；工程内找不到的就不放进来）。
+ * 追到的 helper 用同一套判据再判一次；**只追一层**，不递归。
+ */
+public func judgePlatformSiteWith(src: String, lineNo: Int64, helperSrcs: HashMap<String, String>): (Bool, String) {
     let fnName = enclosingFnOf(src, lineNo)
     if (fnName == "") {
         return (true, "找不到命中行所属函数，无法判定降级落没落地")
@@ -701,7 +762,41 @@ public func judgePlatformSite(src: String, lineNo: Int64): (Bool, String) {
             return (false, "用在 `${fnName}` 里，该函数体内的鸿蒙分支有落地的实现")
         }
     }
+    // 0.39.129：函数本身没有鸿蒙分支 → 沿它调用的 helper 追一层
+    var tried = ArrayList<String>()
+    for (h in helperCallNamesOf(src, fnName)) {
+        if (h == fnName) {
+            continue
+        }
+        match (helperSrcs.get(h)) {
+            case Some(hsrc) =>
+                tried.add(h)
+                if (!ohosImplStubOnly(hsrc, h)) {
+                    return (false, "用在 `${fnName}` 里，它调的 `${h}()` 有落地的鸿蒙实现")
+                }
+                for (him in fnImplsOf(hsrc, h)) {
+                    if (hasLandedOhosBlockIn(him.body)) {
+                        return (false, "用在 `${fnName}` 里，它调的 `${h}()` 体内的鸿蒙分支有落地的实现")
+                    }
+                }
+            case None => ()
+        }
+    }
+    if (tried.size > 0) {
+        var names = ""
+        for (t in tried) {
+            if (names != "") {
+                names += "、"
+            }
+            names += t
+        }
+        return (true, "用在 `${fnName}` 里，该函数与它调的 helper（${names}）都没有落地的鸿蒙分支")
+    }
     return (true, "用在 `${fnName}` 里，该函数没有落地的鸿蒙实现")
+}
+
+public func judgePlatformSite(src: String, lineNo: Int64): (Bool, String) {
+    return judgePlatformSiteWith(src, lineNo, HashMap<String, String>())
 }
 
 /**
@@ -712,7 +807,10 @@ public func judgePlatformSite(src: String, lineNo: Int64): (Bool, String) {
  * 只认 ① 会把"已经落了鸿蒙分支"的函数判成空壳（反过来只认 ② 同理），
  * 两种写法在真机上效果一样，判据必须都收。
  */
-public func commandImplLanded(src: String, fnName: String): Bool {
+/**
+ * 同 `commandImplLanded`，但允许沿函数体里的路径限定调用追一层 helper（0.39.129，判据同 judgePlatformSiteWith）。
+ */
+public func commandImplLandedWith(src: String, fnName: String, helperSrcs: HashMap<String, String>): Bool {
     if (fnName == "") {
         return false
     }
@@ -724,7 +822,28 @@ public func commandImplLanded(src: String, fnName: String): Bool {
             return true
         }
     }
+    for (h in helperCallNamesOf(src, fnName)) {
+        if (h == fnName) {
+            continue
+        }
+        match (helperSrcs.get(h)) {
+            case Some(hsrc) =>
+                if (!ohosImplStubOnly(hsrc, h)) {
+                    return true
+                }
+                for (him in fnImplsOf(hsrc, h)) {
+                    if (hasLandedOhosBlockIn(him.body)) {
+                        return true
+                    }
+                }
+            case None => ()
+        }
+    }
     return false
+}
+
+public func commandImplLanded(src: String, fnName: String): Bool {
+    return commandImplLandedWith(src, fnName, HashMap<String, String>())
 }
 
 // ============================================================

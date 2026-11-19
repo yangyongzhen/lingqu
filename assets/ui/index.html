@@ -4180,7 +4180,7 @@ withBridge(function(tauri){
    *   ② 把任务书发过去（走已有 WS 通道，流式回复直接给人看）
    *   ③ 盯落档（t2h:autoport_status）：进度、停滞、预算；要人定的用确认卡
    * 判定只认落档：AI 说"迁好了"，时间轴没变就是没变。 */
-  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0, finished: false, autoReported: false, handoff: false, turnEnded: false };
+  var AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0, cliPath: '', started: 0, finished: false, autoReported: false, handoff: false, turnEnded: false, flywheelHint: '' };
 
   /** scope → 中文档位文案（全自动 / 半自动「只做这一步」） */
   function autoPortScopeLabel(scope){
@@ -4210,6 +4210,11 @@ withBridge(function(tauri){
     AIP.concluded = (typeof st.concludedCount === 'number') ? st.concludedCount : 0;
     AIP.verdict = String(st.verdict || '');
     renderMigrate(st);
+    // R-1 观测侧（0.39.129）：连撞 ≥2 步而 notes 空的提醒由后端算好带来。写进 AIP（reportUi 回投）
+    // 并顺手显示——必须盖过 renderMigrate 刚写的「AI 正在干活…」；handoff/stalled/超时分支
+    // 在 pollAiPort 里更晚写 migrateNote，优先级高于本提醒（手刹类的消息更重要）。
+    AIP.flywheelHint = String(st.flywheelHint || '');
+    if (AIP.flywheelHint) { aiPortNote(AIP.flywheelHint); }
     // 0.39.87：AI 自己把某步跑出结论时，对应屏要跟着**回读落档**。
     // 否则就是用户报的那个分裂现场：AI 说「扫描已完成」，① 迁移画像的可迁移度还是空的。
     try { syncStepsFromRows(st.rows, st.path || st.project || ''); } catch (e) {}
@@ -7563,7 +7568,7 @@ withBridge(function(tauri){
     // ② 监管态内存清零。`AIP.active` 必须归零：`noteTurnEnded` 拿它判"这一轮是不是迁移"
     //    （0.39.63 那课：不清它，普通问答也会被套上"迁移还没完成"的红卡）。
     AIP = { active: false, timer: null, polls: 0, stalled: false, verdict: '', directiveChars: 0,
-            cliPath: '', started: 0, finished: false, autoReported: false };
+            cliPath: '', started: 0, finished: false, autoReported: false, flywheelHint: '' };
     MIG.running = false; MIG.done = false; MIG.percent = 0; MIG.verdict = ''; MIG.deviceInRecord = false;
     MIG_WAS_RUNNING = false;
     window.__autoReport = null;
@@ -8144,6 +8149,8 @@ withBridge(function(tauri){
       aiPortVerdict: AIP.verdict || '',
       aiPortDirective: (typeof AIP.directiveChars === 'number') ? AIP.directiveChars : 0,
       aiPortCli: AIP.cliPath || '',
+      // R-1 观测侧（0.39.129）：监管态提醒是否在展示——flywheelHint 非空即提醒中
+      flywheelHint: AIP.flywheelHint || '',
       // 换工程清理（0.39.86）：用户实测「换了个新工程，AI 自动迁移还是上次执行完的状态、不能点」。
       // 断言口径：projSwitches>0（真的换过）∧ projResets=projSwitches（每次都清过）∧ aiPortBtn=1（恢复可点）。
       // projResetActive>0 表示"换工程时上一轮监管态还在跑"——那时按钮/面板照样清，但停止键必须留着。
@@ -8862,6 +8869,23 @@ withBridge(function(tauri){
         reportUi('turnend-migration');
         AIP.active = false;
       }, 3200);
+      return;
+    }
+    // R-1 提醒自检（LINGQU_UI_PROBE=flywheelhint，0.39.129）：伪造"连撞 2 步 + notes 空"的监管态
+    // 快照走一遍 renderAiPort。判据：AIP.flywheelHint 非空（reportUi 回投同名键）且 migrateNote
+    // 显示提醒——renderMigrate 先写「AI 正在干活…」，提醒必须盖过它（§4-111 那族的反向验证）。
+    if (mode === 'flywheelhint') {
+      setTimeout(function(){
+        renderAiPort({ active: true, polls: 1,
+                       flywheelHint: '已 2 步失败而 `.lingqu/notes/` 还是空的——让 agent 先落经验再重试' });
+        var t = $('migrateNote') ? String($('migrateNote').textContent) : '';
+        window.__flywheelHintProbe = {
+          ok: (t.indexOf('notes') >= 0) && (String(AIP.flywheelHint || '').indexOf('notes') >= 0),
+          note: t.slice(0, 80)
+        };
+        reportUi('flywheelhint-probe');
+        AIP.flywheelHint = '';
+      }, 600);
       return;
     }
     // 5 样本矩阵自检（LINGQU_UI_PROBE=batch，0.39.29）：切到 ⑦ 迁移报告 → 进屏自动按落档出矩阵，

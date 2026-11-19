@@ -251,6 +251,21 @@ func isTauriPluginDriftCrateOf(name: String): Bool {
     return name == "tauri-plugin-updater"
 }
 
+/**
+ * CMake 系 C 依赖（build script 走 CMake）：不显式传 `CMAKE_TOOLCHAIN_FILE` 必失败。
+ *
+ * 2026-11-19 cc-switch 实测的 FN：`aws-lc-sys` 的 build script 把 `OHOS_NDK_HOME` 当 SDK 根，
+ * 拼出 `<NDK>/native/native/build/cmake/ohos.toolchain.cmake`（不存在）⇒
+ * `failed to run custom build command`。修法是显式传 toolchain 文件（`t2h:build` 的
+ * `cmakeToolchainPathOf`，0.39.128），**不是** [patch]——所以档位是"需patch/条件"，不是"不可用"。
+ *
+ * 只点实测证据覆盖的两个 crate（`aws-lc-rs` 默认后端就是 `aws-lc-sys`），不把所有
+ * CMake crate 一刀切——过度预测会砸 Precision（§4-158 的反向）。
+ */
+func isCMakeToolchainCrateOf(name: String): Bool {
+    return name == "aws-lc-sys" || name == "aws-lc-rs"
+}
+
 public func applyRule(item: DepItem, patched: HashSet<String>): Unit {
     let name = item.name
 
@@ -331,6 +346,15 @@ public func applyRule(item: DepItem, patched: HashSet<String>): Unit {
         item.decide(D_PATCH, "R2-DEPS-014",
             "tauri 插件与 OHOS fork 版 tauri 的字段可能漂移：插件的 Linux 专属分支会编进鸿蒙（target_os 也是 linux），而 fork 的 tauri 缺对应字段",
             "先确认插件版本与 fork 的 tauri 对得上；对不上就 vendor 一份、把 Linux 专属分支按 `not(target_env = \"ohos\")` 收窄，再用 [patch.crates-io] 挂上；或用 cfg 门控让鸿蒙侧不引入该插件")
+        return
+    }
+
+    // 2d) CMake 系 C 依赖：build script 要 CMake 工具链，路径必须显式传
+    //     （2026-11-19 cc-switch 实测的 FN：aws-lc-sys 把 OHOS_NDK_HOME 当 SDK 根 ⇒ native/native）
+    if (isCMakeToolchainCrateOf(name)) {
+        item.decide(D_PATCH, "R2-DEPS-015",
+            "CMake 系 C 依赖：build script 要 CMake 工具链，而 `OHOS_NDK_HOME` 在 CMake 眼里是 SDK 根——不显式传 `CMAKE_TOOLCHAIN_FILE` 会拼出 `<NDK>/native/native/…` 必失败（2026-11-19 cc-switch 实测：`failed to run custom build command for aws-lc-sys v0.44.0`）",
+            "显式传 `CMAKE_TOOLCHAIN_FILE=<SDK>/openharmony/native/build/cmake/ohos.toolchain.cmake`（`t2h:build` 0.39.128 起自动钉住，落档 `cmakeToolchain` 字段）；钉上后 crate 级能否编过未复核，如实跟进")
         return
     }
 

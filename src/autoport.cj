@@ -690,6 +690,32 @@ public func autoportConcludedCount(rows: ArrayList<MigrateRow>): Int64 {
 }
 
 /**
+ * R-1 的监管态提醒（0.39.129）：连撞 ≥2 步而 `.lingqu/notes/` 还是空的 → 提醒一句。
+ *
+ * 为什么需要它：0.39.120 首轮取证——EcoPaste 连撞 4 次坑，notes / diagnose / pr 三个目录全空，
+ * 界面只写"步骤失败"，看不出"机制在位但 agent 没在用"。任务书纪律（0.39.126）是"要求"侧，
+ * 这是"观测"侧：撞了坑没落经验，界面上必须说出来。
+ *
+ * 判据：失败步 = `ran && !ok && skipped == ""`（跳过是环境事实，如没插设备，不算撞坑）；
+ * `notesPresent=true`（agent 在用飞轮）→ 不提醒。纯函数，便于单测。
+ */
+public func flywheelHintOf(rows: ArrayList<MigrateRow>, notesPresent: Bool): String {
+    if (notesPresent) {
+        return ""
+    }
+    var failed: Int64 = 0
+    for (r in rows) {
+        if (r.ran && !r.ok && r.skipped == "") {
+            failed += 1
+        }
+    }
+    if (failed < 2) {
+        return ""
+    }
+    return "已 ${failed} 步失败而 `.lingqu/notes/` 还是空的——按任务书纪律，让 agent 先落经验（`lingqu-cli notes append` / `diagnose`）再重试（R-1：机制在位 ≠ 会用）"
+}
+
+/**
  * 全部步骤都有结论了吗（0.39.41）。
  *
  * 为什么停滞判定必须让它一票否决：**活干完了，落档本来就不会再变**。
