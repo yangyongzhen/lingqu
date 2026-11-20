@@ -51,3 +51,40 @@
   "平台能力有落地等价物"）；
 - 需要人拍板的取舍走 `lingqu-decision`，计入 A3（人工介入 ≤5 处是验收指标——
   这也是为什么适配优先于降级：降级越多，丢的功能越多）。
+
+## 已知插件的映射配方（初始清单）
+
+> 标注纪律：**实测** = 移植样本上真机验证过；**推断** = 按官方 Kit 文档给出的等价物，
+> 语义与坑未在真机上核过，用之前先按 §4-162 三步（桌面 + 交叉 + `hap`）取证。
+> 撞到清单外的插件：先按上面三层走，走通后**回填本清单**（飞轮第 ②步）。
+
+### 实测过（有真机证据）
+
+| tauri 侧 | 鸿蒙等价物 | 要点 |
+|---|---|---|
+| `rfd` 文件/目录选择 | `DocumentViewPicker`（`@kit.CoreFileKit`） | uri 授权**不覆盖裸路径**；Rust 侧经 `ohos_bridge.rs` + ArkTS 分发器（见 native-ui-bridge.md） |
+| `tauri-plugin-dialog`（alert/confirm/prompt） | ArkWeb 无阻塞对话框 → 应用内对话框 | R2-PORT-012/014（lingqu-dialog.js） |
+| `tauri-plugin-log`（LogDir） | log 插件 `TargetKind::Folder` 指沙箱 | 鸿蒙建 LogDir EPERM，`run()` 直接 panic（§4-175） |
+| 路径类（`app_local_data_dir` 等） | 固定 `/data/storage/el2/base/files` | 鸿蒙返回桌面风格路径**且不报错**（§4-175：别信返回值） |
+
+### 推断（Kit 等价物明确，语义待真机核）
+
+| tauri 侧 | 鸿蒙等价物 | 要点与坑 |
+|---|---|---|
+| `tauri-plugin-notification` | `@kit.NotificationKit`：`notificationManager.publish()` | 先 `requestEnableNotification()` 拿授权；图标/点击跳转字段与 tauri 不一一对应 |
+| `tauri-plugin-clipboard-manager` | `@kit.BasicServicesKit` 的 `pasteboard`（`systemPasteboard`） | 粘贴板数据是 **PasteData** 包装（`createData`/`addTextRecord`），不是裸字符串；隐私弹窗行为待核 |
+| 打开外部应用/URL（`opener` / shell.open） | `startAbility` + Want（`action: ohos.want.action.viewData`，`uri:` 字段） | `cmd /c start` 的老路在鸿蒙侧不存在；Want 的 type/entities 匹配规则待核 |
+| 分享（`tauri-plugin-share` 类需求） | `@kit.ShareKit`：`systemShare.sendRequest`（UIAbility 场景） | 需 UIAbility 上下文，经主线程投递（见铁律） |
+| 深链/协议唤起 | Want 显式/隐式匹配 + `skills` 标签（module.json5 的 `uris`） | tauri 的 `register_url_scheme` 语义要在 ArkTS 侧重新声明 |
+| 自定义协议（`register_uri_scheme_protocol`） | ArkWeb `onInterceptRequest`（`@ohos.web`） | 资源仍来自 `.so` 内嵌 dist；响应流构造待核 |
+
+### 无系统级等价物（预期 limit，降级也要给最小替代）
+
+| tauri 侧 | 鸿蒙现状 | 最小替代 |
+|---|---|---|
+| `tauri-plugin-updater`（自动更新） | 三方应用**没有**自更新系统 API；HAP 分发走应用市场/企业渠道 | 沙箱内查新（HTTP 对比版本）+ 提示用户下载新 HAP；**别写自安装**（需系统权限，走这个路必撞墙） |
+| 系统托盘（tray） | PC 端三方应用无系统托盘 API | 常驻通知（`notificationManager`）+ 应用内控制入口；窗口最小化语义改为回桌面 |
+| 全局快捷键（`tauri-plugin-global-shortcut`） | 三方应用无全局按键拦截 API | 应用内快捷键（ArkWeb keyevent）；系统级需求登记 limit |
+| 自启动（autostart） | 需系统签名权限，三方不可用 | limit：文档写清"手动打开"，别试 |
+
+> 清单外的插件先回本文件三层路径；真机验通一条就回填一行——**这条清单自己就是飞轮的一部分**。
