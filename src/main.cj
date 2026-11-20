@@ -6070,6 +6070,11 @@ public class AutoPortStartCommand <: CommandHandler {
         // 页面重连一次就把整轮 40+ 次工具调用作废，代价太大（0.39.7 实测）。
         // 这条配置不该让用户手改，启动时补上；结果回投给界面便于断言。
         let keepRunning = ensureCjhKeepRunning(userHomeDir())
+        // MCP 知识库（0.39.130）：cjh 1.6.13 支持 transport:"http" 后，把华为 HarmonyOS
+        // 开发者知识库端点注册进 cjh 工具箱——agent 干鸿蒙移植就有权威资料可查，
+        // 不再只靠模型记忆。已有同名配置不覆盖；幂等。
+        let mcpKms = ensureCjhMcpKms(userHomeDir())
+        eprintln("[lingqu][autoport] MCP 知识库（${MCP_KMS_SERVER_NAME}）：${mcpKms}")
         // 轮次预算（0.39.53）：整应用迁移实测 41 轮就撞上 cjh 默认的 max_iterations=40，
         // 回合被截断、agent 没机会收尾（juCang 现场就是这样停住的）。
         // 0.39.82（用户实测 62/40 停了）：原来只调 ensureCjhIterationBudget——它写盘成功就返回

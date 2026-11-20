@@ -373,13 +373,117 @@ public func enforceIterBudgetBeforeRun(home: String, target: Int64): String {
 }
 
 // ============================================================
-// 接入协议（0.39.62）：openai 兼容 / anthropic
+// MCP 远程知识库（0.39.130）：cjh 1.6.13 支持 transport:"http" 后，
+// 把华为 HarmonyOS 开发者知识库端点补进 cjh 的工具箱
 // ============================================================
+//
+// 背景：lingqu 的核心方向是"agent 干活"（D-015），agent 干鸿蒙移植需要权威的
+// HarmonyOS 开发者知识——华为把这块以 Streamable HTTP MCP 端点对外提供。
+// cjh 1.6.13（PR #13）起 `mcp_servers` 支持 `transport: "http"`（单次 POST JSON-RPC），
+// 于是这条知识库可以纯配置接入，不需要 lingqu 侧写任何调用代码。
+//
+// 纪律与轮次预算同款：定点文本修补、不重排 JSON、先备份；**已有的同名服务器
+// 绝不覆盖**（用户可能自己调过 url/env），幂等。
+
+/** 华为 HarmonyOS 开发者知识库 MCP 端点（服务器名注册进 cjh 的名字） */
+public let MCP_KMS_SERVER_NAME: String = "harmonyos_developer_knowledge"
+
+/** 华为 HarmonyOS 开发者知识库 MCP 端点地址（Streamable HTTP） */
+public let MCP_KMS_SERVER_URL: String = "https://connect-api.cloud.huawei.com/api/developerknowledge/mcp"
+
+/**
+ * 辅助：定位 `mcp_servers` 段对象开括号之后的下标（插入点）；没有该段给 None。
+ */
+func mcpServersInsertAt(json: String): ?Int64 {
+    let secKey = "\"mcp_servers\""
+    let ki = match (json.indexOf(secKey)) {
+        case Some(v) => v
+        case None => return None
+    }
+    let bytes = json.toArray()
+    var i = ki + secKey.size
+    while (i < Int64(bytes.size) && bytes[i] != 58) { i += 1 }   // 冒号
+    while (i < Int64(bytes.size) && bytes[i] != 123) { i += 1 }  // '{'
+    if (i >= Int64(bytes.size)) {
+        return None
+    }
+    return Some(i + 1)
+}
+
+/**
+ * 纯函数：把一个 http 传输的 MCP 服务器注册进 settings JSON 的 `mcp_servers` 段
+ * （幂等、定点修补、不重排 JSON、不覆盖已有同名服务器）。
+ *
+ * - 已有同名服务器（`"name"` 键出现）→ 原样返回（不猜用户意图）
+ * - 有 `mcp_servers` 段 → 在该对象开头插入一行
+ * - 没有 `mcp_servers` 段 → 整段插到最外层 `{` 之后
+ * - 文本不可用 → 原样返回
+ */
+public func ensureMcpHttpServer(json: String, name: String, url: String): String {
+    if (json.trimAscii().size == 0 || name.trimAscii().size == 0 || url.trimAscii().size == 0) {
+        return json
+    }
+    let nameKey = "\"" + name + "\""
+    if (json.contains(nameKey)) {
+        return json
+    }
+    let entry = "\"${name}\": { \"transport\": \"http\", \"url\": \"${url}\" }"
+    // 已有 mcp_servers 段：在该对象的 `{` 之后插入
+    let at = mcpServersInsertAt(json)
+    if (let Some(at) <- at) {
+        return json[0..at] + "\n    ${entry}," + json[at..]
+    }
+    // 没有 mcp_servers 段：整段插到第一个 '{' 之后
+    let brace = match (json.indexOf("{")) {
+        case Some(v) => v
+        case None => return json
+    }
+    let at2 = brace + 1
+    return json[0..at2] + "\n  \"mcp_servers\": {\n    ${entry}\n  }," + json[at2..]
+}
+
+/**
+ * 动作层：把华为开发者知识库 MCP 端点写进 `~/.cjh/settings.json`（先备份；如实回投）。
+ *
+ * @return `already`（已注册）/ `file:written`（已写入，需重启 cjh 生效）/
+ *         `no-settings` / `no-home` / `error:…`
+ */
+public func ensureCjhMcpKms(home: String): String {
+    let p = cjhSettingsPathOf(home)
+    if (p.size == 0) {
+        return "no-home"
+    }
+    if (!exists(Path(p))) {
+        return "no-settings"
+    }
+    try {
+        let before = String.fromUtf8(File.readFrom(p))
+        let after = ensureMcpHttpServer(before, MCP_KMS_SERVER_NAME, MCP_KMS_SERVER_URL)
+        if (after == before) {
+            return "already"
+        }
+        // 备份：settings.json.bak.mcp（覆盖写；内容就是"改之前"）
+        let bak = p + ".bak.mcp"
+        try {
+            File.writeTo(bak, before.toArray())
+        } catch (e: Exception) {
+            let _ = e
+        }
+        File.writeTo(p, after.toArray())
+        return "file:written"
+    } catch (e: Exception) {
+        return "error:" + e.toString()
+    }
+}
 //
 // 为什么必须落文件而不能走 `POST /api/settings`：cjh 的 `applySettingsUpdate` 白名单里
 // **没有** provider_protocol（它只认 baseUrl/model/apiKey/温度/tokens/轮次…），协议是
 // "启动时读一次配置文件"的字段。所以这里与轮次预算同款做法：**定点文本修补 + 先备份**，
 // 不重排 JSON（重排会丢掉用户手写的注释键、把格式全冲掉），并如实回投"需重启 cjh 生效"。
+
+// ============================================================
+// 接入协议（0.39.62）：openai 兼容 / anthropic
+// ============================================================
 
 /** 协议取值：只认这两个（其它一律按"保持不变"处理，绝不猜） */
 public let CJH_PROTOCOLS: Array<String> = ["openai", "anthropic"]

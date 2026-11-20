@@ -679,11 +679,10 @@ func cjhBinName(): String {
  */
 @When[os == "Windows"]
 let CJH_VENDOR_FILES: Array<(String, String)> = [
-    // cjh v1.6.12（selfcontained 五件套：exe + 4 DLL；4 个 DLL 与 1.6.5 逐字节相同）
-    // 0.39.84 起 exe 换成 PR #12（fix/bash-timeout-kill-process-group @9a4f6d5）的本地构建：
-    // 超时收尾按进程组杀整棵树，避免 killSession 只收 bash 启动器、p.wait 挂在孤儿管道上（§4-131）。
-    // 官方 1.6.12 是 2cb384f0…；这份含修复，特征串 `sessionPgFile` / `/tmp/cjh-sess-`。
-    ("cjh.exe", "7dda9caf21148a2e9e6b0be5c47d2027e5b561fb83e756077e5b907f5fc990d1"),
+    // cjh v1.6.13（selfcontained 五件套：exe + 4 DLL；4 个 DLL 与 1.6.5 逐字节相同）
+    // 1.6.13 起换成官方发布版（含 PR #13 的 MCP Streamable HTTP 传输，PR #12 的进程组杀树已随主线发布）：
+    // exe a463bef…；1.6.12 本地构建是 7dda9caf…。
+    ("cjh.exe", "a463beffd016780021c4ae3b3a336e6874a4408aed7248cb2bc67aa3fc8ce26c"),
     ("libcangjie-runtime.dll", "03f4d59a13c7fc1d71523bdd42a05587657105aff14c8288adfdd8fbe5bea089"),
     ("libboundscheck.dll", "07b33dd3de22489b442cc32f0fe8ddfc80b753443b17fb2053133b2e7ffb6c78"),
     ("libssl-3-x64.dll", "bbaf8a8c37b4cfdd7fe5feee9ff1d0072078f430bb5ef2b3da38a600f4039b03"),
@@ -752,7 +751,7 @@ public func cjhVendorVerified(dir: String): Bool {
 
 /** Linux 版随包二进制的 SHA256：单文件、静态链接，没有随行 DLL（与 Windows 形态不同） */
 @When[os != "Windows"]
-let CJH_LINUX_SHA: String = "028992bebc92e9bf9e92d063fdc20e1b21ae385f3cda4bbe507e0ff8c832dfbf"
+let CJH_LINUX_SHA: String = "bc982f7455c84930f728d198f870e00dc92a8b4b347be3e688aac1e379a34b50"
 
 @When[os != "Windows"]
 public func cjhVendorVerified(dir: String): Bool {

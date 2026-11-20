@@ -238,3 +238,46 @@ public func testIterBudgetSatisfiedOf(): Unit {
     // 文件高、live 低（引擎刚起还没应用）→ 没满足，需重启才能生效那一路
     @Assert(iterBudgetSatisfiedOf(40, 120, 120), false)
 }
+
+// ------------------------------------------------------------
+// MCP HTTP 服务器注入（ensureMcpHttpServer / ensureCjhMcpKms）
+// ------------------------------------------------------------
+
+@Test
+public func testMcpHttpInsertsIntoExistingMcpServersSection(): Unit {
+    let json = "{\n  \"model\": \"x\",\n  \"mcp_servers\": {\n    \"local\": { \"transport\": \"stdio\", \"command\": \"npx\" }\n  }\n}"
+    let out = ensureMcpHttpServer(json, "harmonyos_developer_knowledge", "https://example.com/mcp")
+    // 新服务器插进已有段里
+    @Assert(out.contains("\"harmonyos_developer_knowledge\""), true)
+    @Assert(out.contains("\"transport\": \"http\""), true)
+    @Assert(out.contains("\"url\": \"https://example.com/mcp\""), true)
+    // 原有服务器与字段不丢
+    @Assert(out.contains("\"local\""), true)
+    @Assert(out.contains("\"model\": \"x\""), true)
+    @Assert(out.contains("\"command\": \"npx\""), true)
+}
+
+@Test
+public func testMcpHttpAddsWholeSectionWhenAbsent(): Unit {
+    let json = "{\n  \"model\": \"x\"\n}"
+    let out = ensureMcpHttpServer(json, "harmonyos_developer_knowledge", "https://example.com/mcp")
+    @Assert(out.contains("\"mcp_servers\""), true)
+    @Assert(out.contains("\"harmonyos_developer_knowledge\""), true)
+    @Assert(out.contains("\"model\": \"x\""), true)
+}
+
+@Test
+public func testMcpHttpIdempotentWhenServerExists(): Unit {
+    let json = "{\"mcp_servers\": {\"harmonyos_developer_knowledge\": { \"transport\": \"http\", \"url\": \"https://mine.example/mcp\" }}}"
+    // 已有同名服务器：绝不覆盖（用户可能自己调过 url/env）
+    @Assert(ensureMcpHttpServer(json, "harmonyos_developer_knowledge", "https://example.com/mcp"), json)
+}
+
+@Test
+public func testMcpHttpRejectsEmptyInput(): Unit {
+    @Assert(ensureMcpHttpServer("", "a", "https://e.com"), "")
+    @Assert(ensureMcpHttpServer("{}", "", "https://e.com"), "{}")
+    @Assert(ensureMcpHttpServer("{}", "a", ""), "{}")
+    // 没有 '{' 的畸形文本：原样返回
+    @Assert(ensureMcpHttpServer("not json", "a", "https://e.com"), "not json")
+}
