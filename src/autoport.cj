@@ -260,6 +260,8 @@ public func directiveClauses(): ArrayList<DirectiveClause> {
         "不把冒烟单列，业务功能失败会被算进移植通过率（§4-63 第三态）"))
     out.add(DirectiveClause("## 纪律", DIRECTIVE_WHEN_ALWAYS,
         "平台限制≠失败、未验证≠通过、禁全盘搜索——不写就会谎报或挂死（2026-11-07 事故）"))
+    out.add(DirectiveClause("## 插件不满足：三层适配优先于降级", DIRECTIVE_WHEN_ALWAYS,
+        "外部反馈（2026-11-20）：轻易降级就丢原软件功能特性；不写清适配路径，agent 撞到无对应物的插件只会降级"))
     out.add(DirectiveClause("## 交叉编译的硬前置", DIRECTIVE_WHEN_ALWAYS,
         "缺 `.cargo/config.toml` 的 `[env]` 段时 cc-rs 必然失败，不说清它会去改 Rust 源码"))
     out.add(DirectiveClause("## TLS 栈", DIRECTIVE_WHEN_ALWAYS,
@@ -497,6 +499,25 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "（见「装配 HAP 前：鸿蒙脚手架必须先生成」），不要满盘搜、不要换个盘再搜；\n"
     d += "- 单条命令要能自己结束：别写会长时间挂住的扫描/交互式命令；"
     d += "估算超过 2 分钟的命令先说明理由再跑。\n\n"
+
+    // 2026-11-20 外部反馈：tauri→鸿蒙移植遇到鸿蒙侧没有的插件/能力时，不要轻易降级——
+    // 降级就丢原软件的功能特性。三层适配路径（差异层 → 条件编译 → API 映射）写进任务书，
+    // 技能 references（plugins.md）同步；降级是最后手段且必须登记（limit + 人工介入 A3）。
+    d += "## 插件不满足：三层适配优先于降级\n"
+    d += "- 遇到鸿蒙侧没有对应物的 tauri 插件 / 平台 API，**按顺序走三层适配**，降级是最后手段：\n"
+    d += "  ① **wry/tao 差异层**：先查 fork 里有没有 OHOS 分支实现——很多 desktop 方法只是被 "
+    d += "`#[cfg(desktop)]` 门控（`center`/`maximizable`/`decorations`…），照 `#[cfg(not(target_env = \"ohos\"))]` "
+    d += "拆链即可，**别把\"方法不存在\"当成\"平台没有\"**；能力实在缺就在 fork（github.com/yangyongzhen/tauri / "
+    d += "openharmony-ability）建 `fix/<工程>-<问题>` 分支补，patch rev 钉住。\n"
+    d += "  ② **平台条件编译补丁**：依赖层的差异用 `cfg(target_env = \"ohos\")` 依赖段、`[patch.crates-io]`、"
+    d += "特性替换解决（同 R2-PORT-005/006/016 的口径——换等价实现，**顺手关掉的默认特性要补回来**）。\n"
+    d += "  ③ **API → ArkWeb/鸿蒙系统能力映射**：原生能力（选文件/分享/开应用）用 `ohos_bridge.rs` + ArkTS "
+    d += "分发器桥到系统等价物（`DocumentViewPicker` 等），落地要双侧（Rust 调桥 + ArkTS 有同名 cmd 分支）；"
+    d += "web 能力找 ArkWeb 等价物（localStorage polyfill、confirm/prompt→应用内对话框）。\n"
+    d += "- **降级（登记为 limit）之前必须能说清**：三层为什么都走不通。降级要如实登记（落档 limit + "
+    d += "必要时让人拍板），**静默砍功能不算限制，算移植失败**。\n"
+    d += "- 判\"平台没有某 API\"前先看它落在 fork 源码的**哪个 impl 块**、有没有被 cfg 门控"
+    d += "（§4-174：报错说\"没有\"≠ 真的没实现）。\n\n"
 
     d += "## 交叉编译的硬前置（缺了必然失败）\n"
     d += "- 交叉编译依赖工程里的 `src-tauri/.cargo/config.toml` 两段：\n"
