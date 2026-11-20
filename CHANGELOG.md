@@ -5,6 +5,31 @@
 
 ---
 
+## [0.39.130] - 2026-11-20
+
+**随包 cjh 升级 1.6.13（MCP Streamable HTTP）+ 内置引擎接入华为 KMS 知识库 + 任务书「三层适配优先于降级」纪律（外部反馈采纳）。Linux 会话（AGENTS §4-31/32 口径：门禁走脚本默认 SDK）。**
+
+### Added
+- **MCP 远程知识库接入**：`cjh_settings.cj` 新增 `ensureMcpHttpServer`（纯函数：幂等、定点修补、不重排 JSON、已有同名服务器不覆盖）与 `ensureCjhMcpKms`（动作层：先备份 `settings.json.bak.mcp`），把 `harmonyos_developer_knowledge`（华为 HarmonyOS 开发者知识库，`transport:"http"`）注册进 `~/.cjh/settings.json`；autoport 启动链挂载注入，结果回投日志。4 个纯函数单测（插已有段 / 补整段 / 幂等 / 非法输入）
+- **任务书新必备小节**「插件不满足：三层适配优先于降级」（外部反馈 2026-11-20 采纳）：① wry/tao 差异层（fork 先行、先查 cfg 门控）② 平台条件编译补丁（换等价实现、默认特性补回）③ API → ArkWeb/系统能力映射（双侧落地）；降级是最后手段且必须登记 limit。`directiveClauses()` 18→19 条，`docs/任务书规范.md` §3 同步（单测逐字断言）
+- **技能 `references/plugin-adaptation.md`**：三层适配完整方法论 + 已知插件映射配方初始清单（实测 4 / 推断 6 / 无系统级等价物 4，标注纪律与回填要求）；`SKILL.md` 索引同步
+
+### Changed
+- **随包 cjh 1.6.12 → 1.6.13**（§4-131 三处联动）：vendor 双端二进制换官方发布（linux `bc982f74…` / win exe `a463bef…`，4 个 DLL 与 1.6.12 逐字节相同），`SHA256SUMS` 与 `CJH_VENDOR_FILES` / `CJH_LINUX_SHA` 常量同步。1.6.13 含 PR #13（MCP Streamable HTTP 传输）与 PR #12（进程组杀树，已随主线发布）
+
+### Verified（实机证据）
+- `./scripts/test.sh` 六道全绿（test 631 例，期间修 `testClausesAreWellFormed` 条款数断言 18→19）
+- KMS 端点协议级直连：POST `initialize` + `tools/list` 全通（`KMS统一知识库-现网` v1.0.0，工具 `searchDocuments` + `getDocumentsById`）
+- **KMS 会话级闭环**：真实 Key 跑 `--mode json`，agent 自主 `searchDocuments` → `getDocumentsById` 检索《UIAbility组件生命周期》并精确作答——鸿蒙资料源对 agent 可用
+- linux vendor 二进制 `--version` 实测 `cjh v1.6.13`
+
+### 未验证（如实标注，见 `docs/会话交接.md` §八）
+- Windows 侧 vendor 1.6.13 实跑（哈希已核，运行期未验）
+- 「三层适配」纪律的行为验收（换工程重跑 autoport）
+- 插件映射配方"推断"档 6 条待真机核
+
+---
+
 ## [0.39.129] - 2026-11-20
 
 **Linux 会话三件套：`app_data_dir` 判据沿 helper 追一层（0.39.128 唯一没修的判据缺陷）+ `R2-DEPS-015` 回填 + R-1 监管态提醒；顺带适配框架 2.4.0 的 `readBytes` 接口、演示页落地收尾。**
