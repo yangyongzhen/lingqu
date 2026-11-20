@@ -50,7 +50,8 @@ func fullDirectiveOf(): String {
 public func testClausesAreWellFormed(): Unit {
     let clauses = directiveClauses()
     // 清单不能是空的——空清单会让所有同源断言变成假绿（§4-136 假绿同族）
-    @Expect(clauses.size, 18)
+    // 0.39.130：18 → 19（新增「插件不满足：三层适配优先于降级」，外部反馈采纳）
+    @Expect(clauses.size, 19)
     let seen = ArrayList<String>()
     for (c in clauses) {
         @Assert(c.section.size > 0)
