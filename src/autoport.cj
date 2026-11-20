@@ -262,6 +262,9 @@ public func directiveClauses(): ArrayList<DirectiveClause> {
         "平台限制≠失败、未验证≠通过、禁全盘搜索——不写就会谎报或挂死（2026-11-07 事故）"))
     out.add(DirectiveClause("## 插件不满足：三层适配优先于降级", DIRECTIVE_WHEN_ALWAYS,
         "外部反馈（2026-11-20）：轻易降级就丢原软件功能特性；不写清适配路径，agent 撞到无对应物的插件只会降级"))
+    out.add(DirectiveClause("## 鸿蒙知识库（MCP 工具）", DIRECTIVE_WHEN_ALWAYS,
+        "0.39.130：cjh 已接入华为开发者知识库（searchDocuments/getDocumentsById），但任务书不写\"何时该查\"，" +
+            "agent 会靠模型记忆猜 API 语义——猜错就白烧一轮编译"))
     out.add(DirectiveClause("## 交叉编译的硬前置", DIRECTIVE_WHEN_ALWAYS,
         "缺 `.cargo/config.toml` 的 `[env]` 段时 cc-rs 必然失败，不说清它会去改 Rust 源码"))
     out.add(DirectiveClause("## TLS 栈", DIRECTIVE_WHEN_ALWAYS,
@@ -518,6 +521,20 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "必要时让人拍板），**静默砍功能不算限制，算移植失败**。\n"
     d += "- 判\"平台没有某 API\"前先看它落在 fork 源码的**哪个 impl 块**、有没有被 cfg 门控"
     d += "（§4-174：报错说\"没有\"≠ 真的没实现）。\n\n"
+
+    // 0.39.130：cjh 1.6.13 接入华为开发者知识库（MCP http 传输）后，agent 有了权威的
+    // 鸿蒙资料源。但"有工具"≠"会用"——不写清何时该查，它会靠模型记忆猜 API 语义
+    //（与 §4-130 同族：能力在手、说明书没给）。
+    d += "## 鸿蒙知识库（MCP 工具，优先于记忆）\n"
+    d += "- 你有华为开发者知识库检索工具（`searchDocuments` 搜索鸿蒙 RAG → 拿文档标识，"
+    d += "`getDocumentsById` 取文档全文，均来自 `harmonyos_developer_knowledge` 服务器）。\n"
+    d += "- **以下场景先查知识库、别靠记忆猜**：① 鸿蒙 API 的准确签名/回调序列/约束（如某 Ability"
+    d += " 的生命周期、某 Kit 的权限要求）；② 报错语义与处置（错误码、hilog 关键词）；"
+    d += " ③ ArkUI/ArkWeb 组件行为差异；④ 版本相关的行为变化。\n"
+    d += "- 用法：`searchDocuments`（query 用中文关键词 + topK）→ 从结果的 `parent` 字段拿文档名 →"
+    d += " `getDocumentsById`（最多 10 个）取全文。\n"
+    d += "- **结论要带出处**：答 API 语义时注明来自哪篇文档；知识库查不到的再靠记忆，并注明"
+    d += " \"知识库未命中，按经验推断\"。\n\n"
 
     d += "## 交叉编译的硬前置（缺了必然失败）\n"
     d += "- 交叉编译依赖工程里的 `src-tauri/.cargo/config.toml` 两段：\n"
