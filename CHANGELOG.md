@@ -5,6 +5,29 @@
 
 ---
 
+## [0.39.132] - 2026-11-21
+
+**EcoPaste 平台 API 缺口收口：`app_data_dir` 的判据假 fail 修掉（helper 追两层）+ `tauri_plugin_opener` 接 ArkTS Want 桥——platform-api 从「5 处 / 2 处空壳」变 limit，移植验收 66% → 80%。**
+
+### Fixed
+- **平台 API 判据只追一层 helper**（`verify.cj` 新增 `helperChainLandedOf` + `HELPER_TRACE_DEPTH=2`；`verify_feed.cj` 新增 `fillHelperSrcsDeep`）：EcoPaste 的真实链是 `commands/storage.rs` → `core::paths::app_data_dir()`（**平台中立**，体内没有 cfg）→ `bootstrap_dir()`（鸿蒙分支固定落 `/data/storage/el2/base/files`）。旧判据在第二层前停住 ⇒ `app_data_dir` 被冤枉成「空壳」、platform-api 判 fail（§4-157 同族：观测缺陷当功能缺陷）。现在**追两层且把链条写进证据**（「它调的 `app_data_dir()` 又调的 `bootstrap_dir()` 有落地的鸿蒙实现」），带防环与深度上限——第三层不算（越深越容易把无关分支算成落地 = 假绿）
+- **第二层抽取放宽到裸调用**（新增 `helperCallNamesInLoose` / `helperCallNamesOfLoose`）：`helperCallNamesIn` 原先只认**路径限定**调用（`foo::bar(`），而 helper 体内多为裸调用（`bootstrap_dir()?`）⇒ 第二层根本抽不出来。第一层沿用 0.39.129 的严格口径（行为不变），第二层起用宽松口径（排除方法调用与关键字，仍靠"只收工程内真实定义的函数"兜底）
+- **`R2-PORT-008` 的跳过判据只看「键在不在」**（`toolchain.cj` 新增 `tomlHasBareBackslashOf` / `fileTextOf`）：EcoPaste 的 `.cargo/config.toml` 是旧版本生成的，`linker = "D:\oh\…"` 里的 `\o` 是非法 TOML 转义、`--sysroot=` 还写成了 `<路径>=<路径>` ⇒ **cargo 连 manifest 都读不进去（exit=101）**；而 `[env]` 与 `CC_aarch64_unknown_linux_ohos` 两个键都在 ⇒ 永远跳过、永远不修（§4-122：文件在 ≠ 内容对）。现在跳过要求「内容合法（无裸反斜杠）**且** `link-arg=--sysroot=` 形态正确」，**带我们标记但内容不合法时整份重写**（不降 guide——那文件本来就是我们生成的）
+
+### Verified（EcoPaste 实测，2026-11-21）
+- **platform-api：5 处 / 2 处空壳 → 0 处空壳（`verdict=limit`）**，证据逐条翻转：`tauri_plugin_opener：2 个命令在鸿蒙侧都有落地的实现`、`app_data_dir：2 个命令在鸿蒙侧都有落地的实现`
+- **移植验收通过率 66%（4/6）→ 80%（4/5）**（platform-api 转 limit 后按平台限制剔出分母）
+- **opener 桥双侧落地**：Rust 侧新增 `src-tauri/src/ohos_bridge.rs`（`open_url` / `open_path` / `reveal_in_dir`，经 `run_on_main_thread` 投递主线程后调 ArkTS `__ohos_dispatch`）；4 处调用点（`open_clipboard_item_link`、`reveal_clipboard_item`、`open_external_url`、`open_preference_directory`）加鸿蒙分支；ArkTS 侧 `EntryAbility.ets` 挂分发器（`open_url` / `open_path` → `startAbility` + `ohos.want.action.viewData`）
+- **编译与审查两道都过**：`cargo build --release --target aarch64-unknown-linux-ohos` **exit=0**（1m07s）；`lingqu-cli hap` → `gates.passed=true`、`expectedSo=libeco_paste_lib.so` 装配进 `libs/arm64-v8a`、`signed=true`——**hvigor 审 ArkTS 通过**（§4-162 的第三步，cargo 不审 ArkTS）
+- 单测 638 → **639**（新增 TOML 合法性判据用例）
+
+### 未验证（如实标注）
+- **真机端到端点按**：Rust/ArkTS 两侧都编过了，但没有重新部署到设备上点「打开链接 / 在文件夹中显示」，实际行为未取证（设备在线 `192.168.3.105:46163`）
+- `flywheelHint`（R-1 监管态提醒）实跑未验：EcoPaste 的 `.lingqu/notes` 目前为空、前置条件在，但界面探针没跑
+- `reveal_item_in_dir` 在鸿蒙**降级**为"打开父目录"（鸿蒙没有"在文件管理器中定位某个文件"的公开能力）——是降级不是等价物
+
+---
+
 ## [0.39.131] - 2026-11-21
 
 **随包 cjh 1.6.13 → 1.6.18（官方发布产物整体换血），Windows 侧首次实跑取证；顺带修掉 `SHA256SUMS` 在 Windows 上必然假红的行尾问题。**
