@@ -5,6 +5,37 @@
 
 ---
 
+## [0.39.135] - 2026-11-21
+
+**dbx（27 crate 的巨型 Tauri workspace）攻坚：交叉编译打通；`t2h:build` 修掉两处会让它"假失败 / 假红"的缺陷。**
+
+### Fixed
+- **`t2h:build` 连桌面 bin 一起编 ⇒ cdylib 编成功了也判失败**：dbx 的 bin 在链接阶段让 rustc 直接崩
+  （`exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN`），于是 `exitCode=101`、落档写"构建失败"，
+  而 `libdbx_lib.so` 其实已经产出来了。改为 `cargo build --release --target <triple> --lib`——
+  鸿蒙 HAP 要的是 **cdylib**，桌面 bin 不是迁移产物
+- **`t2h:build` 不尊重工程的 `build.target-dir`**：dbx 因 C 盘只剩 ~2G 把产物配到 `E:/tmp/dbx-target`，
+  工具却仍按 `<srcDir>/target/<triple>/release` 找 `.so` ⇒ `exitCode=0` 却报
+  「编译成功但没产出 libdbx_lib.so」（§4-151 同族：**找错位置 ≠ 没产出**）。新增纯函数
+  `targetDirInCargoConfigOf` / `parentDirOf` / `cargoTargetRootOf` / `releaseDirOf`：
+  从 `srcDir` 向上 4 层找 `.cargo/config.toml` 的 `[build] target-dir`，`.so` 定位与产物闸共用同一口径
+
+### Verified
+- dbx：`cargo build --release --target aarch64-unknown-linux-ohos --lib` **exit=0**，
+  产出 `libdbx_lib.so` **97,268,248 字节**
+- `t2h:build` → `exitCode=0 / errorCount=0 / soPath=E:/tmp/dbx-target/…/libdbx_lib.so`、
+  `assetDiff.matched=574`
+
+### 未完成（本轮到时间上限，下一轮接着做）
+- **前端指纹闸仍红**：`staleInSo=5 / missingInSo=25`。顺序必须是
+  「先 `pnpm build` → 再触发 tauri build script 重跑（`touch src-tauri/tauri.conf.json`）」；
+  只 `touch lib.rs` 不会重嵌前端（§4-47 同族）
+- dbx 的 `sign / hap / deploy / verify` **未跑**：它还没有鸿蒙脚手架（`gen/ohos`），
+  需先 `cargo tauri ohos init`（`t2h:hap` 会做），并补 `crate::dialog` 的 ArkTS Picker 半边
+  （Rust 侧 `ohos_bridge.rs` 已写，ArkTS 分发器未写）
+
+---
+
 ## [0.39.134] - 2026-11-21
 
 **移植报告不再"假绿"：平台能力的实测结论压过静态推断、失败项原因进报告——EcoPaste 从 100% 回到真实的 85%。**

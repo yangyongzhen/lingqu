@@ -76,6 +76,21 @@ fork 的 `tauri-runtime-wry` 按 registry 版本声明（0.56.0/0.36.0），其 
 
 main 已重构为 1.0.0-beta.1（webview 拆成独立插件 crate），而 wry/tauri 的 OHOS 分支仍要求 0.3.0 的 webview feature → patch 到 fork 的 feat/0.3.0 分支（= upstream 295a276）。**cargo 不允许 patch 指向同源不同 rev**，所以从 `[patch."harmony-contrib..."]` 改源。
 
+### 三个「写得对却不生效」的坑（2026-11-21 dbx 实测）
+
+1. **`[patch]` 必须写在 workspace 根**。写在成员（如 `src-tauri/Cargo.toml`）里会被 cargo **完全忽略**——
+   日志只有一行 `warning: patch for the non root package will be ignored`，然后 tauri 仍是 registry 版
+   ⇒ GTK 链照旧进图 ⇒ 编译死在下游（`glib-sys`），而**根因在 patch 位置**。
+2. **patch 表不能混放**。把 `tauri` / `tokio-postgres` 之类写进 `[patch."https://…"]` 表里，
+   cargo 报的是「patch 未被使用 / perhaps you meant crates-io」，**不会报错停止**、只是静默失效。
+   一张表只放该 URL 对应的 crate（`[patch.crates-io]` 放 registry 的，git 表放该 git 源的）。
+3. **`.cargo/config.toml` 有作用域**：cargo 只读 **CWD 及其父目录** 的配置。`src-tauri/.cargo/config.toml`
+   里配的 `CC_aarch64_unknown_linux_ohos` / `AR` / `sysroot`，**从 workspace 根跑 cargo 就全部失效**
+   ⇒ `ring` 这类 C 依赖立刻失败（输出只有 `cargo:rerun-if-env-changed=…` 然后 exit=1，很有误导性）。
+
+**判据**：patch 改完先 `cargo tree --target aarch64-unknown-linux-ohos -i <crate>` 确认**来源真的变了**
+（显示 `path` / `git+…`），再看编译进度；只看"编到哪一步"容易把"patch 没生效"当成"环境问题"。
+
 ## 依赖兼容性速查（lingqu `lingqu.deps` 规则表，判定必带出处）
 
 | crate | 结论 | 说明 |
