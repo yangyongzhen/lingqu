@@ -27,6 +27,15 @@
 - **`bootstrap_dir` 的鸿蒙分支真机可见**：设置 → Data 页 `Data Directory` 显示
   `/data/storage/el2/base/files/prod`——本条目判据修复所依据的那条路径，真机上确实生效
 
+- **R-1 首次取证（2026-11-21，应用内对 EcoPaste 跑「AI 一键迁移」）**：① **agent 自写经验已发生**——
+  `.lingqu/notes/EcoPaste.md` 落了 2 条四段式真经验（`trace.jsonl` 里两次
+  `notes --action append --body .lingqu/note-in{,2}.json`，返回 `[notes] added:…`），首条正是
+  「`build` 报 Cargo.toml manifest 解析失败：`.cargo/config.toml` linker 反斜杠未转义」；
+  ② **监管提醒跟随事实**——进入时 `flywheelHint` 非空（「已 2 步失败而 notes 还是空的」），
+  notes 落实后**自动变空**；③ 顺带验到 `build` 从 `exit=101` 转 **`exit=0 / errorCount=0 / passed=true`**
+  （本条目 `R2-PORT-008` 修复在真实链路里的效果）。仍未发生：`misses.jsonl`（本轮没撞未命中指纹）、
+  用户级 `~/.lingqu/flywheel/`（未跑 `notes archive --to user`）、自主发 PR（无 token）
+
 ### 沉淀（同批收尾：把可复用的东西落到能复利的层级）
 - **技能 `references/plugin-adaptation.md`**：`tauri-plugin-opener` 从「推断」升到「实测」——
   `open_url` 有真机证据（hilog + 前台切浏览器）、`open_path` 明确标"只编过、真机未取证"、
