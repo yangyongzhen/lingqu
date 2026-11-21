@@ -2494,7 +2494,11 @@ public class BuildCommand <: CommandHandler {
                 }
             }
             try {
-                let argv = ["build", "--release", "--target", target, "--message-format=json"]
+                // `--lib`：鸿蒙 HAP 要的是 cdylib（`lib<name>.so`），桌面 bin 不是迁移产物。
+                // 不加它会连 bin 一起编：dbx 实测 bin 链接阶段 rustc 直接崩
+                // （`exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN`），
+                // 于是 exitCode=101、落档写"构建失败"，而 `.so` 其实已经产出来了（假失败）。
+                let argv = ["build", "--release", "--target", target, "--lib", "--message-format=json"]
                 let (code, rawOut, rawErr) = executeWithOutput(cargoBin, argv, workingDirectory: Path(srcDir))
                 exitCode = code
                 stdoutText = String.fromUtf8(rawOut)
@@ -2678,6 +2682,99 @@ func resolveCargoBin(): String {
     return ""
 }
 
+/** 取父目录（`/` 与 `\` 都认；到根/无分隔符返回空串）。 */
+public func parentDirOf(p: String): String {
+    let bs = p.toArray()
+    var i = Int64(bs.size) - 1
+    while (i >= 0) {
+        if (bs[i] == 47 || bs[i] == 92) {
+            if (i == 0) {
+                return ""
+            }
+            return p[0..i]
+        }
+        i -= 1
+    }
+    return ""
+}
+
+/**
+ * 从 cargo 配置文本里取 `[build] target-dir`（纯函数，可单测；找不到给空串）。
+ * 只认 `[build]` 段里的这一项——`[env]` 段同名前缀不算。
+ */
+public func targetDirInCargoConfigOf(text: String): String {
+    var inBuild = false
+    for (raw in text.split("\n")) {
+        let line = raw.trimAscii()
+        if (line.size == 0 || line.startsWith("#")) {
+            continue
+        }
+        if (line.startsWith("[")) {
+            inBuild = (line == "[build]")
+            continue
+        }
+        if (!inBuild || !line.startsWith("target-dir")) {
+            continue
+        }
+        let eqOpt = line.indexOf("=")
+        if (eqOpt.isNone()) {
+            continue
+        }
+        let eq = eqOpt.getOrThrow()
+        var v = line[eq + 1..].trimAscii()
+        let hashOpt = v.indexOf("#")
+        if (hashOpt.isSome()) {
+            v = v[0..hashOpt.getOrThrow()].trimAscii()
+        }
+        let vb = v.toArray()
+        if (vb.size >= 2 && ((vb[0] == 34 && vb[vb.size - 1] == 34) || (vb[0] == 39 && vb[vb.size - 1] == 39))) {
+            v = v[1..v.size - 1]
+        }
+        return v
+    }
+    return ""
+}
+
+/**
+ * 工程的 cargo 产物根目录（**尊重 `build.target-dir`**，读不到才回落 `<srcDir>/target`）。
+ *
+ * 2026-11-21 dbx 实测：dbx 因 C 盘只剩 2G 把 `target-dir` 配到 `E:/tmp/dbx-target`，
+ * 工具却一直按 `<srcDir>/target` 找 `.so` ⇒ `exitCode=0` 却报「编译成功但没产出 libdbx_lib.so」
+ * （假红，§4-151 同族：**找错位置 ≠ 没产出**）。
+ * 查找顺序与 cargo 一致：从 `srcDir` 向上最多 4 层找 `.cargo/config.toml`；
+ * 相对路径按 cargo 语义相对该配置的父目录解析。
+ */
+public func cargoTargetRootOf(srcDir: String): String {
+    var cur = srcDir
+    var depth = 0
+    while (depth < 4) {
+        let cfg = "${cur}/.cargo/config.toml"
+        if (exists(Path(cfg))) {
+            let v = targetDirInCargoConfigOf(readTextOrEmpty(cfg))
+            if (v.size > 0) {
+                let vb = v.toArray()
+                let abs = (vb.size >= 2 && vb[1] == 58) || (vb.size >= 1 && (vb[0] == 47 || vb[0] == 92))
+                if (abs) {
+                    return v
+                }
+                return "${cur}/${v}"
+            }
+        }
+        let up = parentDirOf(cur)
+        if (up.size == 0 || up == cur) {
+            break
+        }
+        cur = up
+        depth += 1
+    }
+    return "${srcDir}/target"
+}
+
+/** `<产物根>/<triple>/release` —— `.so` 定位与产物闸共用这一处口径。 */
+public func releaseDirOf(srcDir: String, target: String): String {
+    return "${cargoTargetRootOf(srcDir)}/${target}/release"
+}
+
 /**
  * 找 cargo 产出的 .so 绝对路径：期望名优先 → artifacts 逐个试 `release/` 与 `deps/` → 磁盘兜底。
  *
@@ -2687,7 +2784,7 @@ func resolveCargoBin(): String {
  */
 func findSoArtifactOf(srcDir: String, target: String, artifacts: ArrayList<String>,
     expectedSo: String): String {
-    let rel = "${srcDir}/target/${target}/release"
+    let rel = releaseDirOf(srcDir, target)
     for (c in soCandidateRelsOf(artifacts, expectedSo)) {
         let p = "${rel}/${c}"
         if (exists(Path(p))) {
@@ -2706,7 +2803,7 @@ func findSoArtifactOf(srcDir: String, target: String, artifacts: ArrayList<Strin
  * verifyOnly 模式用：从 `target/<target>/release` 里挑一个 .so（cargo 输出不可用时）
  */
 func findSoOnDisk(srcDir: String, target: String): String {
-    let dir = "${srcDir}/target/${target}/release"
+    let dir = releaseDirOf(srcDir, target)
     if (!exists(Path(dir))) {
         return ""
     }
@@ -2983,7 +3080,7 @@ public class HapCommand <: CommandHandler {
             }
             expectedSo = expectedSoNameOf(moduleName)
             if (expectedSo != "") {
-                let relSo = "${srcDir}/target/aarch64-unknown-linux-ohos/release/${expectedSo}"
+                let relSo = "${releaseDirOf(srcDir, "aarch64-unknown-linux-ohos")}/${expectedSo}"
                 soSource = hostPath(relSo)
                 if (!exists(Path(soSource))) {
                     errMsg = "找不到交叉编译产物 ${soSource} —— 先点「交叉编译（OHOS）」（t2h:build）再装配"
