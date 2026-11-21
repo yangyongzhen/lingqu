@@ -27,6 +27,18 @@
 - **`bootstrap_dir` 的鸿蒙分支真机可见**：设置 → Data 页 `Data Directory` 显示
   `/data/storage/el2/base/files/prod`——本条目判据修复所依据的那条路径，真机上确实生效
 
+### 沉淀（同批收尾：把可复用的东西落到能复利的层级）
+- **技能 `references/plugin-adaptation.md`**：`tauri-plugin-opener` 从「推断」升到「实测」——
+  `open_url` 有真机证据（hilog + 前台切浏览器）、`open_path` 明确标"只编过、真机未取证"、
+  `reveal_item_in_dir` 标降级（打开父目录）；新增 `app_log_dir()` 行（同族病 + 用户实测症状）
+- **技能 `references/native-ui-bridge.md`**：新增 **§7「真机怎么验桥」**——选有文本的入口、
+  判定看 hilog + 前台 bundle + 截图、`No Error` ≠ 点中、点了没日志先分清"没点中"与"命令在到桥前失败"、
+  `hdc shell` 读不到沙箱、进不去就记"未复验"
+- **任务书 `## 原生 UI 能力`** 补第 4/5 条铁律（agent 每轮必读的那层）：④ 路径类 API
+  （`app_data_dir` / `app_local_data_dir` / `app_log_dir`）在鸿蒙**不报错但返桌面风格路径** ⇒ 固定沙箱；
+  ⑤ 无等价物动作（`reveal_item_in_dir`）降级为打开父目录并登记 limit，别在鸿蒙分支写 `None`；
+  `docs/任务书规范.md` §3 同步
+
 ### 未验证（如实标注）
 - **`open_path` 分支未取证**：设置的 Data 页入口在 ArkWeb 里点不中——`Data Directory` 行的"打开"是图标、
   `uitest dumpLayout` 不映射成独立节点；本次部署后**连设置页的 K 按钮连点两次也没进去**

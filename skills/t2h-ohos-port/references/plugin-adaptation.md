@@ -66,6 +66,9 @@
 | `tauri-plugin-dialog`（alert/confirm/prompt） | ArkWeb 无阻塞对话框 → 应用内对话框 | R2-PORT-012/014（lingqu-dialog.js） |
 | `tauri-plugin-log`（LogDir） | log 插件 `TargetKind::Folder` 指沙箱 | 鸿蒙建 LogDir EPERM，`run()` 直接 panic（§4-175） |
 | 路径类（`app_local_data_dir` 等） | 固定 `/data/storage/el2/base/files` | 鸿蒙返回桌面风格路径**且不报错**（§4-175：别信返回值） |
+| `tauri-plugin-opener` → `open_url` | `startAbility` + Want：`action: 'ohos.want.action.viewData'`、`entities: ['entity.system.browsable']`、`uri: <url>` | **真机验过**（2026-11-21 EcoPaste / SLG-W10）：hilog `open_url ok: …` + 前台切到 `com.huawei.hmos.browser`。Rust 侧经 `ohos_bridge.rs` + ArkTS 分发器（cmd `open_url`）；要点是**主线程投递**与**两侧同名 cmd**（见 native-ui-bridge.md） |
+| `tauri-plugin-opener` → `open_path` / `reveal_item_in_dir` | 同上（`uri: fileUri.getUriFromPath(path)`） | `open_path` **只编过、真机未取证**（入口常是 ArkWeb 内图标，版面不映射成节点，别据此判"桥没生效"，§4-186）；`reveal_item_in_dir` 鸿蒙**无等价物** ⇒ 降级为"打开父目录"并登记 limit |
+| `app_log_dir()` | 固定 `/data/storage/el2/base/files/logs`（与 log 插件 `TargetKind::Folder` 落点一致） | 与 `app_local_data_dir` **同族病**：返回桌面风格路径且不报错 ⇒ `create_dir_all` **EPERM**。**用户实测症状**：点设置「Log Directory → Open」提示「**Open Directory failed，没有权限**」——命令在到桥之前就失败（0.39.132） |
 
 ### 推断（Kit 等价物明确，语义待真机核）
 
@@ -73,7 +76,6 @@
 |---|---|---|
 | `tauri-plugin-notification` | `@kit.NotificationKit`：`notificationManager.publish()` | 先 `requestEnableNotification()` 拿授权；图标/点击跳转字段与 tauri 不一一对应 |
 | `tauri-plugin-clipboard-manager` | `@kit.BasicServicesKit` 的 `pasteboard`（`systemPasteboard`） | 粘贴板数据是 **PasteData** 包装（`createData`/`addTextRecord`），不是裸字符串；隐私弹窗行为待核 |
-| 打开外部应用/URL（`opener` / shell.open） | `startAbility` + Want（`action: ohos.want.action.viewData`，`uri:` 字段） | `cmd /c start` 的老路在鸿蒙侧不存在；Want 的 type/entities 匹配规则待核 |
 | 分享（`tauri-plugin-share` 类需求） | `@kit.ShareKit`：`systemShare.sendRequest`（UIAbility 场景） | 需 UIAbility 上下文，经主线程投递（见铁律） |
 | 深链/协议唤起 | Want 显式/隐式匹配 + `skills` 标签（module.json5 的 `uris`） | tauri 的 `register_url_scheme` 语义要在 ArkTS 侧重新声明 |
 | 自定义协议（`register_uri_scheme_protocol`） | ArkWeb `onInterceptRequest`（`@ohos.web`） | 资源仍来自 `.so` 内嵌 dist；响应流构造待核 |

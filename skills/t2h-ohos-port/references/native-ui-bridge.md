@@ -140,7 +140,24 @@ lingqu-cli hap --path <工程根>
 
 只满足 1 的，真机表现是「点了没反应」，落档却写"已落地"。
 
-## 7. 纪律与反例
+## 7. 真机怎么验桥（判据在 hilog + 前台，不在点击返回值）
+
+桥「编译过 + hvigor 过」只说明两侧都落地了，**功能性要真机点一次**。2026-11-21 EcoPaste 实测的可复跑套路：
+
+1. **选有文本的入口**去点（例：设置 → About → GitHub 行的 `Open`）。ArkWeb 内**纯图标**控件
+   在 `uitest dumpLayout` 里**不映射成独立节点**，只能靠截图比例估坐标——估出来的点十有八九不中。
+2. **判定看三路旁证**：① 应用自己的 hilog（在 ArkTS 成功分支里打 `hilog.info(DOMAIN, TAG, 'open_url ok: %s')`）；
+   ② 前台 bundle（`aa dump -l | grep -A6 FOREGROUND`，如切到 `com.huawei.hmos.browser`）；③ 截图。
+3. **`uitest uiInput click` 回 `No Error` ≠ 点中**：它只表示命令送出去了。
+4. **点了没日志，先分清两种情况**：
+   - *没点中*（版面/坐标问题）——换有文本的入口重试；
+   - *命令在到桥之前就失败*——典型是路径类 API EPERM（见 §4.1 与 AGENTS §4-175），
+     前端常有提示（EcoPaste 的「Open Directory failed，没有权限」），而 hilog 里没有桥日志正是因为它没走到桥。
+5. **`hdc shell ls` 读不到应用沙箱**（`/data/storage/el2/base/files` 一律 `Permission denied`）——
+   别拿它当"目录不存在"的证据。
+6. 整页都要靠 UI 进入的验证（设置页），**进不去就如实记「未复验」**，别继续盲点、更别据此说桥不生效（AGENTS §4-186）。
+
+## 8. 纪律与反例
 
 - **别自己去开浏览器 / 别猜路径**：需要人登录、需要人操作时，用工具自己的命令（`lingqu-decision`
   说清要人做什么），不要 `start` / `rundll32` / `open` 自己造一条路（AGENTS §4-130）。
