@@ -156,6 +156,11 @@ lingqu-cli hap --path <工程根>
 5. **`hdc shell ls` 读不到应用沙箱**（`/data/storage/el2/base/files` 一律 `Permission denied`）——
    别拿它当"目录不存在"的证据。
 6. 整页都要靠 UI 进入的验证（设置页），**进不去就如实记「未复验」**，别继续盲点、更别据此说桥不生效（AGENTS §4-186）。
+7. **打开"目录"和"文件"是两件事，目录基本打不开**（真机三条路证伪，AGENTS §4-187）：
+   裸 `viewData + uri` 会被任意处理类应用抢走（现场是 WPS "打开"了日志目录）、加
+   `type: 'inode/directory'` 也照样被抢、显式 `bundle=com.huawei.hmos.files + EntryAbility`
+   只弹「暂无可用打开方式」。**应用沙箱目录给不了外部应用浏览** ⇒ 目录类入口改成如实提示路径
+   （`hdc file recv` 可取回）并登记 limit；只有单文件才用 `viewData`。
 
 ## 8. 纪律与反例
 

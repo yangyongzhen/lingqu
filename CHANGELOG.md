@@ -5,6 +5,39 @@
 
 ---
 
+## [0.39.133] - 2026-11-21
+
+**EcoPaste 打到 100%：`events` 判据从"写死 unknown"改成实测通道、AI 路径补设备口径、路径类 API 进分母、`cfg!` 宏形态入判据；真机侧证伪"沙箱目录能被文件管理器打开"。**
+
+### Added
+- **`events` 项实测通道**（`ChecklistInput.eventProbePass/eventProbeNames` + 取数层扫 `probe.json` 里 `event:` 前缀的键）：事件不是"点某个按钮"，按文本点按的探针覆盖不到它，所以单开一种键 `event:<事件名>`——真机触发后登记即判 pass，并在证据里点名触发过哪几个事件
+- **`deviceTextOf(hasDevice, inRecord, serial)` 纯函数**（设备文案的**口径单点**，三档）：`真机已连接` / `真机已连接（部署记录 <serial>）` / `未连接真机（无部署记录）`
+- **路径类 API 进扫描名单**：`app_local_data_dir` / `app_log_dir` / `app_config_dir` / `app_cache_dir`（原先只收 `app_data_dir`，于是"命令内部路径 EPERM"这类缺口在分母里**根本不存在**）
+- **剪贴板类能力进扫描名单**（`clipboard_rs::` / `tauri_plugin_clipboard_manager`）+ 判定档 **`R3-015`**：用户实测「复制了内容、界面 0 条」才发现这一类**从来没进过判据**——`clipboard-rs 0.3.5` 的 `src/platform/` 只有 win/macos/ios/x11/wayland，**鸿蒙无实现**；而 `target_os` 也是 linux ⇒ 落进 unix 分支找 X11/Wayland（设备上没有）。**"编译过了 ≠ 这平台有实现"**
+
+### Fixed
+- **`events` 判据写死**：`ev.verdict = if (started && hilogHealthy) { "unknown" } else { "unknown" }` —— 两分支同值，**永远不可能 pass**，与 note 里"事件通路要逐条触发才算验证"自相矛盾（§4-136 同族：判据不许有默认真值）
+- **AI 路径不回投设备口径**（`t2h:autoport_status`）：前端拿它的返回喂 `renderMigrate`，而它没有 `deviceInRecord` ⇒ 跑完 8 步全绿仍写「100%　未连接真机（无部署记录）」，同一轮 deploy 落档却是「装成功/启成功」（§4-105 同族：起始快照冒充"现在"）。现在 `autoport_status` 与 `migrate_status` 都回投 `deviceInRecord/deviceSerial/deviceText`，前端优先用后端算好的文案；`row.skipped` 也改成「起始检测 **或** 落档核实到设备」才不标「未连接真机」
+- **`cfg!(target_env = "ohos")` 宏形态被判"未落地"**：`hasLandedOhosBlockIn` 只认 `#[cfg(...)]` 属性 ⇒ EcoPaste 的 `install_early_panic_hook`（鸿蒙上唯一能留下早期 panic 栈的手段）被冤枉成"没有鸿蒙分支"；现在宏形态也认（要求分支非空），带正反例单测
+
+### Verified（EcoPaste，真机 SLG-W10 / 无线 `192.168.3.105:46163`）
+- **移植验收 100%（通过 6 / 有结论 6）**；platform-api 8 项**全部落地**：`app_log_dir → log_dir`、`app_local_data_dir → bootstrap_dir`、`app_data_dir`、`tauri_plugin_opener`、`std::env::temp_dir → install_early_panic_hook`（`cfg!` 宏分支）
+- **`events` 真机取证**：设置 → Capture 页切「HTML Content」开关，前端**即时翻转**（灰→蓝 + 该行选中高亮），前后截图 `ev-before.jpeg` / `ev-after.jpeg`；`probe.json` 登记 `event:settings://updated`
+- **目录 Want 三条路真机证伪**：① 裸 `viewData + uri` ⇒ 被 **WPS**（`cn.wps.mobileoffice.hap`）接走（用户原话「点 open 竟然打开了文件」）；② 加 `type: inode/directory` ⇒ 仍给 WPS；③ 显式 `bundle=com.huawei.hmos.files + EntryAbility` ⇒ 前台确实是文件管理器，但弹「暂无可用打开方式」，内容停在「最近」，没进目录。**结论：三方应用打不开应用沙箱目录（`el2/base`）** ⇒ 实现改为**如实 toast 告知沙箱路径**（登记 limit），不再发会被误接的 Want
+- **`misses.jsonl` 记账验证**：`lingqu-cli diagnose --path … --logPath <未知报错>` → `missed=true`、`missCount` 1→2、三档提示正确、台账两行同签名
+
+### 未验证 / 已知问题（如实标注）
+- **剪贴板采集在鸿蒙上仍不可用（本轮只补了判据，没修功能）**：`clipboard-rs` 无 ohos 平台实现，
+  真机复制内容后界面 0 条、hilog 连 `clipboard watcher started` 都没有。修法方向：
+  `@ohos.pasteboard` 的 `systemPasteboard.on('update')` 订阅 + `getDataSync` 读，经 ArkTS 桥回灌 Rust
+  （我们的 `ohos_bridge` 现在是 Rust→ArkTS 单向，反向还得加通道）。**这是一次"单点修复不复利"的现形**：
+  刚补完 opener，同族更常用的 clipboard 却一直没进名单
+- `open_path` 的**按钮路径**未复验：新 HAP 部署后设置页入口（`K` 按钮）连点 5 次没进去（§4-186），只记"未复验"
+- R-1 的 **1.3 自主发 PR 阻塞**：`LINGQU_GITCODE_TOKEN` / `GITCODE_TOKEN` / `ATOMGIT_TOKEN` / `GH_TOKEN` / `~/.github_token` **全部没有**
+- `lingqu-cli diagnose` 的 `--log` 是**日志正文**、`--logPath` 才是文件；传错时静默把路径当正文（本轮我自己栽了一次）——后续可加"看起来像路径就提示"
+
+---
+
 ## [0.39.132] - 2026-11-21
 
 **EcoPaste 平台 API 缺口收口：`app_data_dir` 的判据假 fail 修掉（helper 追两层）+ `tauri_plugin_opener` 接 ArkTS Want 桥——platform-api 从「5 处 / 2 处空壳」变 limit，移植验收 66% → 80%。**

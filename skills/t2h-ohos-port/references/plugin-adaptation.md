@@ -67,8 +67,9 @@
 | `tauri-plugin-log`（LogDir） | log 插件 `TargetKind::Folder` 指沙箱 | 鸿蒙建 LogDir EPERM，`run()` 直接 panic（§4-175） |
 | 路径类（`app_local_data_dir` 等） | 固定 `/data/storage/el2/base/files` | 鸿蒙返回桌面风格路径**且不报错**（§4-175：别信返回值） |
 | `tauri-plugin-opener` → `open_url` | `startAbility` + Want：`action: 'ohos.want.action.viewData'`、`entities: ['entity.system.browsable']`、`uri: <url>` | **真机验过**（2026-11-21 EcoPaste / SLG-W10）：hilog `open_url ok: …` + 前台切到 `com.huawei.hmos.browser`。Rust 侧经 `ohos_bridge.rs` + ArkTS 分发器（cmd `open_url`）；要点是**主线程投递**与**两侧同名 cmd**（见 native-ui-bridge.md） |
-| `tauri-plugin-opener` → `open_path` / `reveal_item_in_dir` | 同上（`uri: fileUri.getUriFromPath(path)`） | `open_path` **只编过、真机未取证**（入口常是 ArkWeb 内图标，版面不映射成节点，别据此判"桥没生效"，§4-186）；`reveal_item_in_dir` 鸿蒙**无等价物** ⇒ 降级为"打开父目录"并登记 limit |
+| `tauri-plugin-opener` → `open_path` / `reveal_item_in_dir` | 同上（`uri: fileUri.getUriFromPath(path)`） | **目录打不开（真机三条路全证伪）**：裸 `viewData+uri` 被 WPS 接走"打开"、加 `type: 'inode/directory'` 仍给 WPS、显式 `bundle=com.huawei.hmos.files + EntryAbility` 只弹「暂无可用打开方式」⇒ 三方应用无法浏览**应用沙箱目录**。目录改成**如实提示路径**（toast，`hdc file recv` 可取回）并登记 limit；单文件仍可 `viewData`。`open_path` 的真机按钮路径未复验（§4-186/§4-187） |
 | `app_log_dir()` | 固定 `/data/storage/el2/base/files/logs`（与 log 插件 `TargetKind::Folder` 落点一致） | 与 `app_local_data_dir` **同族病**：返回桌面风格路径且不报错 ⇒ `create_dir_all` **EPERM**。**用户实测症状**：点设置「Log Directory → Open」提示「**Open Directory failed，没有权限**」——命令在到桥之前就失败（0.39.132） |
+| `clipboard-rs` / `tauri-plugin-clipboard-manager` | **无等价 crate 实现**，方向是 `@ohos.pasteboard`（`systemPasteboard.on('update')` 订阅变化 / `getDataSync` 读内容）经 ArkTS 桥回灌 Rust | **真机实测：鸿蒙上完全不工作**（EcoPaste 复制内容后界面 0 条、hilog 无 watcher 日志）。根因在依赖源码：`clipboard-rs 0.3.5` 的 `src/platform/` 只有 `win/macos/ios/x11/wayland`，鸿蒙 `target_os=linux` 会落进 unix 分支找 X11/Wayland（设备上没有）。**判据：看依赖的 `platform/` 目录，别看"编译过了"**（R3-015） |
 
 ### 推断（Kit 等价物明确，语义待真机核）
 
