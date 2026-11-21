@@ -7,6 +7,9 @@
 
 * text=auto
 
+# 本文件自己也钉 LF：否则 Windows 检出会把它转成 CRLF，git 每次都提示一遍
+.gitattributes text eol=lf
+
 # 源码 / 文档：LF
 *.cj    text eol=lf
 *.toml  text eol=lf
@@ -26,6 +29,11 @@
 # 打包脚本按行读的清单（packaging/pack-assets.txt）：必须是 LF——
 # 检出成 CRLF 会让每行末尾多一个 \r，脚本按名字找文件就全部找不到。
 packaging/*.txt text eol=lf
+
+# 随包引擎的校验清单：同样必须 LF——它没有扩展名，落在 `* text=auto` 下会被 Windows
+# 检出成 CRLF，`sha256sum -c` 报 `'win-x64/cjh.exe\r': No such file or directory`
+# （看着像哈希不符，其实一条都没比，见 AGENTS §4-183）
+vendor/cjh/SHA256SUMS text eol=lf
 
 # Windows 脚本：CRLF（cmd.exe 对 LF-only 的 .bat 处理不稳定）
 *.bat   text eol=crlf

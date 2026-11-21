@@ -5,6 +5,30 @@
 
 ---
 
+## [0.39.131] - 2026-11-21
+
+**随包 cjh 1.6.13 → 1.6.18（官方发布产物整体换血），Windows 侧首次实跑取证；顺带修掉 `SHA256SUMS` 在 Windows 上必然假红的行尾问题。**
+
+### Changed
+- **随包 cjh 1.6.13 → 1.6.18**（§4-131「换随包二进制必须清单与代码常量一起改」三处联动）：`vendor/cjh/{win-x64,linux-x64}` 换 cjh 官方发布产物（win `dist/cjh-v1.6.18-windows-x64-selfcontained.zip` / linux `dist/cjh-v1.6.18-linux-x64.tar.gz`），`vendor/cjh/SHA256SUMS` 与 `src/cjh_host.cj` 的 `CJH_VENDOR_FILES` / `CJH_LINUX_SHA` 常量同批更新——win `cjh.exe` `a463bef…` → `69c8f3d…`（4 个随行 DLL 与 1.6.13 逐字节相同），linux `cjh` `bc982f74…` → `676709b9…`。「验不过绝不解包也不执行」的口径不变（D-004）
+- **`.gitattributes` 补 `vendor/cjh/SHA256SUMS text eol=lf`**：该文件此前落在 `* text=auto` 下，Windows 检出成 CRLF ⇒ `sha256sum -c SHA256SUMS` 报 `'win-x64/cjh.exe\r': No such file or directory` 并连带 `WARNING: 6 listed files could not be read`——**看着像文件缺失或哈希不符，实则是行尾**，6 条哈希逐条手工核全 OK。与 `*.sh text eol=lf`、`packaging/*.txt text eol=lf` 同口径（AGENTS §4-183）
+
+### Fixed
+- **真机 connect-key 过期值盖掉现场**（`src/compiler/deploy.cj` 新增纯函数 `resolveDeviceKeyOf`；`probe.cj` 的 `probeDeviceOf` 与 `t2h:verify` 取序列号两处改用它，`main.cj` 新增 `liveHdcTargetsText`）：设备从 USB（`3QC0124B20000048`）换到无线调试（`192.168.3.105:46163`）后 connect-key 变了，而旧实现「落档里的序列号优先且直接返回」⇒ `probe --auto` 枚举 **0 个节点**、`verify` 采证三条命令全回 `[Fail]Not match target founded, check connect-key please`。现在**以在线目标为准**，落档值仅在仍在线时采用（§4-38 / §4-75 同族：过期值盖掉现场）。修后 probe 实测 **14 节点 / 8 候选 / 7 pass / 0 fail / 1 unknown**，serial 自动校正为 `192.168.3.105:46163`
+- **旧截图冒充本次证据**（`src/verify_feed.cj` 的 `collectEvidence`）：截图原名固定 `<工程>-verify.jpeg`，`file recv` 失败时「本地有文件」会把**上一次的截图**当成本次证据（落档写「已保存」而三条 hdc 命令全挂）。改用唯一名 `<工程>-verify-<毫秒>.jpeg`（新增 `evidenceStampOf`）——「文件存在」只可能来自这一次（§4-63「跑了但没测到」的变体）
+
+### Verified（实机证据，Windows x64）
+- **五件套 + linux 单文件逐条 SHA256 与 `SHA256SUMS` / `CJH_VENDOR_FILES` 一致**：win `69c8f3d978b4631a7123e9d750faf862e5fa40acef116aac25c74da18fe48ba6` / `07b33dd3…` / `03f4d59a…` / `a997e132…` / `bbaf8a8c…`，linux `676709b9…`；修好行尾后 `sha256sum -c SHA256SUMS` 六条全 `OK`
+- `vendor/cjh/win-x64/cjh.exe --version` → **`cjh v1.6.18`**（exit=0）
+- **应用链路运行期**（`scripts/run-dev.sh` 真起桌面产物）：`/api/health` 回 **`{"status":"ok","version":"1.6.18"}`**、`cjh.exe` **恰好 1 个实例**（无 §4-127 的多实例）、`ui_report.cjhBin=vendor\cjh\win-x64\cjh.exe` / `owned=true`、`.lingqu/cjh-start.log` 记「端口 8765 空着（无监听）→ 允许拉起」+「拉起后就绪（继承隐藏控制台）**524ms**」——§4-122 口径：验的是运行期实际用的那一份
+- 六道门禁全绿：`build-biz` / `test` **TOTAL=635** / `check（com.lingqu.migrator@0.39.131）` / `js-syntax` / `build-app` / `build-cli`
+
+### 未验证（如实标注，见 `docs/会话交接.md` §八）
+- 关窗收尾（§2.3「只收自己拉起的」）：本轮以结束进程树的方式关应用，无法区分是应用主动收尾还是被一并杀掉
+- 1.6.18 相对 1.6.13 的行为差异未逐个核（只验了版本与哈希）
+
+---
+
 ## [0.39.130] - 2026-11-20
 
 **随包 cjh 升级 1.6.13（MCP Streamable HTTP）+ 内置引擎接入华为 KMS 知识库 + 任务书「三层适配优先于降级」纪律（外部反馈采纳）。Linux 会话（AGENTS §4-31/32 口径：门禁走脚本默认 SDK）。**
