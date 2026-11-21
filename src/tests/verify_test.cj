@@ -68,6 +68,37 @@ public func testLandedOhosAcceptsCfgMacro(): Unit {
     @Expect(hasLandedOhosBlockIn(desk), false)
 }
 
+/*
+ * 0.39.133：平台能力的**实测结论优先**（`probe.json` 的 `platform:<符号>`）。
+ *
+ * 现场教训（EcoPaste 剪贴板）：桥写了、能编能装，静态判据算"有落地"，可真机上
+ * `getDataSync()` 返回 `records=0`（未授权静默抹内容）——功能不可用而报告 100%。
+ * 实测结论必须压过静态推断。
+ */
+@Test
+public func testPlatformProbeVerdictOverridesStatic(): Unit {
+    var feats = JsonObject()
+    var rec = JsonObject()
+    rec.put("verdict", JsonString("fail"))
+    rec.put("note", JsonString("复制后 changed=3 records=0：未授权静默抹内容"))
+    feats.put("platform:clipboard-rs", rec)
+    var probe = JsonObject()
+    probe.put("features", feats)
+
+    let (v, n) = platformProbeVerdictOf(probe, "clipboard-rs")
+    @Expect(v, "fail")
+    @Expect(n.contains("records=0"), true)
+    // 没有实测记录 → 空，调用方回落到静态判定
+    let (v2, n2) = platformProbeVerdictOf(probe, "tauri_plugin_opener")
+    @Expect(v2, "")
+    @Expect(n2, "")
+    // 结构不合法（features 不是对象）也不许崩
+    var bad = JsonObject()
+    bad.put("features", JsonString("not-an-object"))
+    let (v3, _) = platformProbeVerdictOf(bad, "clipboard-rs")
+    @Expect(v3, "")
+}
+
 @Test
 public func testEventsItemUsesProbeEvidence(): Unit {
     // ① 只有"应用起来了"这条间接证据：仍是未测（不许凭它判 pass）

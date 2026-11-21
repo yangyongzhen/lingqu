@@ -100,6 +100,38 @@ public func testRiskReleaseSignDropsDebugItem(): Unit {
     @Assert(risk.countOf(RISK_MID), 1)
 }
 
+/*
+ * 0.39.133（用户要求）：报告不能只写「1 项移植验收项未通过（…）」，**原因必须点名**。
+ * 现场：EcoPaste 85% 是对的，但正文没写"剪贴板在鸿蒙读不到内容（records=0）"——
+ * 用户看到 85% 也不知道是哪项、为什么（§4-57：失败要贴出第一条原因）。
+ */
+@Test
+public func testFailedItemNoteShowsInRisk(): Unit {
+    let f = riskFactsGreen()
+    f.verifyFail = 1
+    f.failedItems.add("平台限制（9 处）是否都有落地的降级方案")
+    f.failedNotes.add("真机实测不可用：changed 会涨但 records=0 textLen=0")
+    let text = riskText(assessRisks(f))
+    @Assert(text.contains("实测原因"), true)
+    @Assert(text.contains("records=0"), true)
+
+    // 没有 note 时不许凭空写出"实测原因："这种空尾巴
+    let f2 = riskFactsGreen()
+    f2.verifyFail = 1
+    f2.failedItems.add("搜索")
+    @Assert(riskText(assessRisks(f2)).contains("实测原因"), false)
+}
+
+@Test
+public func testFirstNoteOfPicksFirstNonEmpty(): Unit {
+    var empty = ArrayList<String>()
+    @Assert(firstNoteOf(empty), "")
+    var notes = ArrayList<String>()
+    notes.add("   ")
+    notes.add("真机实测不可用：records=0")
+    @Assert(firstNoteOf(notes), "真机实测不可用：records=0")
+}
+
 @Test
 public func testRiskFailedChecklistIsHigh(): Unit {
     let f = riskFactsGreen()

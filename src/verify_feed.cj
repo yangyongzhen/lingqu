@@ -16,6 +16,31 @@ import stdx.encoding.json.*
  * 有固定的几个解析动作，单拎出来便于对照 `.lingqu` 各目录下的落档 schema 复核。
  */
 
+/**
+ * 取某平台能力符号的**真机实测结论**（`probe.json` 的 `platform:<符号>` → (verdict, note)）。
+ *
+ * 为什么要它（0.39.133，EcoPaste 剪贴板）：静态判据只能看"代码里有没有鸿蒙分支"，
+ * 看不出"分支跑了、也拿不到数据"——剪贴板就是这样：桥写了、能编能装、`getDataSync()`
+ * 真机返回 `records=0`（未授权时静默抹内容）。只按代码算落地的话报告会报 100%，
+ * 而用户手里的功能不可用（§4-136 那族假绿的极端版）。**实测结论优先于静态推断**，
+ * 与 `event:` 通道同一口径。
+ *
+ * @return ("","") = 没有实测记录
+ */
+public func platformProbeVerdictOf(probe: JsonValue, name: String): (String, String) {
+    let feats = objFieldOf(probe, "features")
+    match (feats.kind()) {
+        case JsonKind.JsObject =>
+            let rec = objFieldOf(feats, "platform:${name}")
+            match (rec.kind()) {
+                case JsonKind.JsObject =>
+                    return (jsonStrField(rec, "verdict"), jsonStrField(rec, "note"))
+                case _ => return ("", "")
+            }
+        case _ => return ("", "")
+    }
+}
+
 /** 从落档 JSON 文本里取一层对象字段（找不到给空 JsonObject，省得每处判 None） */
 func objFieldOf(root: JsonValue, key: String): JsonValue {
     match (root.kind()) {
@@ -167,6 +192,27 @@ func collectVerifyInput(projName: String, projPath: String): ChecklistInput {
                         inp.eventProbeNames.add(pk[6..pk.size])
                     }
                 case _ => ()
+            }
+        case None => ()
+    }
+
+    // 平台能力的**实测结论优先**（0.39.133）：`probe.json` 的 `platform:<符号>` 覆盖静态推断。
+    // 现场教训（EcoPaste 剪贴板）：桥写了、能编能装，静态判据会算"有落地"，可真机上
+    // `getDataSync()` 返回 `records=0`——功能实际不可用，报告却 100%。
+    match (readJsonOrNone(resolveLqPath(projPath, "verify/${projName}.probe.json"))) {
+        case Some(root) =>
+            for (p in inp.platformItems) {
+                let (pv, pn) = platformProbeVerdictOf(root, p.name)
+                if (pv == "") {
+                    continue
+                }
+                if (pv == "fail") {
+                    p.fallbackLanded = false
+                    p.note = "真机实测不可用：${pn}"
+                } else {
+                    p.fallbackLanded = true
+                    p.note = "真机实测：${pn}"
+                }
             }
         case None => ()
     }

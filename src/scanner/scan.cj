@@ -745,11 +745,14 @@ public func verdictOfPlatform(symbol: String): Array<String> {
         return [V_DOWNGRADE, "R3-009", "打开链接/文件依赖宿主能力（鸿蒙能力位 0）→ 应用内提示"]
     }
     if (symbol == "clipboard-rs" || symbol == "tauri-plugin-clipboard-manager") {
-        // 判据来自依赖源码本身：`clipboard-rs` 的 `src/platform/` 只有 win/macos/ios/x11/wayland，
-        // 没有 ohos；鸿蒙 target_os 也是 linux，会落进 unix 分支去找 X11/Wayland ⇒ 监听起不来、
-        // 读也拿不到（EcoPaste 真机实测：复制内容后界面 0 条）。
+        // 判据来自依赖源码 + 真机三步实测（2026-11-21，EcoPaste）：见 AGENTS §4-190。
+        // 这里**扫描层就直接给结论**，别让下一轮 agent 再走一遍才发现（§4-130：说明书没给 = 它只能瞎摸）。
         return [V_DOWNGRADE, "R3-015",
-            "clipboard 能力鸿蒙无实现 → 换 @ohos.pasteboard（systemPasteboard.on('update') 订阅变化 / getDataSync 读内容）经 ArkTS 桥回灌 Rust"]
+            "鸿蒙侧**不可用**：读剪贴板内容需 `ohos.permission.READ_PASTEBOARD`（受限权限），" +
+            "三方 HAP 一声明设备就拒装（`9568289`）；不声明则 `getDataSync()` 静默返回空" +
+            "（`changed` 会涨但 `records=0`，不抛错）。**剪贴板历史/自动采集做不了** → 登记 limit，" +
+            "产品上只能做「用户主动粘贴 / 拖入 / 应用内导入」并在界面如实说明；" +
+            "`PasteButton` 安全控件也只能读一次（需用户真实点击 + ArkUI 原生 UI），救不了自动采集"]
     }
     // ---- 前端侧 @tauri-apps/api 能力（C2 基线对照后补的一类：OHOS 无对应实现，要换系统 API）----
     if (symbol == "getVersion") {

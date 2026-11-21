@@ -153,6 +153,24 @@ func riskCoveredStep(id: String, facts: MigrationFacts): Bool {
  *
  * 顺序有意为之：先"能不能装/能不能跑"（高），再"能不能上架/能不能复核"（中），最后"要不要看一眼"（低）。
  */
+/**
+ * 取第一条非空 note 并截断（报告里点名"为什么没过"）。
+ *
+ * 截断是因为 note 可能很长（剪贴板那条带完整真机证据），报告正文不该被一整段淹没。
+ */
+public func firstNoteOf(notes: ArrayList<String>): String {
+    for (n in notes) {
+        let t = n.trimAscii()
+        if (t.size > 0) {
+            if (t.size > 160) {
+                return t[0..160] + "…"
+            }
+            return t
+        }
+    }
+    return ""
+}
+
 public func assessRisks(facts: MigrationFacts): ReportRisk {
     let risk = ReportRisk()
 
@@ -212,8 +230,11 @@ public func assessRisks(facts: MigrationFacts): ReportRisk {
     //    D-020：**业务功能的失败不进这张表**——缺网/缺配置/没登录本来就跑不起来，那不属移植职责。
     //    `failedItems` 收集时已按 category 过滤，这里只认移植项。
     if (facts.failedItems.size > 0) {
+        let whyBase = "这些是移植该负责的事（装得上/起得来/渲染得出/通道与平台能力），没通过就说明移植还没做完"
+        let note = firstNoteOf(facts.failedNotes)
+        let why = if (note != "") { whyBase + "｜实测原因：${note}" } else { whyBase }
         risk.add(RiskItem("${facts.failedItems.size} 项移植验收项未通过（${briefTitles(facts.failedItems)}）",
-            RISK_HIGH, "这些是移植该负责的事（装得上/起得来/渲染得出/通道与平台能力），没通过就说明移植还没做完",
+            RISK_HIGH, why,
             "看 .lingqu/verify 落档里这些项的 note 与证据，再跑 ⑥ 屏「采集证据并算可用率」"))
     }
     if (facts.unknownItems.size > 0) {
@@ -384,6 +405,14 @@ public class MigrationFacts {
     public var limitItems: ArrayList<String> = ArrayList<String>()
     public var unknownItems: ArrayList<String> = ArrayList<String>()
     public var failedItems: ArrayList<String> = ArrayList<String>()
+    /**
+     * 失败项的**实测原因**（与 `failedItems` 同序，取 verify 落档里每项的 `note`）。
+     *
+     * 为什么要有（0.39.133，用户要求）：报告只写「1 项移植验收项未通过（平台限制…）」等于没说清，
+     * 而那条 note 里明明写着「真机实测不可用：changed 会涨但 records=0…」——**原因必须进报告**，
+     * 否则用户看到 85% 也不知道是哪项、为什么（§4-57：失败要把闸门的第一条原因贴出来）。
+     */
+    public var failedNotes: ArrayList<String> = ArrayList<String>()
     // 证据与产物
     public var evidenceCount: Int64 = 0
     public var artifacts: ArrayList<(String, String)> = ArrayList<(String, String)>()

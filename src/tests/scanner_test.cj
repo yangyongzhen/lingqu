@@ -163,11 +163,14 @@ fn start() {
         names.add(it.name)
     }
     @Expect(names.contains("clipboard-rs"), true)
-    // 判定档要能指出"鸿蒙没有实现"，而不是落进"未归类 → 人工"
+    // 判定档要能指出"鸿蒙不可用 + 需授权"，而不是落进"未归类 → 人工"
     let v = verdictOfPlatform("clipboard-rs")
     @Expect(v[0], V_DOWNGRADE)
     @Expect(v[1], "R3-015")
-    @Expect(v[2].contains("pasteboard"), true)
+    // 扫描层就直接给结论（用户要求：再遇到用 clipboard 插件的工程，扫出来就提示）
+    @Expect(v[2].contains("不可用"), true)
+    @Expect(v[2].contains("READ_PASTEBOARD"), true)
+    @Expect(v[2].contains("9568289"), true)
 }
 
 @Test

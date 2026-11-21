@@ -89,6 +89,26 @@ func collectTransplantTitles(verifyRoot: JsonValue, verdict: String): ArrayList<
     return out
 }
 
+/** 同 `collectTransplantTitles`，但取 `note`（报告里点名"为什么没过"） */
+func collectTransplantNotes(verifyRoot: JsonValue, verdict: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let arr = objFieldOf(verifyRoot, "items")
+    match (arr.kind()) {
+        case JsonKind.JsArray =>
+            var i: Int64 = 0
+            while (i < arr.asArray().size()) {
+                let it = arr.asArray()[i]
+                let cat = jsonStrField(it, "category")
+                if (cat != "business" && cat != "smoke" && jsonStrField(it, "verdict") == verdict) {
+                    out.add(jsonStrField(it, "note"))
+                }
+                i += 1
+            }
+        case _ => ()
+    }
+    return out
+}
+
 func collectVerdictTitles(verifyRoot: JsonValue, verdict: String): ArrayList<String> {
     let out = ArrayList<String>()
     let arr = objFieldOf(verifyRoot, "items")
@@ -213,6 +233,7 @@ public func collectReportFacts(projName: String, projPath: String, now: String):
             facts.limitItems = collectTransplantTitles(root, "limit")
             facts.unknownItems = collectTransplantTitles(root, "unknown")
             facts.failedItems = collectTransplantTitles(root, "fail")
+            facts.failedNotes = collectTransplantNotes(root, "fail")
             facts.bundleName = jsonStrField(root, "bundleName")
         case None => ()
     }
