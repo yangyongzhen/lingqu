@@ -719,6 +719,67 @@ public func helperCallNamesIn(body: String): ArrayList<String> {
     return out
 }
 
+/**
+ * 同上，但**裸调用也认**（0.39.131 起给"追第二层"用）。
+ *
+ * `helperCallNamesIn` 只收路径限定调用（`foo::bar(`），这在命令层够用；可 helper 体内的调用
+ * 常常是裸的（EcoPaste 的 `app_data_dir()` 里就是 `bootstrap_dir()?`），只认路径限定 ⇒
+ * 第二层永远抽不出来，两层间接落地还是被判空壳。这里放宽到裸调用，靠三件事压噪声：
+ * ① 排除方法调用（标识符前面是 `.`）；② 排除语言关键字/常见构造器；③ 最终仍靠
+ * `helperSrcs` 只收**工程内真实定义**的函数来兜底。
+ */
+public func helperCallNamesInLoose(body: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    let skip = ["if", "for", "while", "match", "return", "let", "mut", "Some", "None", "Ok",
+        "Err", "new", "from", "as", "in", "loop", "else", "fn", "impl", "self"]
+    var i: Int64 = 0
+    while (i < body.size) {
+        if (body[i] == 40) { // '('
+            var e = i - 1
+            while (e >= 0 && isIdentByteOf(body[e])) {
+                e -= 1
+            }
+            let s = e + 1
+            // 标识符前面是 `.` ⇒ 方法调用，不是 helper
+            let afterDot = s > 0 && body[s - 1] == 46
+            if (i > s && !afterDot) {
+                var nb = ArrayList<Byte>()
+                var k = s
+                while (k < i) {
+                    nb.add(body[k])
+                    k += 1
+                }
+                if (nb.size > 0) {
+                    let nm = String.fromUtf8(nb.toArray())
+                    let first = body[s]
+                    let isIdentStart = (first >= 97 && first <= 122) || (first >= 65 && first <= 90)
+                    if (isIdentStart && !skip.contains(nm) && !out.contains(nm)) {
+                        out.add(nm)
+                    }
+                }
+            }
+        }
+        i += 1
+    }
+    return out
+}
+
+/** `fnName` 各实现体里的裸调用候选（宽松口径，只给追层用） */
+public func helperCallNamesOfLoose(src: String, fnName: String): ArrayList<String> {
+    let out = ArrayList<String>()
+    if (fnName == "") {
+        return out
+    }
+    for (im in fnImplsOf(src, fnName)) {
+        for (nm in helperCallNamesInLoose(im.body)) {
+            if (!out.contains(nm)) {
+                out.add(nm)
+            }
+        }
+    }
+    return out
+}
+
 /** `fnName` 各实现体里的候选 helper（去重合并）。fnName 为空返回空集合——别让 `fn ` 裸匹配所有函数。 */
 public func helperCallNamesOf(src: String, fnName: String): ArrayList<String> {
     let out = ArrayList<String>()
@@ -745,6 +806,66 @@ public func helperCallNamesOf(src: String, fnName: String): ArrayList<String> {
  * `helperSrcs`：helper 函数名 → 定义所在源文件全文（取数层负责填；工程内找不到的就不放进来）。
  * 追到的 helper 用同一套判据再判一次；**只追一层**，不递归。
  */
+/** helper 追层深度：两层（0.39.131 起；再深容易把无关分支算成落地 = 假绿） */
+public let HELPER_TRACE_DEPTH: Int64 = 2
+
+/**
+ * 沿调用链追 helper，看鸿蒙侧到底落没落地（最多 `maxDepth` 层，带防环）。
+ *
+ * 为什么要第二层（0.39.131，EcoPaste 现场实测）：命令层 `commands/storage.rs` 调工程自己的
+ * `core::paths::app_data_dir()`，而 `app_data_dir` 本身是**平台中立**的——鸿蒙分支在它再下一层
+ * 的 `bootstrap_dir()` 里（固定落 `/data/storage/el2/base/files`，11-19 真机白屏那轮的修法）。
+ * 只追一层时 `app_data_dir` 因为"自己体内没有 cfg"被判成空壳 ⇒ platform-api 冤枉 fail
+ * （§4-157 同族：观测缺陷当功能缺陷）。
+ *
+ * @return `""` = 链上没有落地的鸿蒙实现；否则给一句**说清链条**的证据（人能顺着复核）
+ */
+func helperChainLandedOf(src: String, fnName: String, helperSrcs: HashMap<String, String>,
+    maxDepth: Int64): String {
+    let seen = ArrayList<String>()
+    return helperChainLandedFrom(src, fnName, helperSrcs, maxDepth, 0, seen, "")
+}
+
+func helperChainLandedFrom(src: String, fnName: String, helperSrcs: HashMap<String, String>,
+    maxDepth: Int64, depth: Int64, seen: ArrayList<String>, chain: String): String {
+    if (depth >= maxDepth) {
+        return ""
+    }
+    // 第一层沿用 0.39.129 的严格口径（路径限定），第二层起用宽松口径：helper 体内多为裸调用
+    var cand = helperCallNamesOf(src, fnName)
+    if (chain != "") {
+        cand = helperCallNamesOfLoose(src, fnName)
+    }
+    for (h in cand) {
+        if (h == fnName || seen.contains(h)) {
+            continue
+        }
+        match (helperSrcs.get(h)) {
+            case Some(hsrc) =>
+                seen.add(h)
+                var label = "${h}()"
+                if (chain != "") {
+                    label = "${chain} 又调的 ${h}()"
+                }
+                if (!ohosImplStubOnly(hsrc, h)) {
+                    return "它调的 `${label}` 有落地的鸿蒙实现"
+                }
+                for (him in fnImplsOf(hsrc, h)) {
+                    if (hasLandedOhosBlockIn(him.body)) {
+                        return "它调的 `${label}` 体内的鸿蒙分支有落地的实现"
+                    }
+                }
+                let deeper = helperChainLandedFrom(hsrc, h, helperSrcs, maxDepth, depth + 1,
+                    seen, label)
+                if (deeper != "") {
+                    return deeper
+                }
+            case None => ()
+        }
+    }
+    return ""
+}
+
 public func judgePlatformSiteWith(src: String, lineNo: Int64, helperSrcs: HashMap<String, String>): (Bool, String) {
     let fnName = enclosingFnOf(src, lineNo)
     if (fnName == "") {
@@ -762,25 +883,16 @@ public func judgePlatformSiteWith(src: String, lineNo: Int64, helperSrcs: HashMa
             return (false, "用在 `${fnName}` 里，该函数体内的鸿蒙分支有落地的实现")
         }
     }
-    // 0.39.129：函数本身没有鸿蒙分支 → 沿它调用的 helper 追一层
+    // 0.39.129 追一层；0.39.131 扩到两层（EcoPaste 现场：app_data_dir → bootstrap_dir）
     var tried = ArrayList<String>()
     for (h in helperCallNamesOf(src, fnName)) {
-        if (h == fnName) {
-            continue
+        if (h != fnName && helperSrcs.contains(h)) {
+            tried.add(h)
         }
-        match (helperSrcs.get(h)) {
-            case Some(hsrc) =>
-                tried.add(h)
-                if (!ohosImplStubOnly(hsrc, h)) {
-                    return (false, "用在 `${fnName}` 里，它调的 `${h}()` 有落地的鸿蒙实现")
-                }
-                for (him in fnImplsOf(hsrc, h)) {
-                    if (hasLandedOhosBlockIn(him.body)) {
-                        return (false, "用在 `${fnName}` 里，它调的 `${h}()` 体内的鸿蒙分支有落地的实现")
-                    }
-                }
-            case None => ()
-        }
+    }
+    let chain = helperChainLandedOf(src, fnName, helperSrcs, HELPER_TRACE_DEPTH)
+    if (chain != "") {
+        return (false, "用在 `${fnName}` 里，${chain}")
     }
     if (tried.size > 0) {
         var names = ""
@@ -822,24 +934,7 @@ public func commandImplLandedWith(src: String, fnName: String, helperSrcs: HashM
             return true
         }
     }
-    for (h in helperCallNamesOf(src, fnName)) {
-        if (h == fnName) {
-            continue
-        }
-        match (helperSrcs.get(h)) {
-            case Some(hsrc) =>
-                if (!ohosImplStubOnly(hsrc, h)) {
-                    return true
-                }
-                for (him in fnImplsOf(hsrc, h)) {
-                    if (hasLandedOhosBlockIn(him.body)) {
-                        return true
-                    }
-                }
-            case None => ()
-        }
-    }
-    return false
+    return helperChainLandedOf(src, fnName, helperSrcs, HELPER_TRACE_DEPTH) != ""
 }
 
 public func commandImplLanded(src: String, fnName: String): Bool {

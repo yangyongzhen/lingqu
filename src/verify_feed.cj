@@ -308,6 +308,35 @@ func fillHelperSrcs(names: ArrayList<String>, contents: ArrayList<String>,
 }
 
 /**
+ * 递归填 helper 源表（最多 maxDepth 层）。
+ *
+ * 只填一层时，`cmd → app_data_dir → bootstrap_dir` 这种链上的第二层查不到 ⇒ 判据就算想追也追不动
+ * （0.39.131，EcoPaste 实测：`bootstrap_dir` 的鸿蒙分支明明存在，却被判成"都没落地"）。
+ */
+func fillHelperSrcsDeep(names: ArrayList<String>, contents: ArrayList<String>,
+    resolved: HashMap<String, String>, maxDepth: Int64): Unit {
+    var frontier = names
+    var depth: Int64 = 0
+    while (depth < maxDepth && frontier.size > 0) {
+        fillHelperSrcs(frontier, contents, resolved)
+        let next = ArrayList<String>()
+        for (nm in frontier) {
+            match (resolved.get(nm)) {
+                case Some(t) =>
+                    for (h in helperCallNamesOfLoose(t, nm)) {
+                        if (h != nm && !resolved.contains(h) && !next.contains(h)) {
+                            next.add(h)
+                        }
+                    }
+                case None => ()
+            }
+        }
+        frontier = next
+        depth += 1
+    }
+}
+
+/**
  * 工程里的 ArkTS 分发器正文（含 `__ohos_dispatch` 的 `.ets` 拼起来；找不到给空串）。
  *
  * 为什么要它：桥的"落地"是**两侧**的事（Rust 调 `call_arkts("x")` + ArkTS 有 `case "x"`）。
@@ -426,7 +455,8 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                             let src = readProjectSrc(projPath, siteFileOf(firstArrayItemOf(v, "sites")))
                             if (src != "") {
                                 f.degradedApi = firstApiHitIn(src, nm, apiNames)
-                                fillHelperSrcs(helperCallNamesOf(src, nm), rsContents, helperSrcs)
+                                fillHelperSrcsDeep(helperCallNamesOf(src, nm), rsContents, helperSrcs,
+                                    HELPER_TRACE_DEPTH)
                                 f.fallbackLanded = commandImplLandedWith(src, nm, helperSrcs)
                                 // 桥命令必须**两侧都在**：Rust 调了 call_arkts("x")，ArkTS 得有 case "x"。
                                 // 只写半边时 cargo 照样 exit=0，真机点了没反应（§4-162）。
@@ -512,8 +542,8 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
                 let (gap, why) = if (isFrontend) {
                     judgeFrontendSite(src, siteLineOf(p.site))
                 } else {
-                    fillHelperSrcs(helperCallNamesOf(src, enclosingFnOf(src, siteLineOf(p.site))),
-                        rsContents, helperSrcs)
+                    fillHelperSrcsDeep(helperCallNamesOf(src, enclosingFnOf(src, siteLineOf(p.site))),
+                        rsContents, helperSrcs, HELPER_TRACE_DEPTH)
                     judgePlatformSiteWith(src, siteLineOf(p.site), helperSrcs)
                 }
                 p.fallbackLanded = !gap

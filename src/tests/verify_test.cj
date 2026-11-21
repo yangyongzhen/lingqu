@@ -845,3 +845,84 @@ public func testCommandImplLandedFollowsHelper(): Unit {
     m2.add("app_data_dir", "pub fn app_data_dir() -> Result<String, String> {\n    Ok(String::from(\"/tmp\"))\n}\n")
     @Expect(commandImplLandedWith(cmd, "storage_cmd", m2), false)
 }
+
+/*
+ * 0.39.131：EcoPaste 实测的"两层间接落地"（§4-157 同族的第三个变体）。
+ *
+ * 命令层调 `core::paths::app_data_dir()`，它自己**平台中立**（体内没有 cfg），鸿蒙分支在它
+ * 再下一层的 `bootstrap_dir()` 里 ⇒ 只追一层永远判"空壳"，platform-api 冤枉 fail。
+ */
+
+@Test
+public func testCommandImplLandedFollowsHelperTwoLevels(): Unit {
+    let cmd = "fn storage_cmd() -> Result<String, String> {\n" +
+        "    let dir = crate::core::paths::app_data_dir()?;\n" +
+        "    Ok(dir)\n" +
+        "}\n"
+    let midHelper = "pub fn app_data_dir() -> Result<String, String> {\n" +
+        "    let boot = bootstrap_dir()?;\n" +
+        "    Ok(boot)\n" +
+        "}\n"
+    let landedHelper = "pub fn bootstrap_dir() -> Result<String, String> {\n" +
+        "    #[cfg(target_env = \"ohos\")]\n" +
+        "    {\n" +
+        "        Ok(String::from(\"/data/storage/el2/base/files\"))\n" +
+        "    }\n" +
+        "    #[cfg(not(target_env = \"ohos\"))]\n" +
+        "    {\n" +
+        "        Ok(String::from(\"~/.local/share\"))\n" +
+        "    }\n" +
+        "}\n"
+    // 第二层有鸿蒙分支 ⇒ 算落地（修前这里判 false，EcoPaste 的假 fail 就是它）
+    var m = HashMap<String, String>()
+    m.add("app_data_dir", midHelper)
+    m.add("bootstrap_dir", landedHelper)
+    @Expect(commandImplLandedWith(cmd, "storage_cmd", m), true)
+    // 第二层也没有鸿蒙分支 ⇒ 仍不算落地（不许为了变绿放宽）
+    var m2 = HashMap<String, String>()
+    m2.add("app_data_dir", midHelper)
+    m2.add("bootstrap_dir", "pub fn bootstrap_dir() -> Result<String, String> {\n    Ok(String::from(\"/tmp\"))\n}\n")
+    @Expect(commandImplLandedWith(cmd, "storage_cmd", m2), false)
+    // 第三层才落地 ⇒ 只追两层，不许无限追（越深越容易把无关分支算成落地）
+    var m3 = HashMap<String, String>()
+    m3.add("app_data_dir", midHelper)
+    m3.add("bootstrap_dir", "pub fn bootstrap_dir() -> Result<String, String> {\n    let x = deeper_dir()?;\n    Ok(x)\n}\n")
+    m3.add("deeper_dir", landedHelper)
+    @Expect(commandImplLandedWith(cmd, "storage_cmd", m3), false)
+}
+
+@Test
+public func testHelperTraceSurvivesCycle(): Unit {
+    // 互相调用（a → b → a）：必须能停，且不因为"转了一圈"就判落地
+    let cmd = "fn storage_cmd() -> Result<String, String> {\n" +
+        "    let dir = app_data_dir()?;\n" +
+        "    Ok(dir)\n" +
+        "}\n"
+    var m = HashMap<String, String>()
+    m.add("app_data_dir", "pub fn app_data_dir() -> Result<String, String> {\n    let b = bootstrap_dir()?;\n    Ok(b)\n}\n")
+    m.add("bootstrap_dir", "pub fn bootstrap_dir() -> Result<String, String> {\n    let a = app_data_dir()?;\n    Ok(a)\n}\n")
+    @Expect(commandImplLandedWith(cmd, "storage_cmd", m), false)
+}
+
+@Test
+public func testPlatformSiteTwoLevelEvidenceNamesChain(): Unit {
+    // 站点判定的证据要把链条点出来（人能顺着复核），不能只说"有落地的实现"。
+    // 注意第一层沿用 0.39.129 的严格口径（**路径限定**调用）——现场命令层就是
+    // `crate::core::paths::app_data_dir(&app)?`；宽松口径只用在第二层（helper 体内多为裸调用）。
+    let cmd = "fn resolve_dir() -> Result<String, String> {\n" +
+        "    let dir = crate::core::paths::app_data_dir()?;\n" +
+        "    Ok(dir)\n" +
+        "}\n"
+    var m = HashMap<String, String>()
+    m.add("app_data_dir", "pub fn app_data_dir() -> Result<String, String> {\n    let b = bootstrap_dir()?;\n    Ok(b)\n}\n")
+    m.add("bootstrap_dir", "pub fn bootstrap_dir() -> Result<String, String> {\n" +
+        "    #[cfg(target_env = \"ohos\")]\n" +
+        "    {\n" +
+        "        Ok(String::from(\"/data/storage/el2/base/files\"))\n" +
+        "    }\n" +
+        "}\n")
+    let (gap, why) = judgePlatformSiteWith(cmd, 2, m)
+    @Expect(gap, false)
+    @Expect(why.contains("app_data_dir"), true)
+    @Expect(why.contains("bootstrap_dir"), true)
+}
