@@ -4009,7 +4009,10 @@ withBridge(function(tauri){
     MIG.verdict = String(st.verdict || '');
     MIG.deviceInRecord = (st.deviceInRecord === true);
     if ($('migratePct')) {
-      $('migratePct').textContent = MIG.percent + '%　' + deviceText(st);
+      // 0.39.133：优先用后端算好的 `deviceText`（口径单点在仓颉侧 `deviceTextOf`）。
+      // 之前这里只认本地 deviceText(st)，而 AI 路径的 st 里没有 deviceInRecord
+      // ⇒ 跑完 8 步全绿还写「未连接真机（无部署记录）」（§4-105 同族）。
+      $('migratePct').textContent = MIG.percent + '%　' + (st.deviceText || deviceText(st));
       $('migratePct').title = '「真机已连接」= 本次迁移开始时的检测；'
         + '「部署记录」= .lingqu/deploy 里最近一次部署核实到的设备；'
         + '本次起始时没插设备但中途插上的，deploy/verify 这两步会被跳过（可单独重跑）。';

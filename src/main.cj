@@ -5934,6 +5934,7 @@ public class MigrateStatusCommand <: CommandHandler {
         let (devRec, devSerial) = deployDeviceOf(snap.project, snap.path)
         o.put("deviceInRecord", JsonBool(devRec))
         o.put("deviceSerial", JsonString(devSerial))
+        o.put("deviceText", JsonString(deviceTextOf(snap.hasDevice, devRec, devSerial)))
         return o
     }
 }
@@ -6207,6 +6208,11 @@ public class AutoPortStatusCommand <: CommandHandler {
             name = "project"
         }
         let rows = ArrayList<MigrateRow>()
+        // 设备口径（0.39.133）：**AI 路径也要回投**。前端是拿 autoport_status 的返回喂
+        // renderMigrate 的，之前这里没有 deviceInRecord ⇒ 永远显示「未连接真机（无部署记录）」，
+        // 而同一轮 deploy 落档里明明有设备（用户实测：跑完 8 步全绿，那行字还写未连接）。
+        let (devRec, devSerial) = deployDeviceOf(name, path)
+        let hasDevNow = devRec || migrateHasDevice()
         for (step in MIGRATE_STEPS) {
             let obs = observeTaskStepAt(name, step, path)
             let row = MigrateRow()
@@ -6215,7 +6221,8 @@ public class AutoPortStatusCommand <: CommandHandler {
             row.ran = obs.exists
             row.ok = obs.exists && obs.ok
             row.note = obs.note
-            if (migrateNeedsDevice(step) && !migrateHasDevice()) {
+            // 起始快照 + 落档兜底：中途插上设备、或落档里已核实过，就不要再标「未连接真机」
+            if (migrateNeedsDevice(step) && !hasDevNow) {
                 row.skipped = "未连接真机"
             }
             rows.add(row)
@@ -6303,6 +6310,11 @@ public class AutoPortStatusCommand <: CommandHandler {
         o.put("busySecs", JsonInt(busySecs))
         o.put("turnEnded", JsonBool(turnEnded))
         o.put("handoff", JsonBool(handoff))
+        // 设备三件套（0.39.133）：AI 路径的起始检测我们没存 ⇒ hasDevice 传 false，
+        // 靠落档那档说话；前端优先用这里的 deviceText（口径单点在 deviceTextOf）。
+        o.put("deviceInRecord", JsonBool(devRec))
+        o.put("deviceSerial", JsonString(devSerial))
+        o.put("deviceText", JsonString(deviceTextOf(false, devRec, devSerial)))
         o.put("verdict", JsonString(verdict))
         o.put("escalation", JsonString(escalation))
         // 飞轮有没有真的转（R-1 判据位）：跑完一轮 `.lingqu/notes/<工程>.md` 还是空的，

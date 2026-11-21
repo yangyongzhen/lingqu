@@ -527,7 +527,11 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "- **降级（登记为 limit）之前必须能说清**：三层为什么都走不通。降级要如实登记（落档 limit + "
     d += "必要时让人拍板），**静默砍功能不算限制，算移植失败**。\n"
     d += "- 判\"平台没有某 API\"前先看它落在 fork 源码的**哪个 impl 块**、有没有被 cfg 门控"
-    d += "（§4-174：报错说\"没有\"≠ 真的没实现）。\n\n"
+    d += "（§4-174：报错说\"没有\"≠ 真的没实现）。\n"
+    d += "- **第三方 crate 先看它的平台实现目录**（§4-189）：`ls <crate>/src/platform/` 或看 feature 表——"
+    d += "`clipboard-rs` 只有 win/macos/ios/x11/wayland、**没有 ohos**，而鸿蒙 `target_os` 也是 linux ⇒ "
+    d += "编译能过、运行时落进 unix 分支找 X11/Wayland（设备上根本没有）。**\"编译过了\"≠\"这平台有实现\"**；"
+    d += "补完一个插件，回头把同族常用插件（剪贴板/通知/托盘/全局快捷键）在扫描名单里逐个点名。\n\n"
 
     // 0.39.130：cjh 1.6.13 接入华为开发者知识库（MCP http 传输）后，agent 有了权威的
     // 鸿蒙资料源。但"有工具"≠"会用"——不写清何时该查，它会靠模型记忆猜 API 语义

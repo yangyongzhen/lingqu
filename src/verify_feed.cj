@@ -148,6 +148,29 @@ func collectVerifyInput(projName: String, projPath: String): ChecklistInput {
         case None => ()
     }
 
+    // 事件实测通道（0.39.133）：`probe.json` 里以 `event:` 前缀登记的条目 = 真机上逐条触发过的事件。
+    // 为什么单开一种键：事件不是"点某个按钮"，按文本点按的探针（`feat:probe:*`）覆盖不到它；
+    // 而 `events` 项原来两分支都写 unknown ⇒ 没有这条通道就永远判不了 pass。
+    match (readJsonOrNone(resolveLqPath(projPath, "verify/${projName}.probe.json"))) {
+        case Some(root) =>
+            let feats = objFieldOf(root, "features")
+            match (feats.kind()) {
+                case JsonKind.JsObject =>
+                    for ((pk, pv) in feats.asObject().getFields()) {
+                        if (!pk.startsWith("event:")) {
+                            continue
+                        }
+                        if (jsonStrField(pv, "verdict") != "pass") {
+                            continue
+                        }
+                        inp.eventProbePass += 1
+                        inp.eventProbeNames.add(pk[6..pk.size])
+                    }
+                case _ => ()
+            }
+        case None => ()
+    }
+
     // ⑤ 交叉编译：退出码 + 前端指纹比对
     // ② 交叉编译 + 前端指纹（"跑过没有"与"过没过"分开记：§4-63）
     match (readJsonOrNone(resolveLqPath(projPath, "build/${projName}.json"))) {

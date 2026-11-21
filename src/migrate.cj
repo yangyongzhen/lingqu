@@ -67,6 +67,32 @@ public class MigrateRow {
     }
 }
 
+/**
+ * 设备状态那句文案（三档，**口径单点**）。
+ *
+ * 为什么收成后端纯函数：这句话原来只在前端 `deviceText()` 里算，而 **AI 路径的
+ * `t2h:autoport_status` 不回投 `deviceInRecord`** ⇒ 页面拿到的 st 没这个字段 ⇒ 永远落到
+ * 第三档「未连接真机（无部署记录）」，可同一轮 `deploy` 落档明明是「装成功/启成功」
+ * （§4-105 同族：拿起始快照冒充"现在"）。现在后端算好并回投 `deviceText`，
+ * 前端只在字段缺失时回落本地同口径实现。
+ *
+ * @param hasDevice 本次迁移/本轮 AI 巡飞**起始时**的检测结果
+ * @param inRecord  `.lingqu/deploy/<工程>.json` 里最近一次部署核实到的真机
+ * @param serial    上面那份落档里的序列号（可为空）
+ */
+public func deviceTextOf(hasDevice: Bool, inRecord: Bool, serial: String): String {
+    if (hasDevice) {
+        return "真机已连接"
+    }
+    if (inRecord) {
+        if (serial.size > 0) {
+            return "真机已连接（部署记录 ${serial}）"
+        }
+        return "真机已连接（部署记录）"
+    }
+    return "未连接真机（无部署记录）"
+}
+
 /** 一键迁移的可观测状态（命令层持有；页面轮询 `t2h:migrate_status` 读它） */
 public class MigrateState {
     public var running: Bool = false

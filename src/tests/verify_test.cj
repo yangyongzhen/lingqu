@@ -37,6 +37,75 @@ func greenInput(): ChecklistInput {
     return i
 }
 
+/*
+ * 0.39.133：`events` 项原来两分支都写 `unknown`（`if (started && hilogHealthy) { "unknown" } else { "unknown" }`），
+ * 等于**永远不可能 pass**，与 note 里"事件通路要逐条触发才算验证"自相矛盾（§4-136 同族）。
+ * 现在认 `probe.json` 里 `event:<事件名>` 的实测记录：有 → pass，没有 → 仍未知。
+ */
+/*
+ * 0.39.133：落地判据要认 `cfg!(...)` **宏**形态。
+ *
+ * 现场（EcoPaste `install_early_panic_hook`）：
+ *   `let p = if cfg!(target_env = "ohos") { 沙箱路径 } else { std::env::temp_dir() };`
+ * 只认 `#[cfg(...)]` 属性时它被冤枉成"没有鸿蒙分支"，而它恰恰是鸿蒙上唯一能留下
+ * 早期 panic 栈的手段（0.39.108 白屏就是靠它抓到的）。
+ */
+@Test
+public func testLandedOhosAcceptsCfgMacro(): Unit {
+    let landed = "fn hook() {\n" +
+        "    let p = if cfg!(target_env = \"ohos\") {\n" +
+        "        PathBuf::from(\"/data/storage/el2/base/files/panic-early.log\")\n" +
+        "    } else {\n" +
+        "        std::env::temp_dir().join(\"x.log\")\n" +
+        "    };\n" +
+        "}\n"
+    @Expect(hasLandedOhosBlockIn(landed), true)
+    // 空壳分支不算落地
+    let stub = "fn hook() {\n    if cfg!(target_env = \"ohos\") {\n    }\n}\n"
+    @Expect(hasLandedOhosBlockIn(stub), false)
+    // `not(...)` 是桌面分支，不能当鸿蒙落地
+    let desk = "fn hook() {\n    if cfg!(not(target_env = \"ohos\")) {\n        std::env::temp_dir()\n    }\n}\n"
+    @Expect(hasLandedOhosBlockIn(desk), false)
+}
+
+@Test
+public func testEventsItemUsesProbeEvidence(): Unit {
+    // ① 只有"应用起来了"这条间接证据：仍是未测（不许凭它判 pass）
+    let a = ChecklistInput()
+    a.eventCount = 1
+    a.started = true
+    a.hilogHealthy = true
+    var v1 = ""
+    for (it in buildChecklist(a)) {
+        if (it.id == "events") {
+            v1 = it.verdict
+        }
+    }
+    @Expect(v1, "unknown")
+    // ② 真机逐条触发过：pass，且 note 与证据都要说清"哪几个事件被触发过"
+    let b = ChecklistInput()
+    b.eventCount = 1
+    b.eventProbePass = 1
+    b.eventProbeNames.add("settings://updated")
+    var v2 = ""
+    var note2 = ""
+    var hasName = false
+    for (it in buildChecklist(b)) {
+        if (it.id == "events") {
+            v2 = it.verdict
+            note2 = it.note
+            for (e in it.evidence) {
+                if (e.contains("settings://updated")) {
+                    hasName = true
+                }
+            }
+        }
+    }
+    @Expect(v2, "pass")
+    @Expect(note2.contains("逐条触发"), true)
+    @Expect(hasName, true)
+}
+
 @Test
 public func testChecklistGreenPathAllPassOrLimit(): Unit {
     let items = buildChecklist(greenInput())

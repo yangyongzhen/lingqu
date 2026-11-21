@@ -113,6 +113,63 @@ fn b() {
     }
 }
 
+/*
+ * 0.39.133：路径类 API 不止 `app_data_dir`。EcoPaste 的 `app_log_dir()` 就是这么漏掉的——
+ * 名单里只有 app_data_dir，于是「命令内部路径 EPERM」这类缺口在判据分母里**根本不存在**
+ * （用户点「Log Directory → Open」提示「Open Directory failed，没有权限」，
+ *  而 scan / verify 全程没看见它）。
+ */
+@Test
+public func testParsePlatformApisCoversPathApis(): Unit {
+    let text = """
+fn a(app: &App) {
+    let d = app.path().app_log_dir().unwrap();
+    let e = app.path().app_local_data_dir().unwrap();
+    let f = app.path().app_config_dir().unwrap();
+    let g = app.path().app_cache_dir().unwrap();
+}
+"""
+    let items = parsePlatformApis(src("src-tauri/src/lib.rs", text))
+    var names = ArrayList<String>()
+    for (it in items) {
+        names.add(it.name)
+    }
+    @Expect(names.contains("app_log_dir"), true)
+    @Expect(names.contains("app_local_data_dir"), true)
+    @Expect(names.contains("app_config_dir"), true)
+    @Expect(names.contains("app_cache_dir"), true)
+    // 这几个前缀不该被 app_data_dir 误命中（反过来也一样）
+    @Expect(names.contains("app_data_dir"), false)
+}
+
+/*
+ * 0.39.133：剪贴板是比 opener 更常用的一类，之前**完全没进扫描名单**。
+ * EcoPaste 真机实测「复制了内容、界面 0 条」，查依赖源码才看清：
+ * clipboard-rs 0.3.5 的 `src/platform/` 只有 win/macos/ios/x11/wayland，**没有 ohos**；
+ * 而鸿蒙 `target_os` 也是 linux ⇒ 落进 unix 分支找 X11/Wayland，设备上根本没有。
+ */
+@Test
+public func testParsePlatformApisCoversClipboard(): Unit {
+    let text = """
+use clipboard_rs::{ClipboardWatcher, ClipboardWatcherContext};
+fn start() {
+    let mut w = ClipboardWatcherContext::new().unwrap();
+    w.start_watch();
+}
+"""
+    let items = parsePlatformApis(src("src-tauri/src/clipboard/watcher.rs", text))
+    var names = ArrayList<String>()
+    for (it in items) {
+        names.add(it.name)
+    }
+    @Expect(names.contains("clipboard-rs"), true)
+    // 判定档要能指出"鸿蒙没有实现"，而不是落进"未归类 → 人工"
+    let v = verdictOfPlatform("clipboard-rs")
+    @Expect(v[0], V_DOWNGRADE)
+    @Expect(v[1], "R3-015")
+    @Expect(v[2].contains("pasteboard"), true)
+}
+
 @Test
 public func testVerdictOfPlatform(): Unit {
     @Expect(verdictOfPlatform("rfd::FileDialog")[0], V_DOWNGRADE)

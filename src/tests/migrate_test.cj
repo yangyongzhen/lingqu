@@ -340,3 +340,21 @@ public func testDeployNoteCarriesReasonOnFailure(): Unit {
     let bare = deployNoteOf(false, false, 3, false, "", "")
     @Assert(bare.contains("｜"), false)
 }
+
+/*
+ * 0.39.133：设备状态那句文案的三档口径（§4-105 同族：起始快照不许冒充"现在"）。
+ *
+ * 用户实测现场：AI 一键迁移跑完 8 步全绿，那行字仍写「100%　未连接真机（无部署记录）」，
+ * 而同一轮 deploy 落档是「装成功 / 启成功」。根因是 **AI 路径的 `t2h:autoport_status`
+ * 不回投 `deviceInRecord`** ⇒ 前端 deviceText(st) 永远落到第三档。
+ */
+@Test
+public func testDeviceTextOfThreeTiers(): Unit {
+    // 本次起始时真的检测到设备
+    @Assert(deviceTextOf(true, false, ""), "真机已连接")
+    // 起始没检测到、但落档里有部署核实（中途插上 / 上一轮部署过）——不许再说未连接
+    @Assert(deviceTextOf(false, true, "192.168.3.105:46163"), "真机已连接（部署记录 192.168.3.105:46163）")
+    @Assert(deviceTextOf(false, true, ""), "真机已连接（部署记录）")
+    // 两条都没有，才允许说未连接
+    @Assert(deviceTextOf(false, false, ""), "未连接真机（无部署记录）")
+}

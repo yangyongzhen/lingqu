@@ -97,6 +97,16 @@ public class ChecklistInput {
     /** 扫描结果：命令 / 事件 / 插件 / 前端文件 / 平台 API 的条数（0 = 没扫过） */
     public var commandCount: Int64 = 0
     public var eventCount: Int64 = 0
+    /**
+     * 事件实测通道（0.39.133）：`<工程>.probe.json` 里以 `event:` 前缀登记的条目中判 pass 的条数。
+     *
+     * 为什么要有它：`events` 项原来两分支都写 `unknown`，**没有任何路径能判 pass**（与 note 里
+     * "事件通路要逐条触发才算验证"自相矛盾，§4-136 同族）。事件不是"点一下某个按钮"，探针按文本
+     * 点按的 `feat:probe:*` 覆盖不到它，所以单开一种键：`event:<事件名>`。
+     */
+    public var eventProbePass: Int64 = 0
+    /** 实测触发过的事件名（进证据行，人能顺着复核） */
+    public var eventProbeNames: ArrayList<String> = ArrayList<String>()
     public var pluginCount: Int64 = 0
     public var frontendCount: Int64 = 0
     public var platformCount: Int64 = 0
@@ -670,6 +680,29 @@ public func hasLandedOhosBlockIn(body: String): Bool {
             }
         }
         i = findFrom(body, marker, i + marker.size)
+    }
+    // 0.39.133：`cfg!(target_env = "ohos")` **宏**形态（编译期布尔）也要认。
+    // 现场（EcoPaste）：`install_early_panic_hook` 写的是
+    //   `let p = if cfg!(target_env = "ohos") { 沙箱路径 } else { temp_dir() };`
+    // 只认 `#[cfg(...)]` 属性时它被冤枉成"没有鸿蒙分支"——而它恰恰是鸿蒙上唯一能留下
+    // 早期 panic 栈的手段（§4-141 同族：判"有没有落地"要认多种形态，不能只认一种写法）。
+    let mac = "cfg!("
+    var j = findFrom(body, mac, 0)
+    while (j >= 0) {
+        let close = findFrom(body, ")", j)
+        if (close >= 0) {
+            let arg = body[j..close + 1]
+            if (arg.contains("ohos") && !arg.contains("not(")) {
+                let brace = findFrom(body, "{", close + 1)
+                if (brace >= 0) {
+                    let (ms, me) = bodyRangeOf(body, brace)
+                    if (!ohosStubOnly(body[ms..me])) {
+                        return true
+                    }
+                }
+            }
+        }
+        j = findFrom(body, mac, j + mac.size)
     }
     return false
 }
@@ -1459,10 +1492,20 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
     // ⑤ 事件回投（后端 → 前端）：条数来自扫描
     if (inp.eventCount > 0) {
         let ev = CheckItem("events", "后端事件回投可用（共 ${inp.eventCount} 个事件）")
-        ev.verdict = if (inp.started && inp.hilogHealthy) { "unknown" } else { "unknown" }
-        ev.note = "事件通路要逐条触发才算验证；当前只有「应用起来了」这条间接证据"
-        if (inp.started) {
-            ev.evidence.add("应用已启动（间接证据，未逐条触发）")
+        if (inp.eventProbePass > 0) {
+            // 真机逐条触发过（probe.json 的 `event:<名称>`）→ 有事实证据才判 pass
+            ev.verdict = "pass"
+            ev.note = "真机实测：${inp.eventProbePass} 个事件逐条触发过，且看到回投生效"
+            for (n in inp.eventProbeNames) {
+                ev.evidence.add("实测触发：${n}")
+            }
+        } else {
+            ev.verdict = "unknown"
+            ev.note = "事件通路要逐条触发才算验证；当前只有「应用起来了」这条间接证据" +
+                "（补法：真机触发后在 `<工程>.probe.json` 里登记 `\"event:<事件名>\": {\"verdict\":\"pass\"}`）"
+            if (inp.started) {
+                ev.evidence.add("应用已启动（间接证据，未逐条触发）")
+            }
         }
         items.add(ev)
     }
