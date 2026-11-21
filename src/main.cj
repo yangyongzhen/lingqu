@@ -4050,11 +4050,14 @@ public class VerifyCommand <: CommandHandler {
             return verifyRecordResponse(path)
         }
         let wantShots = argBool(args, "screenshot", true)
+        let hdc = hdcPathOr()
         var serial = argStr(args, "serial", "")
         if (serial == "") {
-            serial = deploySerialOf(projName, path)
+            // 0.39.131：落档里的序列号可能已过期（设备从 USB 换到无线调试后 connect-key 变了），
+            // 旧实现直接用落档值 ⇒ 截图/faultlog 三条命令全回「Not match target founded」，
+            // 落档却仍写「已保存」（§4-38 过期值盖掉现场）
+            serial = resolveDeviceKeyOf(liveHdcTargetsText(hdc), deploySerialOf(projName, path))
         }
-        let hdc = hdcPathOr()
 
         // ① + ② 取数与采证
         let inp = collectVerifyInput(projName, path)
@@ -5561,7 +5564,8 @@ func deployDeviceOf(projName: String, projectPath: String): (Bool, String) {
     }
 }
 
-func migrateHasDevice(): Bool {    let hdc = hdcPathOr()
+func migrateHasDevice(): Bool {
+    let hdc = hdcPathOr()
     if (hdc == "") {
         return false
     }
@@ -5573,6 +5577,26 @@ func migrateHasDevice(): Bool {    let hdc = hdcPathOr()
     } catch (e: Exception) {
         eprintln("[lingqu][migrate] 查设备失败：${e}")
         return false
+    }
+}
+
+/**
+ * `hdc list targets -v` 的原始输出（拿不到给空串）。
+ *
+ * 给 `resolveDeviceKeyOf` 用：设备从 USB 换到无线调试后 connect-key 会变，
+ * 必须按**现场在线目标**校正落档里的旧序列号（0.39.131 真机实测）。
+ */
+func liveHdcTargetsText(hdc: String): String {
+    if (hdc == "") {
+        return ""
+    }
+    try {
+        let (code, out, errOut) = executeWithOutput(hdc, ["list", "targets", "-v"])
+        let _ = code
+        return lenientUtf8(out) + "\n" + lenientUtf8(errOut)
+    } catch (e: Exception) {
+        eprintln("[lingqu] 查在线设备失败：${e}")
+        return ""
     }
 }
 

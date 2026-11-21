@@ -76,8 +76,35 @@ public func parseHdcTargets(text: String): ArrayList<HdcDevice> {
     return out
 }
 
-/** COM1 / COM12 这类串口名 */
-func isComPort(s: String): Bool {
+/**
+ * 选真机 connect-key：**以在线目标为准，落档里的序列号只在"仍然在线"时才采用**。
+ *
+ * 起因（0.39.131 真机实测）：设备从 USB（`3QC0124B20000048`）换成无线调试
+ * （`192.168.3.105:46163`）后，落档里那条旧序列号对 hdc 已经失效，而旧实现
+ * 「落档优先且直接返回」⇒ 每条设备命令都回
+ * `[Fail]Not match target founded, check connect-key please`，probe 枚举到 0 个节点、
+ * verify 的截图/faultlog 三条命令全挂却仍报「已保存」（§4-38 / §4-75 同族：
+ * 落档里的过期值盖掉了现场）。
+ *
+ * @param liveTargets `hdc list targets -v` 的**原始输出**
+ * @param recorded    落档里记的序列号（可能过期，也可能为空）
+ * @return 可用的 connect-key；解析不到在线设备时沿用 `recorded`（不比旧行为更差）
+ */
+public func resolveDeviceKeyOf(liveTargets: String, recorded: String): String {
+    let devices = parseHdcTargets(liveTargets)
+    if (devices.size == 0) {
+        return recorded
+    }
+    for (d in devices) {
+        if (d.serial == recorded) {
+            // 仍然在线 → 用落档那份，历史证据与本次取证的键保持一致
+            return recorded
+        }
+    }
+    return devices[0].serial
+}
+
+/** COM1 / COM12 这类串口名 */func isComPort(s: String): Bool {
     if (!s.startsWith("COM")) {
         return false
     }

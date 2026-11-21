@@ -577,7 +577,11 @@ func collectEvidence(projName: String, projPath: String, hdc: String, serial: St
         return ev
     }
     if (wantShots) {
-        let name = "${projName}-verify.jpeg"
+        // 0.39.131：文件名带时间戳。此前固定叫 `<工程>-verify.jpeg`，recv 失败时
+        // 「本地有文件」会把**上一次的截图**当成本次证据（真机实测：三条 hdc 命令全回
+        // `Not match target founded`，落档却写「已保存」——§4-63 的"跑了但没测到"变体）。
+        // 唯一文件名让"文件存在"只可能来自这一次。
+        let name = "${projName}-verify-${evidenceStampOf()}.jpeg"
         let remote = "/data/local/tmp/${name}"
         try {
             let (code, out, errOut) = executeWithOutput(hdc,
@@ -616,6 +620,15 @@ func collectEvidence(projName: String, projPath: String, hdc: String, serial: St
         ev.log += "[evidence] faultlog 起不来：${e}\n"
     }
     return ev
+}
+
+/** 采证文件名用的时间戳（毫秒；取不到给 0，不阻塞采证） */
+func evidenceStampOf(): String {
+    try {
+        return "${DateTime.now().toUnixTimeStamp().toMilliseconds()}"
+    } catch (e: Exception) {
+        return "0"
+    }
 }
 
 /** 当前时间（报告里要用）；取不到给空串，不阻塞落档 */

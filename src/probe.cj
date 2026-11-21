@@ -384,24 +384,13 @@ func probeHdc(hdc: String, serial: String, tail: Array<String>): (Int64, String)
 /** 设备序列号：先认部署落档（那是真装过的机器），没有才问 hdc */
 func probeDeviceOf(hdc: String, projName: String, projPath: String): String {
     let fromRecord = deploySerialOf(projName, projPath)
-    if (fromRecord.size > 0) {
-        return fromRecord
-    }
     let (code, text) = probeHdc(hdc, "", ["list", "targets", "-v"])
     if (code != 0) {
-        return ""
+        return fromRecord
     }
-    for (line in text.split("\n")) {
-        let t = line.trimAscii()
-        if (t.size == 0 || t.startsWith("COM")) {
-            continue     // §4-40：`COM1 UART Ready` 是串口噪声，不是设备
-        }
-        let parts = t.split("\t")
-        if (parts.size >= 2 && parts[0].trimAscii().size > 0) {
-            return parts[0].trimAscii()
-        }
-    }
-    return ""
+    // 0.39.131：落档里的序列号可能已过期（USB → 无线调试换了 connect-key），
+    // 必须按在线目标校一次，否则每条 hdc 命令都回「Not match target founded」
+    return resolveDeviceKeyOf(text, fromRecord)
 }
 
 /** 探针执行日志（每一条外部命令的退出码与输出都要留痕，§1-3 证据纪律） */

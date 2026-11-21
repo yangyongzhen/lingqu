@@ -25,6 +25,41 @@ public func testParseHdcTargetsSkipsSerialNoise(): Unit {
     @Assert(tcp[0].serial, "127.0.0.1:5555")
 }
 
+/*
+ * 0.39.131 真机实测（SLG-W10 无线调试）：落档里记的是 USB 序列号，设备换到无线后
+ * 每条 hdc 命令都回 `[Fail]Not match target founded, check connect-key please`，
+ * probe 枚举 0 个节点、verify 采证三条全挂却仍报「已保存」。判据改成"以在线目标为准"。
+ */
+
+@Test
+public func testResolveDeviceKeyPrefersLiveWhenRecordedStale(): Unit {
+    // 现场原始输出：无线目标在线 + 两条串口噪声；落档里是 USB 时代那条序列号
+    let live = "192.168.3.105:46163\t\tTCP\tConnected\tlocalhost\thdc\nCOM1\t\tUART\tReady\tunknown...\thdc\nCOM2\t\tUART\tReady\tunknown...\thdc\n"
+    @Assert(resolveDeviceKeyOf(live, "3QC0124B20000048"), "192.168.3.105:46163")
+}
+
+@Test
+public func testResolveDeviceKeyKeepsRecordedWhenStillOnline(): Unit {
+    // 落档序列号仍在在线列表里 → 保持原键（历史证据与本次取证的键一致）
+    let live = "3QC0124B20000048\t\tUSB\tConnected\tlocalhost\thdc\n192.168.3.105:46163\t\tTCP\tConnected\n"
+    @Assert(resolveDeviceKeyOf(live, "3QC0124B20000048"), "3QC0124B20000048")
+}
+
+@Test
+public func testResolveDeviceKeyFallsBackToRecordedWithoutLive(): Unit {
+    // 解析不到在线设备（空态 / 只有串口噪声）→ 沿用落档值，不比旧行为更差
+    @Assert(resolveDeviceKeyOf("[Empty]\n", "3QC0124B20000048"), "3QC0124B20000048")
+    @Assert(resolveDeviceKeyOf("COM1\t\tUART\tReady\tunknown...\thdc\n", "3QC0124B20000048"), "3QC0124B20000048")
+    // 落档也没有：给空串，让调用方按"没有可用设备"处置，而不是拿垃圾键去跑命令
+    @Assert(resolveDeviceKeyOf("", ""), "")
+}
+
+@Test
+public func testResolveDeviceKeyUsesLiveWhenNoRecord(): Unit {
+    // 首次连接（还没有部署落档）：直接用在线目标，不必等落档
+    @Assert(resolveDeviceKeyOf("192.168.3.105:46163\t\tTCP\tConnected\n", ""), "192.168.3.105:46163")
+}
+
 @Test
 public func testParseInstallFailureSigningCode(): Unit {
     // 真实失败输出：用 OpenHarmony 默认材料签名后直装（未绑定设备）被拒
