@@ -20,9 +20,27 @@
 - **opener 桥双侧落地**：Rust 侧新增 `src-tauri/src/ohos_bridge.rs`（`open_url` / `open_path` / `reveal_in_dir`，经 `run_on_main_thread` 投递主线程后调 ArkTS `__ohos_dispatch`）；4 处调用点（`open_clipboard_item_link`、`reveal_clipboard_item`、`open_external_url`、`open_preference_directory`）加鸿蒙分支；ArkTS 侧 `EntryAbility.ets` 挂分发器（`open_url` / `open_path` → `startAbility` + `ohos.want.action.viewData`）
 - **编译与审查两道都过**：`cargo build --release --target aarch64-unknown-linux-ohos` **exit=0**（1m07s）；`lingqu-cli hap` → `gates.passed=true`、`expectedSo=libeco_paste_lib.so` 装配进 `libs/arm64-v8a`、`signed=true`——**hvigor 审 ArkTS 通过**（§4-162 的第三步，cargo 不审 ArkTS）
 - 单测 638 → **639**（新增 TOML 合法性判据用例）
+- **真机端到端（`open_url` 分支，SLG-W10 / 无线 `192.168.3.105:46163`）**：装 21,724,732 B 的 signed HAP →
+  设置 → About → GitHub 行点 `Open`，三路证据齐：① hilog `ecopaste: open_url ok: https://github.com/EcoPasteHub/EcoPaste`；
+  ② 前台从 `com.ayangweb.eco_paste` 切到 **`com.huawei.hmos.browser`**（`state #FOREGROUND`）；
+  ③ 截图是系统浏览器（首次启动的隐私声明页，页面加载取决于用户点「同意」）
+- **`bootstrap_dir` 的鸿蒙分支真机可见**：设置 → Data 页 `Data Directory` 显示
+  `/data/storage/el2/base/files/prod`——本条目判据修复所依据的那条路径，真机上确实生效
 
 ### 未验证（如实标注）
-- **真机端到端点按**：Rust/ArkTS 两侧都编过了，但没有重新部署到设备上点「打开链接 / 在文件夹中显示」，实际行为未取证（设备在线 `192.168.3.105:46163`）
+- **`open_path` 分支未取证**：设置的 Data 页入口在 ArkWeb 里点不中——`Data Directory` 行的"打开"是图标、
+  `uitest dumpLayout` 不映射成独立节点；本次部署后**连设置页的 K 按钮连点两次也没进去**
+  ⇒ 该分支目前只有编译证据
+- **`Log Directory` 缺口：用户实测有提示，已修，真机复验未完成**。人实测反馈「点 Log Directory
+  提示 **Open Directory failed，没有权限**」——不是先前记的"无反应"：前端有提示，坏在
+  `app.path().app_log_dir()` 在鸿蒙返回桌面风格路径 ⇒ `create_dir_all` EPERM，**命令在到桥之前就失败**
+  （与 `app_local_data_dir` 同族）。**样本侧已修**：`core/paths.rs` 新增 `log_dir()`
+  （鸿蒙固定 `/data/storage/el2/base/files/logs`，与日志插件 `TargetKind::Folder` 落点一致）+
+  `commands/storage.rs` 的 Logs 分支改用它；`cargo build --target …ohos` **exit=0**，
+  HAP 重打 **21,723,572 B / `signed=true` / `built=true`** 并已部署（`installed=true / started=true`）。
+  **但点不进去设置页 ⇒ 该修复尚未在真机上复验**
+- 当前判据分母看不到这一类：`platform-api` 只问"opener 有没有落地"，`app_log_dir` 的 EPERM 是
+  **命令内部的路径问题**，两种缺陷在落档里长得不一样
 - `flywheelHint`（R-1 监管态提醒）实跑未验：EcoPaste 的 `.lingqu/notes` 目前为空、前置条件在，但界面探针没跑
 - `reveal_item_in_dir` 在鸿蒙**降级**为"打开父目录"（鸿蒙没有"在文件管理器中定位某个文件"的公开能力）——是降级不是等价物
 
