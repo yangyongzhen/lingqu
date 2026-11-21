@@ -7,8 +7,8 @@
 
 | 平台 | 目录 | 产物形态 | 说明 |
 |---|---|---|---|
-| Windows x64 | `win-x64/` | `cjh.exe` + 4 个同目录 DLL | cjh 版本 **v1.6.12**（`dist/cjh-v1.6.12-windows-x64-selfcontained.zip`），实测 `--version` → `cjh v1.6.12` |
-| Linux x64 | `linux-x64/` | 单个 `cjh` | 静态链接，**没有随行 DLL**（形态与 Windows 不同，这是 cjh 官方分发形态决定的）；v1.6.12，`--version` 实测 `cjh v1.6.12` |
+| Windows x64 | `win-x64/` | `cjh.exe` + 4 个同目录 DLL | cjh 版本 **v1.6.18**（`dist/cjh-v1.6.18-windows-x64-selfcontained.zip`），实测 `--version` → `cjh v1.6.18` |
+| Linux x64 | `linux-x64/` | 单个 `cjh` | 静态链接，**没有随行 DLL**（形态与 Windows 不同，这是 cjh 官方分发形态决定的）；v1.6.18，`--version` 实测 `cjh v1.6.18` |
 
 Windows 那四个 DLL 是**按名字 `dlopen`/`LoadLibrary` 加载**的，不在导入表里，缺一个的症状很隐蔽：
 
@@ -44,10 +44,10 @@ sha256sum -c <(cat vendor/cjh/SHA256SUMS | sed 's| win-x64/| vendor/cjh/win-x64/
 
 ```bash
 # Windows 产物（exe + 4 DLL）：直接喂 cjh 仓 dist/ 下的官方发布包即可
-./tools/vendor-cjh.sh --source <cjh>/dist/cjh-v1.6.12-windows-x64-selfcontained.zip --platform win-x64
+./tools/vendor-cjh.sh --source <cjh>/dist/cjh-v1.6.18-windows-x64-selfcontained.zip --platform win-x64
 
 # Linux 产物（单个 cjh）
-./tools/vendor-cjh.sh --source <cjh>/dist/cjh-v1.6.12-linux-x64.tar.gz --platform linux-x64
+./tools/vendor-cjh.sh --source <cjh>/dist/cjh-v1.6.18-linux-x64.tar.gz --platform linux-x64
 ```
 
 `--source` 收**目录或归档**（`.zip` / `.tar.gz`）；归档里的 `cjh-windows-x64.exe` / `cjh-linux-x64`
