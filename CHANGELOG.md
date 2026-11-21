@@ -27,11 +27,14 @@
 - **`misses.jsonl` 记账验证**：`lingqu-cli diagnose --path … --logPath <未知报错>` → `missed=true`、`missCount` 1→2、三档提示正确、台账两行同签名
 
 ### 未验证 / 已知问题（如实标注）
-- **剪贴板采集在鸿蒙上仍不可用（本轮只补了判据，没修功能）**：`clipboard-rs` 无 ohos 平台实现，
-  真机复制内容后界面 0 条、hilog 连 `clipboard watcher started` 都没有。修法方向：
-  `@ohos.pasteboard` 的 `systemPasteboard.on('update')` 订阅 + `getDataSync` 读，经 ArkTS 桥回灌 Rust
-  （我们的 `ohos_bridge` 现在是 Rust→ArkTS 单向，反向还得加通道）。**这是一次"单点修复不复利"的现形**：
-  刚补完 opener，同族更常用的 clipboard 却一直没进名单
+- **剪贴板自动采集：真机三步实测确认"三方应用做不了"（能力位 limit，不是我们的缺陷）**：
+  ① `clipboard-rs` 无 ohos 平台实现（`src/platform/` 只有 win/macos/ios/x11/wayland）；
+  ② 改走 ArkTS 桥 + `getDataSync()`：`getChangeCount()` **一直在涨**（1→2→3，复制确实被系统记录），
+  但返回的 PasteData **`records=0`**——未授权时**不抛错、静默返回空**（隐私保护是"抹内容"，不是"报错"）；
+  ③ 在 `module.json5` 声明 `ohos.permission.READ_PASTEBOARD` ⇒ **设备直接拒绝安装**
+  （`9568289 install failed due to grant request permissions failed`，KMS 文档标的是 user_grant，
+  与真机行为不符）。桥与代码保留（`getChangeCount` 可用于弱提示），但**不承诺自动采集**；
+  产品化只能改成"用户主动粘贴/拖入/应用内导入"。见 AGENTS §4-190
 - `open_path` 的**按钮路径**未复验：新 HAP 部署后设置页入口（`K` 按钮）连点 5 次没进去（§4-186），只记"未复验"
 - R-1 的 **1.3 自主发 PR 阻塞**：`LINGQU_GITCODE_TOKEN` / `GITCODE_TOKEN` / `ATOMGIT_TOKEN` / `GH_TOKEN` / `~/.github_token` **全部没有**
 - `lingqu-cli diagnose` 的 `--log` 是**日志正文**、`--logPath` 才是文件；传错时静默把路径当正文（本轮我自己栽了一次）——后续可加"看起来像路径就提示"
