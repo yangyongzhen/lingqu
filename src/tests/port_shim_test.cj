@@ -46,6 +46,30 @@ public func testCargoConfigTomlSafeForWindowsPath(): Unit {
     @Assert(tomlSafePath("/opt/sdk/native"), "/opt/sdk/native")
 }
 
+/*
+ * 0.39.131：R2-PORT-008 的跳过判据不能只看「键在不在」。
+ * EcoPaste 现场：旧版本生成的 `.cargo/config.toml` 里 `linker = "D:\oh\…"` 的 `\o` 是非法
+ * 转义，cargo 连 manifest 都读不进去（exit=101），而 `[env]` / `CC_…` 两个键都在 ⇒ 永远跳过。
+ */
+@Test
+public func testTomlBareBackslashDetection(): Unit {
+    // 真坏：双引号内的 `\o` / `\D` 不是 TOML 合法转义
+    @Assert(tomlHasBareBackslashOf("linker = \"D:\\oh\\DevEcoStudio/native/llvm/bin/clang\"\n"), true)
+    @Assert(tomlHasBareBackslashOf("CC_x = \"D:\\oh\\sdk\"\n"), true)
+    // 合法转义不算：`\\` `\t` `\n` `\"` `\uXXXX`
+    @Assert(tomlHasBareBackslashOf("a = \"C:\\\\x\"\n"), false)
+    @Assert(tomlHasBareBackslashOf("a = \"x\\ty\"\n"), false)
+    @Assert(tomlHasBareBackslashOf("a = \"x\\ny\"\n"), false)
+    @Assert(tomlHasBareBackslashOf("a = \"q\\\"w\"\n"), false)
+    @Assert(tomlHasBareBackslashOf("a = \"\\u4e2d\"\n"), false)
+    // 引号外的反斜杠（注释里）不算问题
+    @Assert(tomlHasBareBackslashOf("# 这是 D:\\oh 式的注释\nlinker = \"D:/oh/x\"\n"), false)
+    // 空串/正常内容
+    @Assert(tomlHasBareBackslashOf(""), false)
+    // 当前模板生成的永远是合法的（防回归：生成器自己产出坏内容时这条会红）
+    @Assert(tomlHasBareBackslashOf(cargoConfigToml("D:\\oh\\DevEcoStudio\\sdk\\default\\openharmony\\native")), false)
+}
+
 @Test
 public func testLibRsInjectionBlockShape(): Unit {
     let block = libRsInjectionBlock()

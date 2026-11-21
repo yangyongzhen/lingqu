@@ -146,8 +146,15 @@ public func toolchainOutcomes(srcTauriDir: String, sdkNative: String, hostIsWind
     let ccContent = cargoConfigToml(sdkNative)
     var o8 = RuleOutcome("R2-PORT-008", false, "", "", ccContent)
     o8.tier = T_AUTO
-    if (fileContains(ccPath, "[env]") && fileContains(ccPath, "CC_aarch64_unknown_linux_ohos")) {
+    if (fileContains(ccPath, "[env]") && fileContains(ccPath, "CC_aarch64_unknown_linux_ohos") &&
+        fileContains(ccPath, "link-arg=--sysroot=") && !tomlHasBareBackslashOf(fileTextOf(ccPath))) {
         o8.note = ".cargo/config.toml 已配 OHOS target + [env] C 依赖环境——跳过"
+    } else if (fileContains(ccPath, "# === lingqu: R2-PORT-008 ===")) {
+        // 文件是我们写的、但内容不合法或旧口径（EcoPaste 实测：`linker = "D:\oh\…"` 的 `\o`
+        // 是非法 TOML 转义 ⇒ cargo 连 manifest 都读不进去，退出码 101）。旧判据只看"键在不在"
+        // ⇒ 这种坏文件永远被跳过（§4-122：文件在 ≠ 内容对）⇒ 现在整份按当前模板重写。
+        o8.applied = true
+        o8.note = "重写 .cargo/config.toml：旧内容不合法（裸反斜杠 / sysroot 写法不对），cargo 读不进 manifest"
     } else if (fileContains(ccPath, "aarch64-unknown-linux-ohos")) {
         // 0.39.8 实测教训：只判"文件里出现过 aarch64-unknown-linux-ohos"会误判成已配好。
         // m3u8dl-tauri 的 config.toml 有 target 段却**没有 [env] 段** → ring 的 cc-rs
@@ -167,6 +174,53 @@ public func toolchainOutcomes(srcTauriDir: String, sdkNative: String, hostIsWind
     out.add(o8)
 
     return out
+}
+
+/**
+ * 配置文本里有没有**裸反斜杠**（TOML 非法转义）。
+ *
+ * 为什么需要它（0.39.131，EcoPaste 实测）：R2-PORT-008 原先的幂等判据是
+ * 「`[env]` 在 **且** `CC_aarch64_unknown_linux_ohos` 在」——可旧版本生成的文件里
+ * `linker = "D:\oh\..."` 的 `\o` 是非法转义，**cargo 连 manifest 都读不进去**，
+ * 而键都在 ⇒ 永远跳过、永远不修（§4-122：文件在 ≠ 内容对）。
+ *
+ * 判据只扫**双引号内**的 `\`：TOML basic string 的合法转义只有
+ * `\b \t \n \f \r \\ \" \uXXXX`（注释里的反斜杠不算问题）。
+ */
+public func tomlHasBareBackslashOf(text: String): Bool {
+    var inStr = false
+    var i: Int64 = 0
+    while (i < text.size) {
+        let b = text[i]
+        if (b == 34) { // `"`
+            inStr = !inStr
+        } else if (inStr && b == 92) { // `\`
+            if (i + 1 >= text.size) {
+                return true
+            }
+            let n = text[i + 1]
+            let ok = n == 98 || n == 116 || n == 110 || n == 102 || n == 114 || n == 92 ||
+                n == 34 || n == 120 || n == 117
+            if (!ok) {
+                return true
+            }
+            i += 1 // 跳过被转义的字符，别把 `\\` 的第二个 `\` 再当起手
+        }
+        i += 1
+    }
+    return false
+}
+
+/** 读文件全文（不存在/读失败给空串） */
+func fileTextOf(path: String): String {
+    try {
+        if (!exists(Path(path))) {
+            return ""
+        }
+        return String.fromUtf8(File.readFrom(path))
+    } catch (e: Exception) {
+        return ""
+    }
 }
 
 /** 文件存在且包含标记串（不存在的文件返回 false，不算错误） */
