@@ -4209,6 +4209,21 @@ public class VerifyCommand <: CommandHandler {
             outError = "落档失败：${e}"
         }
 
+        // 0.39.137：**验收通过（有结论且无 fail）时自动导出一次移植成果**，沉淀到独立目录。
+        // 为什么要自动：迁移是原地改样本工程的，成果不冻结就会散在各样本目录里，人找不到也不好提交。
+        // 纪律：导出失败**不改写验收结论**（验收是验收、归档是归档），但原因必须回投，不许静默。
+        var exportDir = ""
+        var exportNote = ""
+        if (outError == "" && stats.fail == 0 && stats.covered > 0) {
+            let exp = exportProject(path, "verify-pass")
+            exportDir = normalizeHostSep(exp.outDir)
+            exportNote = if (exp.ok) {
+                "验收通过，已自动导出移植成果（${exp.copiedFiles} 个文件）"
+            } else {
+                "验收通过，但自动导出失败：${exp.error}"
+            }
+        }
+
         var res = JsonObject()
         res.put("ok", JsonBool(outError == ""))
         res.put("project", JsonString(projName))
@@ -4236,6 +4251,9 @@ public class VerifyCommand <: CommandHandler {
         res.put("scope", JsonString(stats.scope))
         res.put("scopeNote", JsonString(stats.scopeNote))
         res.put("ratePercent", JsonInt(stats.ratePercent))
+        // 自动导出的结果（0.39.137）：空串 = 没触发（未通过）；非空 = 成果目录
+        res.put("exportDir", JsonString(exportDir))
+        res.put("exportNote", JsonString(exportNote))
         var arr2 = JsonArray()
         for (it in items) {
             arr2.add(it.toJson())
@@ -7202,6 +7220,8 @@ public func build(): AppSpec {
         // 从头重跑（0.39.64）：把该工程的迁移落档搬进 .lingqu/_archive-<时间戳>/，让观测从零开始
         app.register("t2h:reset_records", ResetRecordsCommand())
         app.register("t2h:report", ReportCommand())
+        // 0.39.137：把迁移成果导出到独立目录（CLI `export` 同款实现）
+        app.register("t2h:export", ExportCommand())
         app.register("t2h:batch", BatchCommand())
         app.register("t2h:skill", SkillCommand())
         app.register("t2h:agent_context", AgentContextCommand())
@@ -7527,4 +7547,55 @@ func fingerprintsJsonOf(lib: ArrayList<Fingerprint>, userText: String): JsonArra
         arr.add(o)
     }
     return arr
+}
+
+/**
+ * `t2h:export` / `lingqu-cli export`（0.39.137）：把**迁移后的工程**复制到独立目录沉淀。
+ *
+ * 为什么要它：迁移是原地改样本工程的，成果散落在各样本目录里，人找不到、也不好单独提交。
+ * 导出把"这一轮迁移后的样子"冻结成可归档/可提交的目录（附 `MIGRATION.md` + `migration-manifest.json`）。
+ *
+ * 参数：`path`（工程根；缺省取 `LINGQU_EXPORT_PATH`，再缺省取当前工作目录）、
+ *       `out`（成果根目录；缺省 `%USERPROFILE%\lingqu-migrated`，`LINGQU_MIGRATED_DIR` 可覆盖）、
+ *       `trigger`（`manual` / `verify-pass`，只用于落档溯源）。
+ */
+public class ExportCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, args: JsonObject, _: IpcContext): JsonValue {
+        var path = argStr(args, "path", "")
+        if (path.size == 0) {
+            path = envOr("LINGQU_EXPORT_PATH", "")
+        }
+        if (path.size == 0) {
+            path = getWorkingDirectoryOr("")
+        }
+        path = normalizeHostSep(path)
+        let outRoot = normalizeHostSep(argStr(args, "out", migratedRootOf()))
+        var trigger = argStr(args, "trigger", "")
+        if (trigger.size == 0) {
+            trigger = "manual"
+        }
+
+        let res = exportProjectInto(path, outRoot, trigger)
+        let o = JsonObject()
+        o.put("ok", JsonBool(res.ok))
+        o.put("project", JsonString(res.project))
+        o.put("sourcePath", JsonString(normalizeHostSep(res.sourcePath)))
+        o.put("outDir", JsonString(normalizeHostSep(res.outDir)))
+        o.put("trigger", JsonString(res.trigger))
+        o.put("copiedFiles", JsonInt(res.copiedFiles))
+        o.put("skippedEntries", JsonInt(res.skippedEntries))
+        o.put("totalBytes", JsonInt(res.totalBytes))
+        o.put("verifyRate", JsonInt(res.verifyRate))
+        o.put("error", JsonString(res.error))
+        o.put("outJson", JsonString(lqDirOf(path) + cjhPathSep() + "export" + cjhPathSep() +
+            sanitizeFileName(res.project) + ".json"))
+        o.put("nextStep", JsonString(if (res.ok) {
+            "成果目录：${normalizeHostSep(res.outDir)}（含 MIGRATION.md 与 migration-manifest.json）"
+        } else {
+            "导出失败，先看 error"
+        }))
+        return o
+    }
 }

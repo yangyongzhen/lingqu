@@ -84,9 +84,37 @@ public func testScanHapEntriesHealthy(): Unit {
     @Assert(e.ok(), true)
 }
 
+/*
+ * 0.39.136 复现（真机 dbx）：HAP 落档里 `entries.arm64Sos` 出现过
+ * `libdbx_lib.solibs/arm64-v8a/libentry.so` 这种**两个条目粘成一条**的假条目。
+ *
+ * 根因：zip 名字区之间没有分隔符，而 `isNameByte` 允许 `/` 与 `-`，贪婪吃到段尾就会把
+ * 下一条目拼进来（与前端指纹闸的键粘连同族，§4-196）。名字必须截到**第一个** `.so`。
+ */
 @Test
-public func testScanHapEntriesFindsRawfile(): Unit {
-    // 死资源：前端已在 .so 里，rawfile 下的副本读不到
+public func testScanHapEntriesGluedSoNames(): Unit {
+    // 两个条目紧贴、中间没有任何分隔字节
+    let glued = "\u{0}libs/arm64-v8a/libdbx_lib.solibs/arm64-v8a/libentry.so\u{0}".toArray()
+    let e = scanHapEntries(glued)
+    @Assert(e.hasArm64So, true)
+    // 不许出现"两个路径拼在一起"的假条目
+    for (n in e.arm64Sos) {
+        @Assert(n.endsWith(".so"), true)
+        var slashCount: Int64 = 0
+        for (b in n.toArray()) {
+            if (b == 47) {
+                slashCount += 1
+            }
+        }
+        @Assert(slashCount, 2)
+    }
+    @Assert(e.arm64Sos.contains("libs/arm64-v8a/libdbx_lib.so"), true)
+    // 紧贴的第二条同样要被扫到（不能因为跳段而漏掉应用自己的 .so）
+    @Assert(e.arm64Sos.contains("libs/arm64-v8a/libentry.so"), true)
+}
+
+@Test
+public func testScanHapEntriesFindsRawfile(): Unit {    // 死资源：前端已在 .so 里，rawfile 下的副本读不到
     let data = zipish(["module.json", "libs/arm64-v8a/libentry.so",
         "rawfile/index.html", "rawfile/assets/index-AAA.js"])
     let e = scanHapEntries(data)

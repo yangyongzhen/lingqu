@@ -2,6 +2,9 @@ package lingqu
 
 import std.fs.*
 import stdx.encoding.json.*
+// 签名步的成败判定在编译器包（与 `t2h:sign` 共用一份口径），只导这一个符号：
+// 整包导入会和本包里的 `intFieldOf` 一类同名工具撞成 ambiguous（§4-167）。
+import lingqu.compiler.signStepOkOf
 
 /*
  * `t2h:resume` 的观测层：把 `.lingqu/<步骤>/<工程>.json` 这些**已经存在的落档**
@@ -202,10 +205,13 @@ func fillObservation(obs: StepObservation, stepId: String, root: JsonValue): Uni
         let check = objFieldOf(root, "check")
         let modeObj = objFieldOf(root, "mode")
         let modeName = jsonStrField(modeObj, "mode")
+        let autoSign = objFieldOf(root, "autoSign")
         // T5-4：**release 态也算这一步"有结论"**——它装不上真机是设计使然（profile 不含
         // device-ids），不能因此在断点板上显示"失败"，否则人会去"修"一个正常的状态。
         // 老落档没有 mode 段（0.26 之前），此时退回"可直装就算过"的旧口径。
-        obs.ok = boolFieldOf(check, "ok") || modeName == "release"
+        // 0.39.136：`sign --auto` 成功时落档只有 mode/autoSign、**没有 check 段**，
+        // 旧判据只看 check.ok ⇒ 自动签名明明做完，断点板与报告仍判"没过"。
+        obs.ok = signStepOkOf(boolFieldOf(check, "ok"), modeName, boolFieldOf(autoSign, "ok"))
         let label = jsonStrField(modeObj, "modeLabel")
         let reason = jsonStrField(check, "reason")
         if (modeName != "") {

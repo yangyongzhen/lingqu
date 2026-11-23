@@ -44,7 +44,10 @@ description: Tauri 应用移植到鸿蒙 PC（HarmonyOS / OpenHarmony）的完�
    当年自动签名的材料若还在、且 `device-ids` 含本机 UDID，把 `signingConfigs` 抄回
    `build-profile.json5` 即可，hvigor 自己会解密口令
 8. **部署与验证**：hdc 目录坑（cd 到 HAP 目录再 file send）→ `bm install -p` → 手动解锁 →
-   按 [pitfalls.md](references/pitfalls.md) 的验证清单核对（AssetKey 指纹 / rawfile 检测 / 版本号反推）
+   按 [pitfalls.md](references/pitfalls.md) 的验证清单核对（AssetKey 指纹 / rawfile 检测 / 版本号反推）；
+   **界面这一关单独判**：`ps` 看进程还在、`aa dump` 看 `#FOREGROUND`、**截图**看有没有内容
+   （非空版面树不算、"应用图标+转圈"不算）——细则见
+   [startup-and-first-screen.md](references/startup-and-first-screen.md)
 
 ## 验证纪律（移植完 ≠ 装上了，装上了 ≠ 是新版）
 
@@ -164,6 +167,7 @@ command -v devecocli                      # 有就直接用
 | [toolchain.md](references/toolchain.md) | 配交叉编译链接器之前；gnullvm 与 NDK clang 的两平台差异 |
 | [arkweb-shims.md](references/arkweb-shims.md) | 前端适配三坑；polyfill 完整代码与"为什么必须 remove() 而不能 display:none" |
 | [signing.md](references/signing.md) | **真机装不上（9568322）时第一个读**：三条签名路径对比、复用本机自动签名材料的 6 步配方、失败码表、什么时候才真需要账号 |
-| [pitfalls.md](references/pitfalls.md) | 部署/真机阶段按报错原文索引；hdc 目录坑、锁屏、验证清单；**构建期 `pkg-config … cross-compilation` 的两种归因（glib-sys vs openssl-sys）见第 13 条**；**「起来即退」（装机/启动都"成功"但进程秒退、hilog 无输出）见第 17 条**——先装不依赖 `App` 的早期 panic hook 再谈排查；**`no method named center/decorations…` 见第 18 条**（方法被 `cfg(desktop)` 门控，按 impl 块边界判断）；**签名优先自签名、`11014003 Init keystore failed` 见第 19 条**；**插件与 fork 版 tauri 版本漂移（`no field appimage`）见第 20 条** |
+| [pitfalls.md](references/pitfalls.md) | 部署/真机阶段按报错原文索引；hdc 目录坑、锁屏、验证清单；**构建期 `pkg-config … cross-compilation` 的两种归因（glib-sys vs openssl-sys）见第 13 条**；**「起来即退」（装机/启动都"成功"但进程秒退、hilog 无输出）见第 17 条**——先装不依赖 `App` 的早期 panic hook 再谈排查；**`no method named center/decorations…` 见第 18 条**（方法被 `cfg(desktop)` 门控，按 impl 块边界判断）；**签名优先自签名、`11014003 Init keystore failed` 见第 19 条**；**插件与 fork 版 tauri 版本漂移（`no field appimage`）见第 20 条**；**「装上了、启动了，但秒退/全黑/白底转圈」见第 21 条**（启动四连坑总表） |
+| [startup-and-first-screen.md](references/startup-and-first-screen.md) | **真机"起来了但界面不对"第一个读**：取证通道（`hdc file recv -b` 才读得到沙箱）→ 早期 panic hook（唯一能拿到 SIGABRT 真因的手段）→ 数据目录 EPERM（跑在构造 `Builder` 之前，`app.path()` 修不到）→ 重复 `main` webview（窗口 label 默认就是 `main`）→ `defaultPage` × label 四种组合的真机读数与判据（`SetUIContent timeout`、非空版面树 ≠ 有内容） |
 | [native-ui-bridge.md](references/native-ui-bridge.md) | **某命令在鸿蒙侧是空壳**（`rfd::FileDialog` / `explorer` / 分享 / 相册 → `None`、`Err("当前平台不支持")`）时读：`__ohos_dispatch` 桥骨架、主线程 env 铁律、三种返回值形态、**picker 的 uri 授权不覆盖裸路径**、验证三步（桌面 + 交叉 + `hap` 验 ArkTS） |
 | [plugin-adaptation.md](references/plugin-adaptation.md) | **遇到鸿蒙侧没有对应物的插件/平台 API 时第一个读**：判定顺序（先查 fork 源码 cfg 门控，别把"方法不存在"当"平台没有"）→ 三层适配（wry/tao 差异层 fork 先行 → 平台条件编译补丁 → API 映射到 ArkWeb/系统能力）→ 降级是最后手段且必须登记 limit（静默砍功能算移植失败） |

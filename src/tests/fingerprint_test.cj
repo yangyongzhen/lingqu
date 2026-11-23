@@ -53,6 +53,43 @@ public func testExtractAssetKeysEdgeCases(): Unit {
     @Assert(extractAssetKeys(noise).size, 0)
 }
 
+/*
+ * 0.39.136 复现（dbx 真机前的实测，2026-11-22）：
+ * `.so` 里的前端 key 是合并字符串池里的裸字节，**相邻两条之间常常没有 NUL**。
+ * 旧口径「整段必须以扩展名结尾」在两个方向上同时判错：
+ *   · 粘连 → 造出一条假 key（它对不上 dist/ ⇒ 假 stale）
+ *   · 段尾粘字 → 整段被丢（真 key 报不进来 ⇒ 假 missing）
+ * 结果闸把"编好且前端确实在里面"报成"没重编"，现场 5 假 stale + 20 假 missing。
+ */
+@Test
+public func testExtractAssetKeysFromGluedRun(): Unit {
+    // 两条 key 紧贴、中间没有分隔字节：必须拆成两条，不许粘成一条
+    let glued = "\u{0}assets/file-archive-7IrrNgg0.js/assets/InlineLayout-zJ3RDz_0.js\u{0}".toArray()
+    let keys = extractAssetKeys(glued)
+    @Assert(keys.size, 2)
+    @Assert(keys.contains("assets/file-archive-7IrrNgg0.js"), true)
+    @Assert(keys.contains("assets/InlineLayout-zJ3RDz_0.js"), true)
+    // 三条粘连（现场形态）
+    let three = "\u{0}assets/a.js/assets/b.css/assets/c.js\u{0}".toArray()
+    let k3 = extractAssetKeys(three)
+    @Assert(k3.size, 3)
+    @Assert(k3.contains("assets/b.css"), true)
+}
+
+@Test
+public func testExtractAssetKeysWithTrailingText(): Unit {
+    // 键后面紧跟别处的正文（没有分隔）：按扩展名截断，别把正文吃进 key
+    let data = "\u{0}assets/AiAssistant-DX7JQepR.cssInvalid line ending\u{0}".toArray()
+    let keys = extractAssetKeys(data)
+    @Assert(keys.size, 1)
+    @Assert(keys[0], "assets/AiAssistant-DX7JQepR.css")
+    // 同名扩展名有长短两种时不许截短（.woff2 不能被当成 .woff 后截断）
+    let woff = "\u{0}assets/font-DDD.woff2assertion\u{0}".toArray()
+    let k2 = extractAssetKeys(woff)
+    @Assert(k2.size, 1)
+    @Assert(k2[0], "assets/font-DDD.woff2")
+}
+
 @Test
 public func testCompareAssetsAllMatched(): Unit {
     let embedded = ArrayList<String>()

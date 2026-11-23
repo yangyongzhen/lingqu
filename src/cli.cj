@@ -26,7 +26,7 @@ import stdx.encoding.json.*
 public let CLI_COMMANDS: Array<String> = [
     "migrate", "scan", "deps", "port", "revert", "decisions", "diagnose", "build", "hap", "sign",
     "deploy", "verify", "report", "probe", "batch", "resume", "env", "skill", "agent_context",
-    "git_clone", "notes", "pr"
+    "git_clone", "notes", "pr", "export"
 ]
 
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
@@ -489,6 +489,10 @@ func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcCont
     }
     if (cmd == "report") {
         return ReportCommand().handle(fullName, args, ctx)
+    }
+    if (cmd == "export") {
+        // 把迁移后的工程复制到独立目录沉淀（成果归档/提交用）
+        return ExportCommand().handle(fullName, args, ctx)
     }
     if (cmd == "batch") {
         return BatchCommand().handle(fullName, args, ctx)

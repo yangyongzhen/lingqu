@@ -837,6 +837,30 @@ public func signModeLabel(mode: String): String {
 }
 
 /**
+ * 断点板 / 报告里「签名」这一步算不算**有结论**（纯函数）。
+ *
+ * 三种落档形态都要认（都是真实存在的出口，§4-148：产出方每条出口都落档，消费方也要认每条出口）：
+ *   · 体检档：顶层 `check.ok`
+ *   · release 态：装不上真机是设计使然，算有结论（T5-4）
+ *   · 自动签档（`sign --auto`）：只有 `mode.mode="auto"` + `autoSign.ok`，**没有 `check` 段**
+ *
+ * 不认第三种就会把"已经签好并写回 signingConfigs"显示成"没过"——0.39.136 实测：
+ * dbx 自动签名成功、HAP 已 signed，报告仍写「8 步完成 7/8（87%）」，缺口正是这一步。
+ */
+public func signStepOkOf(checkOk: Bool, modeName: String, autoOk: Bool): Bool {
+    if (checkOk) {
+        return true
+    }
+    if (modeName == SIGN_MODE_RELEASE) {
+        return true
+    }
+    if (modeName == "auto" && autoOk) {
+        return true
+    }
+    return false
+}
+
+/**
  * 上架前强提醒（**这一句是 T5-4 的核心交付**）。
  *
  * debug 态必须明确写出"不能上架 + 上架前要切回 release"——上架被拒的成本远高于多一句提醒。

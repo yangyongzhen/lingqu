@@ -199,3 +199,24 @@
 - **同类**：`rfd` 的 build script panic（`You need to choose at least one backend: gtk3 or xdg-portal`）
   ⇒ 鸿蒙侧不要引入依赖 rfd 的插件（如 `tauri-plugin-dialog`），改用 ArkTS 文件选择桥接。
 
+
+### 21. 装上了、启动了，但**进程秒退 / 全黑 / 白底转圈**——按 `startup-and-first-screen.md` 走
+
+这三件事在鸿蒙上是**连着的**，修好一个会掉进下一个（2026-11-22 dbx 真机，四轮读数）：
+
+| 现象 | 根因 | 一句话处置 |
+|---|---|---|
+| `exit with signal:6`，hilog 无应用输出，沙箱连 `panic.log` 都没有 | `panic="abort"` + `install_panic_hook(app)` **装得太晚/从未调用** | `run()` 第一行装**只依赖 std** 的早期 hook，落 `panic-early.log` |
+| `Failed to prepare app data dir: PermissionDenied` | `dirs::data_dir()` 在鸿蒙返回桌面口径路径，建目录 EPERM；**这段跑在构造 `Builder` 之前**，`app.path()` 的修复覆盖不到 | `cfg(target_env="ohos")` 时把默认数据目录定死 `/data/storage/el2/base/files` |
+| `a webview with label 'main' already exists`（SIGABRT） | 窗口配置**不写 `label` 时默认就是 `main`**，与 ability 默认页抢同一个 | 窗口 `label` 改成非 `main`（跑通样本 EcoPaste 用 `clipboard`） |
+| 全黑 / 白底+图标+转圈 | ①清空 `app.windows` ⇒ 没人导航前端；②`defaultPage:false` ⇒ `SetUIContent timeout` | 建窗 + `defaultPage:true` + label 非 `main`；`visible` 默认 `true` |
+
+**取证铁律**：应用沙箱对 `hdc shell` / `hdc shell -b` 一律 `Permission denied`，
+**只有 `hdc file recv -b <bundle> <远端> ./本地` 能读**（它报 `no such file` 才是文件真不存在）。
+
+**判据**：①「应用图标 + 转圈」不是"界面出来了"，`SetUIContent timeout` 才是没加载的硬证据；
+②**非空版面树 ≠ 有内容**（ArkWeb 内容不在无障碍树，那棵树可能只有 `XComponent`/`NodeContainer`）——
+判界面**看截图**，判存活**看进程**，判加载**看 `OnPageEnd`/`SetUIContent`**；
+③ 每轮至少取**两处读数**（panic 计数 + 截图），单看一处必误判。
+
+完整四轮读数与可复制代码见 [`startup-and-first-screen.md`](startup-and-first-screen.md)。

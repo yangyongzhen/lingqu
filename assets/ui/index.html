@@ -1043,6 +1043,7 @@ body.ai-hidden .ai-show{display:block}
             <button class="btn" id="btnReportMd" title="生成并指向 Markdown 报告">导出 Markdown</button>
             <button class="btn" id="btnReportJson" title="生成并指向 JSON 报告">导出 JSON</button>
             <button class="btn" id="btnReportHtml" title="生成并指向 HTML 报告（自包含单文件，双击可看）">导出 HTML 报告</button>
+            <button class="btn" id="btnExport" title="把迁移后的整个工程复制到独立目录沉淀（默认 %USERPROFILE%\lingqu-migrated\&lt;工程&gt;-&lt;日期&gt;，附 MIGRATION.md 与 migration-manifest.json）">导出移植成果</button>
           </div>
         </div>
         <div class="acts-row">
@@ -7284,6 +7285,33 @@ withBridge(function(tauri){
   $('btnReportMd').addEventListener('click', function(){ runReport('md'); });
   $('btnReportJson').addEventListener('click', function(){ runReport('json'); });
   $('btnReportHtml').addEventListener('click', function(){ runReport('html'); });
+
+  /* 导出移植成果（0.39.137）
+   * 迁移是原地改样本工程的，成果散落在各样本目录里 ⇒ 一键把"迁移后的整个工程"复制到
+   * 独立目录（默认 %USERPROFILE%\lingqu-migrated\<工程>-<日期>，LINGQU_MIGRATED_DIR 可覆盖），
+   * 附 MIGRATION.md 与 migration-manifest.json。回投里把**目标路径**明写出来，人不用猜在哪。 */
+  function runExport(){
+    var btn = $('btnExport');
+    btn.disabled = true;
+    var arg = { trigger: 'manual' };
+    if (reportPathValue()) { arg.path = reportPathValue(); }
+    $('rpPaths').innerHTML += '<br><span class="pill">正在导出移植成果…</span>';
+    invoke('t2h:export', arg).then(function(r){
+      r = r || {};
+      var ok = (r.ok === true);
+      var msg = ok
+        ? ('已导出 ' + String(r.copiedFiles || 0) + ' 个文件（' + String(r.totalBytes || 0)
+           + ' 字节）到：' + String(r.outDir || ''))
+        : ('导出失败：' + String(r.error || '未知错误'));
+      $('rpPaths').innerHTML += '<br><span class="pill ' + (ok ? 'ok' : 'err') + '">' + esc(msg) + '</span>';
+      reportUi('export-' + (ok ? 'ok' : 'fail'));
+      btn.disabled = false;
+    }).catch(function(e){
+      $('rpPaths').innerHTML += '<br><span class="pill err">导出失败：' + esc(String(e)) + '</span>';
+      btn.disabled = false;
+    });
+  }
+  $('btnExport').addEventListener('click', runExport);
 
   /* 进 ⑦ 屏的自动重出（0.39.85）
    * 判据只有一条：这一代报告还对不对得上最新落档。key 收「工程路径 + ⑥ 屏当前可用率」，

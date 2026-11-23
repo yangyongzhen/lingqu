@@ -5,6 +5,145 @@
 
 ---
 
+## [0.39.137] - 2026-11-22
+
+**新增「导出移植成果」：把迁移后的工程冻结到独立目录，成果可归档、可直接提交。**
+
+### Added
+- **`lingqu-cli export` / `t2h:export` / ⑦ 报告屏「导出移植成果」按钮**：
+  把迁移后的**整个工程**复制到独立目录沉淀。默认目标
+  **`%USERPROFILE%\lingqu-migrated\<工程>-<日期>-<序号>`**（`LINGQU_MIGRATED_DIR` 可覆盖，`--out` 可指定），
+  附 `MIGRATION.md`（怎么构建/部署/验收读数）与 `migration-manifest.json`（来源、规则、统计、可复核）。
+- **验收通过时自动导出一次**：`t2h:verify` 在「有结论且 `fail == 0`」时自动导出并把
+  `exportDir / exportNote` 回投；**导出失败不改写验收结论**（验收是验收、归档是归档），但原因必须回投。
+- 落档 `.lingqu/export/<工程>.json`（`lingqu/export/v1`）：`ok / trigger / exportDir / copiedFiles /
+  skippedEntries / totalBytes / verifyRate / exportedAt` —— 界面与 agent 只看这一份就知道"导没导、导到哪"。
+- 排除规则（纯函数 `shouldSkipExportEntry`，单测钉住）：目录名（`node_modules`/`target`/`dist`/
+  `oh_modules`/`.git`/`.lingqu`…）、路径前缀（`src-tauri/gen/ohos/entry/libs|build`、
+  `gen/schemas`、`gen/android|apple`…）、文件后缀（`.so`/`.hap`/`.dll`/`.exe`/`.a`/`.o`…）。
+  `.so` 尤其重要：dbx 的 `libdbx_lib.so` 有 97 MB，绝不能进归档/仓库。
+
+### 为什么加（用户 2026-11-22 提出）
+迁移一直是**原地改**样本工程的（`C:\...\lingqu-workspaces\<样本>`），改动混在原始仓库里 ⇒
+① 成果散落各处，人找不到；② 想"把移植成功的项目源码提交上去"时分不清哪些是迁移产物。
+
+### Verified
+- `cjpm build` 零警告（含新增导出模块）；单测新增 4 条纯函数用例（排除规则目录/文件/反斜杠、
+  时间戳、目标目录与重名序号）。
+
+## [0.39.136] - 2026-11-22
+
+**真机验证 dbx：前端指纹闸两处「自己制造假红」修掉；ArkTS Picker 分发器补齐（形态 B 沙箱回读）。**
+
+### Fixed
+- **前端指纹闸把「编好了」报成「没重编」**（`extractAssetKeys`）：`.so` 里前端 key 是合并字符串池里的
+  裸字节，**相邻两条之间常常没有 NUL 分隔**，旧口径「吃到非 key 字符 + 整段必须以扩展名结尾」在两个
+  方向上同时判错——粘连（`assets/A.js/assets/B.js`）被吃成一条假 key ⇒ 5 条假 `staleInSo`；
+  段尾粘着别处正文（`assets/X.cssInvalid`）整段被丢 ⇒ 20 条假 `missingInSo`。
+  新口径：① 按段内每个 `assets/` 起点切段；② 段内按**最长**已知扩展名截断（`a.woff2` 不许被截成 `a.woff`）。
+  dbx 实测：`matched=574 / stale=5 / missing=25` → **`matched=599 / stale=0 / missing=0`**
+- **`crate::dialog` 的鸿蒙半边是空的**（R2-PORT-017 点名的 3 条桥命令）：`DocumentViewPicker` 是异步 API，
+  而桥约定同步返回字符串 ⇒ 按技能里的「形态 B」实现：ArkTS 先回 `{pending:true}`，选完把结果写进
+  Rust 下发的一次性路径（**先写 `.tmp` 再 `rename`**），Rust 侧 100 ms 轮询、上限 5 分钟。
+  选文件回传**沙箱副本路径**（uri 授权不覆盖 `std::fs` 裸路径）；选目录在非 2in1 形态如实回 `ok:false`；
+  另存为先探 uri 可写性，写不进去回落沙箱 `exports/` 并把**真实落点**交回界面
+
+### Verified
+- `cjpm build` 零警告、`cjpm test` **TOTAL=653 / FAILED=0 / ERROR=0**（新增 3 条复现用例：
+  `testExtractAssetKeysFromGluedRun` / `testExtractAssetKeysWithTrailingText` / `testScanHapEntriesGluedSoNames`）
+- dbx `build --verifyOnly` → `gates.passed=true`、`assetDiff{match=599,stale=0,missing=0}`
+- dbx `hap` → `gates.passed=true`、`entries.arm64Sos=[libdbx_lib.so, libentry.so]`
+- dbx `sign --auto --newKeys` → 证书 `auto_debug_40574614.cer`、profile 落盘、
+  `signingConfigs` 已写回（备份 `build-profile.json5.lingqu-autosign.bak`）
+
+### 真机「起来即崩」的真因（靠早期 panic hook 才看到）
+`deploy` 报 `started=true / hilogHealthy=true`，但 `aa dump` 与 hilog 给的是
+`onProcessDied` + `exit with signal:6`（SIGABRT）。工程 `panic = "abort"` ⇒ panic 无栈；
+而 `install_panic_hook` **定义了却从未被调用**、且它依赖 `tauri::App` ⇒ 沙箱里连 `panic.log`
+都不存在。补上 `run()` 第一行、只依赖 std 的早期 hook（落 `panic-early.log`）后**一次就取到真因**：
+
+```
+[panic-early] panicked at src-tauri\src\lib.rs:2133:35:
+Failed to prepare app data dir: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+```
+
+即 `dirs::data_dir()` 在鸿蒙返回**桌面口径**路径（`/storage/Users/currentUser`），拼上包名后
+`prepare()` 的 `create_dir_all` 一律 EPERM（§4-175 成因②）。这条比 `resolve_app_data_dir`（R2-PORT-009）
+更早——那时还没有 `App`，所以原修复覆盖不到。处置：`target_env = "ohos"` 时把默认数据目录定死为
+`/data/storage/el2/base/files`。另外把 log 插件在鸿蒙的 `TargetKind::LogDir` 换成沙箱 `Folder`
+（默认目标含 `LogDir`，同样会在沙箱里建目录失败）。
+
+**取证通道**：应用沙箱对 `hdc shell` / `hdc shell -b` 一律 `Permission denied`，
+**`hdc file recv -b <bundle> <远端> ./本地`** 才读得到 `panic-early.log`。
+
+修掉数据目录后**又冒出第二条**（同一条 hook 继续给证据）：
+
+```
+[panic-early] panicked at tauri/crates/tauri/src/app.rs:1425:11:
+Failed to setup app: error encountered during setup hook: a webview with label `main` already exists
+```
+
+ArkTS 侧 `EntryAbility extends RustAbility`（`mode:'webview'`、`defaultPage:true`）**已经建好一个
+label=`main` 的 webview**，而 `tauri.conf.json` 里 dbx 那条窗口**没写 `label`**（默认就是 `main`），
+tauri 在 setup 阶段又建一个同名的 ⇒ panic（EcoPaste 没撞上，只因它的窗口 label 叫 `clipboard`）。
+处置：鸿蒙上 `context.config_mut().app.windows.clear()`，让 `get_webview_window("main")` 直接命中
+ArkTS 建的那个。
+
+**复验（四条证据，缺一条都不算"跑起来了"）**：`ps -ef` 里 `com.dbx.app`（pid 21057）部署后 25 秒
+仍在且 CPU 在涨；`aa dump -l` 是 `state #FOREGROUND`；`uitest dumpLayout` 拿到真实界面树
+（`bundleName com.dbx.app` / `bounds [0,88][1840,2800]`）；同一份 `panic-early.log` 条数**停在 6 条
+不再增长**。最终 `verify` 移植验收 **83%**（5/6 有结论；`events` 已由真机实测转正，只剩 `platform-api` fail：10 处未落地的降级）、
+`report` **8 步 8/8**、人工介入 0。
+
+另修：`hap` 落档 `entries.arm64Sos` 的**粘连条目**（`libdbx_lib.solibs/arm64-v8a/libentry.so`）——
+与前端指纹闸同族（zip 名字区无分隔符，贪婪吃段尾），改成"名字截到第一个 `.so`"并补单测；
+复验后是干净两条。
+
+### 鸿蒙侧补 `@tauri-apps/plugin-dialog` 的同名 IPC shim（真机复验中）
+
+真机验 Picker 时发现：前端「选文件」走的是**插件 JS API**（`import("@tauri-apps/plugin-dialog").open(...)`
+→ IPC `plugin:dialog|open`），而鸿蒙侧为避开 rfd 已把该插件整插件排除 ⇒ 点击在 JS 层就失败
+（异常还被上层 catch 成"用户取消"），我们写的 `pick_files` 桥只被 Rust 命令调用、前端走不到。
+
+处置（方案：前端零改动）：新增 **`src-tauri/src/dialog_shim.rs`**（仅 `target_env = "ohos"`），
+注册**同名插件 `dialog`** + 命令 `open`/`save`，内部转调 `crate::dialog`（鸿蒙走系统 Picker）：
+- `open`：`directory` → 选目录；`multiple` → 返回数组；取消 → `null`（与插件语义一致）
+- `save`：`defaultPath` → 默认文件名，`filters[0]` → 过滤器
+
+三处联动：`build.rs` 的 `InlinedPlugin::commands(&["open","save"])` 生成权限 →
+`capabilities/*.json` 放行 `dialog:allow-open`/`dialog:allow-save`。
+
+**首轮真机复验撞到 ACL**：`Command plugin:dialog|open not allowed by ACL`。真因是
+**capability 的 `windows` 白名单没覆盖实际窗口 label**（本项目为避开"重复 `main` webview"
+把 label 改成了 `dbx-main`，白名单里还是 `main`）⇒ 整套权限没生效，而应用自己的 `invoke`
+命令不受 ACL 管、所以别的功能看着正常。已把 `dbx-main` 补进两份 capability 的 `windows` 并重编复验，
+**真机仍报同一条 ACL 拒绝**（`gen/schemas/capabilities.json` 里权限与窗口都在、`.so` 里也能看到授权串），
+说明真因还没坐实。**当前状态：shim 已实现、命令已能命中（不再是 `command not found`），
+卡在 ACL 匹配**；下一步要用**带 `debug-assertions` 的构建**拿到 `resolve_access_message`
+的明细（它会点名是 window / webview / origin / command 哪一个维度不匹配）。
+另修一条实证坑：**`hdc install -r` 不会杀在跑的应用**，`aa start` 只是拉到前台 ⇒
+"重装了却还是旧代码"，判据是 `ps` 里的 **pid 有没有变**（见 AGENTS §4-208）。
+
+### 真机界面：从「起来即崩」到「黑屏」再到「启动占位」（用户实测逐轮点破）
+
+「进程存活 + 前台 + 版面树非空」被判成界面正常，用户当场指出**全黑**。按纪律重新取证
+（截图全黑；版面树只有 `XComponent`/`NodeContainer`，无任何可读节点；hilog **一条页面加载日志都没有**），
+确定是**我们自己的处置把界面弄黑的**：为了绕开重复 `main` 用了
+`context.config_mut().app.windows.clear()` ⇒ tauri 不建窗 ⇒ 没人导航前端。
+
+四轮真机读数（每轮都要**两处**：panic 计数 + 截图）：
+
+| 组合 | 读数 | 结论 |
+|---|---|---|
+| 清空窗口 + `visible:false` | 全黑、无页面加载日志 | 没窗口 ⇒ 没导航 |
+| 建窗 + `defaultPage:true`（label 默认 `main`） | **SIGABRT**：`a webview with label 'main' already exists` | ability 默认页与 tauri 抢同一个 label |
+| 建窗 + `defaultPage:false` | 不崩，但白底+图标+转圈，CPU 恒 0，hilog `SetUIContent timeout` | 关掉默认页连带关掉页面加载 |
+| 建窗 + `defaultPage:true` + label 改 `dbx-main` | **✅ 复验通过**：进程存活（CPU 6s→15s 在涨）+ 多出 `com.dbx.app:render` 渲染进程 + panic 计数停在 7 条 + `aa dump` `#FOREGROUND` + **截图是 DBX 真实界面**（「新建连接」对话框，URL/类型/主机/端口/用户名/「保存并连接」俱全） | 与跑通的 EcoPaste 同款（它的 label 是 `clipboard`）：两侧各用各的 label |
+
+**判据**（已进 AGENTS §4-204/§4-205）：① 「应用图标 + 转圈」不是"界面出来了"，
+`SetUIContent timeout` 才是没加载的硬证据；② 判"界面出来了"不能只看非空版面树，
+要看**有没有内容**；③ 绕开某个 panic 前先问"我删掉的那部分本来负责什么"。
+
 ## [0.39.135] - 2026-11-21
 
 **dbx（27 crate 的巨型 Tauri workspace）攻坚：交叉编译打通；`t2h:build` 修掉两处会让它"假失败 / 假红"的缺陷。**

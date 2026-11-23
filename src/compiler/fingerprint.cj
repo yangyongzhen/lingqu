@@ -19,9 +19,13 @@ import stdx.encoding.json.*
  */
 
 /** 前端资源扩展名（只认这些，避免把 .so 里其它 "assets/..." 字样误当资源） */
+func assetExts(): Array<String> {
+    return [".js", ".mjs", ".cjs", ".css", ".map", ".html", ".json", ".png", ".jpg",
+        ".jpeg", ".webp", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".wasm"]
+}
+
 func isAssetExt(name: String): Bool {
-    for (e in [".js", ".mjs", ".cjs", ".css", ".map", ".html", ".json", ".png", ".jpg",
-        ".jpeg", ".webp", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".wasm"]) {
+    for (e in assetExts()) {
         if (name.endsWith(e)) {
             return true
         }
@@ -50,45 +54,124 @@ func isKeyChar(b: UInt8): Bool {
 /**
  * 从二进制里扫前端 AssetKey（不依赖 UTF-8 解码——`.so` 是任意二进制）。
  *
- * 口径：找 ASCII 子串 `assets/`，然后继续吃合法 key 字符直到遇到其它字节，
- * 最后要求以已知前端扩展名结尾。去重、保序。
+ * 口径（0.39.136 重写）：`.so` 里前端 key 是**合并字符串池**里的裸字节，相邻两条之间
+ * 常常**没有 NUL 分隔**，于是出现两种真形态，旧口径（"整段必须以扩展名结尾"）两种都判错：
+ *
+ *   · 粘连：`assets/A.js/assets/B.js` 被吃成一条假 key ⇒ 判成"旧产物"（假 stale）
+ *   · 段尾粘字：`assets/AiAssistant-….cssInvalid`（键后紧跟别处的串）整段被丢 ⇒ 判成"没打包"（假 missing）
+ *
+ * 现口径：
+ *   ① 找到 `assets/` 起点，吃到「连续 key 字符」为止（这一段里可能夹着更多 key）；
+ *   ② 段内每个再出现的 `assets/` 都是一条新 key 的起点 ⇒ 按它切段，每段各自成型；
+ *   ③ 段尾可能粘着别处的正文 ⇒ 按「段内能匹配到的**最长**已知扩展名」截断
+ *      （`a.woff2` 不许被截成 `a.woff`）。取不出扩展名就丢弃。
+ *
+ * 实测（2026-11-22 dbx，97 MB cdylib / 599 个前端产物）：旧口径报 5 假 stale + 20 假 missing，
+ * 而 `dist/` 的 599 个键 `.so` 里**一个不缺**——闸把"编好了"报成"没重编"。
  */
 public func extractAssetKeys(data: Array<UInt8>): ArrayList<String> {
     let out = ArrayList<String>()
-    let marker = "assets/"
-    let mb = marker.toArray()
+    let mb = "assets/".toArray()
     if (data.size < mb.size) {
         return out
     }
     var i: Int64 = 0
     while (i + mb.size <= data.size) {
-        // 先比对 marker
-        var hit = true
-        for (k in 0..mb.size) {
-            if (data[i + k] != mb[k]) {
-                hit = false
-                break
-            }
-        }
-        if (!hit) {
+        if (!markerAt(data, i, mb)) {
             i += 1
             continue
         }
-        // 吃 key（含 marker 自身）
+        // ① 吃整段合法 key 字符
         var j = i
         while (j < data.size && isKeyChar(data[j])) {
             j += 1
         }
-        // 0.39.122：这里是**从 .so 二进制里**取资源键，非 UTF-8 字节一定会有——
-        // 硬解会抛 `Invalid utf8 byte sequence`（2026-11-19 EcoPaste 真机 verify 死在这）。
-        // 资源键本来就是 ASCII 路径，非 ASCII 字节换成 '?' 不影响比对。
-        let key = lenientUtf8(data[i..j])
-        if (isAssetExt(key) && !out.contains(key)) {
-            out.add(key)
+        // ② 段内再出现的 `assets/` 是下一条 key 的起点：切段后各自成型
+        var segStart = i
+        var p = i + 1
+        while (p + mb.size <= j) {
+            if (markerAt(data, p, mb)) {
+                addKeyIfNew(out, keyOfSegment(data, segStart, p))
+                segStart = p
+                p += mb.size
+                continue
+            }
+            p += 1
         }
+        addKeyIfNew(out, keyOfSegment(data, segStart, j))
         i = if (j > i) { j } else { i + 1 }
     }
     return out
+}
+
+/** 位置 p 处是否正好是 marker（调用方已保证 p + marker.size 不越界） */
+func markerAt(data: Array<UInt8>, p: Int64, mb: Array<UInt8>): Bool {
+    for (k in 0..mb.size) {
+        if (data[p + k] != mb[k]) {
+            return false
+        }
+    }
+    return true
+}
+
+/**
+ * `[s, endExclusive)` 这段是否以某个已知扩展名结尾；返回命中的扩展名长度（0 = 没命中）。
+ * 同一处同时命中 `.woff` 与 `.woff2` 时返回更长的那条，供 `keyOfSegment` 优先采用。
+ */
+func endsWithAssetExt(data: Array<UInt8>, s: Int64, endExclusive: Int64): Int64 {
+    var best: Int64 = 0
+    for (ext in assetExts()) {
+        let eb = ext.toArray()
+        if (endExclusive - s < eb.size || eb.size <= best) {
+            continue
+        }
+        var hit = true
+        for (k in 0..eb.size) {
+            if (data[endExclusive - eb.size + k] != eb[k]) {
+                hit = false
+                break
+            }
+        }
+        if (hit) {
+            best = eb.size
+        }
+    }
+    return best
+}
+
+/**
+ * 从 `[s, e)` 这一「key 字符段」里取出一条 AssetKey：按**最长**已知扩展名截断。
+ * 段尾粘着别处正文（`X.cssInvalid`）时只取到扩展名；一个扩展名都匹配不上则返回空串。
+ *
+ * 0.39.122 的教训仍适用：这里是**从 .so 二进制里**取键，非 UTF-8 字节一定会有，
+ * 必须走 `lenientUtf8`（硬解会抛 `Invalid utf8 byte sequence`）。
+ */
+func keyOfSegment(data: Array<UInt8>, s: Int64, e: Int64): String {
+    if (e <= s + 1) {
+        return ""
+    }
+    var bestEnd: Int64 = -1
+    var bestExt: Int64 = 0
+    var end = s + 1
+    while (end <= e) {
+        let extLen = endsWithAssetExt(data, s, end)
+        if (extLen > bestExt) {
+            bestExt = extLen
+            bestEnd = end
+        }
+        end += 1
+    }
+    if (bestEnd < 0) {
+        return ""
+    }
+    return lenientUtf8(data[s..bestEnd])
+}
+
+func addKeyIfNew(out: ArrayList<String>, key: String): Unit {
+    if (key.size == 0 || out.contains(key)) {
+        return
+    }
+    out.add(key)
 }
 
 /** 一次比对的结果（三个方向分开记，报告能说清"哪个方向不一致"） */

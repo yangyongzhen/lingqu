@@ -75,8 +75,84 @@ async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<vo
 }
 ```
 
-## 3. 返回值怎么回去：三种形态，按需选
+### 2.1 ArkTS 严格模式必踩：对象字面量必须带类型（`arkts-no-untyped-obj-literals`）
 
+`cargo build --target …ohos` **不审 ArkTS**，只有 hvigor 会审。所以 Rust 侧全绿也可能在
+`hvigor … CompileArkTS` 一步炸，报：
+
+```
+10605038 ArkTS Compiler Error
+Object literal must correspond to some explicitly declared class or interface
+(arkts-no-untyped-obj-literals) At File: …/EntryAbility.ets:126:28
+```
+
+**处置**：给每个回投结构声明 `interface`，字面量写成带类型的常量（连 `JSON.stringify({ok:true})` 这种 ack 也算）：
+
+```ts
+interface BridgeAck { ok: boolean; pending?: boolean; err?: string }
+interface PickResult { ok: boolean; paths?: string[]; path?: string; canceled?: boolean; err?: string }
+
+const pending: BridgeAck = { ok: true, pending: true };
+return JSON.stringify(pending);
+```
+
+**判据**：改完 `.ets` 必须跑一次 `lingqu-cli hap --path <工程根>`（第 3 步）才算验过——
+只跑 `cargo build` / `cargo build --target …ohos` 属于"两步验"的漏网。
+
+### 2.2 验证桥之前：先确认**前端走的是插件 JS API 还是自家命令**
+
+最容易白干的一步（2026-11-22 dbx 真机实测）：鸿蒙侧写好了 `pick_files` 桥，
+真机点「选择文件」却**毫无反应、也没有任何桥日志**。查前端才发现它用的是
+`import("@tauri-apps/plugin-dialog").open({filters, multiple})` —— **插件 JS API**；
+而鸿蒙侧为了避开 rfd 已经把 `tauri-plugin-dialog` 整插件排除，
+这条 IPC 在鸿蒙上根本不存在 ⇒ 点击在 JS 层就失败（异常还被上层 catch 成"用户取消"）。
+我们的桥只被 **Rust 命令**调用，从前端那条路到不了。
+
+```bash
+# 验证桥之前先跑这一条：有输出 = 前端走插件 JS API，你的桥在真机上不会被点出来
+grep -rn "@tauri-apps/plugin-<插件名>" apps/ src/  # 前端源码根
+```
+
+要真能用，二选一：① 补**同名 IPC shim**（插件名 + 命令名 + ACL 权限三样对上，前端零改动）；
+② 把前端调用点改成自家命令（改动面大）。
+
+**判据**：点按有反应但无桥日志 ⇒ 先怀疑"没走到"，别怀疑桥写错；`import()` 动态加载会把异常吞掉。
+
+### 2.3 想让前端"不用改代码"就用系统能力：补**同名 IPC shim**
+
+场景：前端调 `@tauri-apps/plugin-dialog` 的 `open()`/`save()`，而该插件在鸿蒙被排除（§2.2）。
+**正解是注册一个同名插件**，把 IPC 接到自己的平台实现，前端一行不改。三处必须一起对上，
+少一处就是"编译过、运行期 `command not found` / `not allowed by ACL`"：
+
+```rust
+// ① src/dialog_shim.rs —— 插件名与命令名必须和官方插件一致
+pub fn plugin() -> TauriPlugin<Wry> {
+    Builder::new("dialog")                       // ← 名字决定 IPC 前缀 plugin:dialog|*
+        .invoke_handler(tauri::generate_handler![open, save])
+        .build()
+}
+// lib.rs：#[cfg(target_env = "ohos")] let builder = builder.plugin(dialog_shim::plugin());
+
+// ② build.rs —— 应用内插件要在这里声明命令，tauri-build 才会生成 dialog:allow-open/allow-save
+let attrs = tauri_build::Attributes::new().plugin(
+    "dialog",
+    tauri_build::InlinedPlugin::new().commands(&["open", "save"]),
+);
+tauri_build::try_build(attrs).expect("tauri build failed");
+
+// ③ capabilities/<平台>.json —— 放行 + **窗口白名单里要有实际窗口 label**
+//   "permissions": [..., "dialog:allow-open", "dialog:allow-save"]
+//   "windows": ["main", "<你的窗口 label>", ...]
+```
+
+**两个最容易踩的点**（2026-11-22 dbx 真机）：
+1. `acl-manifests.json` 里出现 `allow-open` 只证明**权限生成了**，不证明**授权生效了**——
+   真机上照样可能报 `Command plugin:dialog|open not allowed by ACL`；
+2. 报 ACL 时先比对**实际窗口 label** 与 capability 的 `windows` 通配：本项目为避开
+   "重复 `main` webview" 把窗口 label 改成了 `dbx-main`，而白名单里还是 `main`
+   ⇒ 整套权限一条都没生效（**应用自己的 `invoke` 命令不受 ACL 管，所以别的功能看着正常**，极易误判成"shim 没注册"）。
+
+## 3. 返回值怎么回去：三种形态，按需选
 | 形态 | 适用 | 代价 |
 |---|---|---|
 | **A. 单向 fire-and-forget** | 通知类：打开链接、分享、保存到相册 | 拿不到用户结果（无法回报"选中了哪个"） |

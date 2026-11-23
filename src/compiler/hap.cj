@@ -335,14 +335,21 @@ public func scanHapEntries(data: Array<UInt8>): HapEntries {
         while (j < view.size && isNameByte(view[j])) {
             j += 1
         }
-        let name = String.fromUtf8(view[idx..j])
-        if (name.endsWith(".so")) {
+        // 0.39.136：相邻条目在字节流里可能**紧贴**（zip 名字区之间没有分隔符，而 `isNameByte`
+        // 又允许 `/` 与 `-`），贪婪吃到段尾会拼出假条目 —— 真机实测拿到过
+        // `libdbx_lib.solibs/arm64-v8a/libentry.so`（§4-196 同族：从二进制按"连续合法字符"取串，
+        // 永远要假设旁边就挨着别的串）。名字到**第一个** `.so` 就该结束。
+        let soEnd = firstSuffixEndOf(view, idx + "libs/arm64-v8a/".size, j, ".so")
+        if (soEnd > 0) {
+            let name = String.fromUtf8(view[idx..soEnd])
             e.hasArm64So = true
             if (!e.arm64Sos.contains(name)) {
                 e.arm64Sos.add(name)
             }
         }
-        i = if (j > idx) { j } else { idx + 1 }
+        // 从下一个字节继续扫，而不是跳到 j：紧贴的那一条同样以 `libs/arm64-v8a/` 开头，
+        // 跳过去就等于把它漏掉（dedup 由 contains 兜住）。
+        i = idx + 1
     }
 
     // rawfile/（死资源：前端已编进 .so，真机产物里不该有）
@@ -397,6 +404,34 @@ func findBytes(data: Array<UInt8>, needle: String, from: Int64): Int64 {
     return -1
 }
 
+/**
+ * 在 `[s, e)` 里找 `suffix` **首次出现处的结尾位置**（返回 exclusive end）；没有返回 -1。
+ *
+ * 用途：从 zip 名字区那种"没有分隔符"的字节流里取条目名时，名字必须截到第一个已知后缀
+ * （`.so`）为止——贪婪吃到段尾会把下一条目拼进来（真机实测拿到过
+ * `libdbx_lib.solibs/arm64-v8a/libentry.so`，§4-196 同族）。
+ */
+func firstSuffixEndOf(data: Array<UInt8>, s: Int64, e: Int64, suffix: String): Int64 {
+    let sb = suffix.toArray()
+    if (sb.size == 0 || e - s < sb.size) {
+        return -1
+    }
+    var p = s
+    while (p + sb.size <= e) {
+        var hit = true
+        for (k in 0..sb.size) {
+            if (data[p + k] != sb[k]) {
+                hit = false
+                break
+            }
+        }
+        if (hit) {
+            return p + sb.size
+        }
+        p += 1
+    }
+    return -1
+}
 
 /** 解析 hvigor 日志文本并做 HAP 校验的总入口（命令层负责 IO，本函数只做判断） */
 public func hapVerifyOf(hapBytes: Array<UInt8>): HapEntries {

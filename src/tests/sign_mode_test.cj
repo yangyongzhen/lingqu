@@ -121,3 +121,26 @@ public func testAssessSignModeUnknown(): Unit {
     @Assert(json.contains("\"releaseReady\""), true)
     @Assert(json.contains("\"switchSteps\""), true)
 }
+
+/*
+ * 0.39.136 复现：断点板/报告把「已经自动签好」判成"没过"。
+ *
+ * 现场（dbx，2026-11-22 真机）：`sign --auto --newKeys` 成功、HAP `signed=true`、
+ * 装机启动都成功，报告却写「8 步完成 7/8（87%）」——因为 `--auto` 的落档只有
+ * `mode`/`autoSign`、**没有 `check` 段**，而旧判据只看 `check.ok`。
+ * 三种落档形态都是真实出口，判据必须都认（§4-148：产出方每条出口都落档，
+ * 消费方也要认每条出口的形态）。
+ */
+@Test
+public func testSignStepOkAcceptsAutoRecord(): Unit {
+    // ① 体检档：`check.ok`
+    @Assert(signStepOkOf(true, "", false), true)
+    // ② release 态：装不上真机是设计使然（profile 不含 device-ids），算有结论
+    @Assert(signStepOkOf(false, SIGN_MODE_RELEASE, false), true)
+    // ③ 自动签档：没有 check 段，靠 mode=auto + autoSign.ok
+    @Assert(signStepOkOf(false, "auto", true), true)
+    // 反面：自动签失败 / 没跑过 / 旧落档无 mode，都不许算"有结论"
+    @Assert(signStepOkOf(false, "auto", false), false)
+    @Assert(signStepOkOf(false, "auto-failed", true), false)
+    @Assert(signStepOkOf(false, "", false), false)
+}

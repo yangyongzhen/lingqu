@@ -25,6 +25,7 @@
     "t2h:resume",
     "t2h:reset_records",
     "t2h:report",
+    "t2h:export",
     "t2h:batch",
     "t2h:skill",
     "t2h:agent_context",
