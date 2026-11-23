@@ -5,6 +5,34 @@
 
 ---
 
+## [0.39.143] - 2026-11-24
+
+**任务书「原生 UI 能力」补第 6/7 条：同名 IPC shim 的三处联动、ACL 是编译期烘死的。**
+
+### Added
+- `## 原生 UI 能力` 新增两条（同小节，`directiveClauses` 条数不变，仍 21）：
+  - **⑥ 前端调的是插件 JS API 时补「同名插件 shim」**：前端 `import("@tauri-apps/plugin-<x>")` 而鸿蒙把该插件
+    整插件排除时，这条 IPC 在鸿蒙上**根本不存在**（点击在 JS 层失败，异常常被上层 catch 成"用户取消"，
+    桥日志一行都没有）。正解是注册**同名插件**转调自己的实现，**三处一起对上**：插件名/命令名、
+    `build.rs` 的 `InlinedPlugin::commands`、capabilities 的 `dialog:allow-*`；`R2-PORT-017` 会点名
+    "Rust 调了桥、ArkTS 没有同名分发器"。
+  - **⑦ `not allowed by ACL` 别只改 JSON**：ACL 在 codegen 阶段烘进二进制，改完 `capabilities/*.json`
+    若没真正重跑 build script，二进制里就是旧 ACL——表现与"白名单写错"一模一样，而
+    `gen/schemas/capabilities.json` 看着全对。顺序：先比对**实际窗口 label** 与 `windows` 通配（改过 label
+    的工程必须同步改白名单）→ 仍拒就 `touch src-tauri/build.rs`（或 `cargo clean -p <crate>`）再重编 →
+    还没结论就用 `debug-assertions` 构建拿 `resolve_access_message` 的 window/webview/origin 三维明细。
+- `docs/任务书规范.md` §3「原生 UI 能力」那一行的「缺了会怎样」同步这两条（该文档由单测读真实内容断言）。
+
+### Verified
+- `cjpm build` 零警告；`cjpm test` **TOTAL=659 / PASSED=659 / FAILED=0 / ERROR=0**
+  （`directive_spec_test` 的条数断言仍是 21——本次只改同小节文案，没有新增条款）。
+
+### 为什么（用户提出）
+0.39.138 那轮真机 Picker 是**本机 agent 辅助打通的**，于是被追问："换成 lingqu 内置的 cjh 跑，它做得到吗？"
+核查发现两条关键知识**只在技能里、任务书 0 处提及**（`shim` / `ACL` 在 `src/autoport.cj` 里检索计数为 0），
+按 §4-130「能力已有、说明书没给 = agent 只能瞎摸」，它会先撞 `command not found`、再反复改同一份 JSON。
+**未验**：真实 autoport 跑一轮看它是否照这两条做（行为验收，规范 §8）。
+
 ## [0.39.142] - 2026-11-24
 
 **导出改分块拷贝：46 MB 的 jar 不再是坎（0.39.139/0.39.140 抓到的卡死彻底修掉）；探针兜底超时可配并实测到。**
