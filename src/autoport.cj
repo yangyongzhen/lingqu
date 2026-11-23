@@ -262,6 +262,9 @@ public func directiveClauses(): ArrayList<DirectiveClause> {
         "平台限制≠失败、未验证≠通过、禁全盘搜索——不写就会谎报或挂死（2026-11-07 事故）"))
     out.add(DirectiveClause("## 插件不满足：三层适配优先于降级", DIRECTIVE_WHEN_ALWAYS,
         "外部反馈（2026-11-20）：轻易降级就丢原软件功能特性；不写清适配路径，agent 撞到无对应物的插件只会降级"))
+    out.add(DirectiveClause("## 平台 API 降级落地", DIRECTIVE_WHEN_ALWAYS,
+        "dbx 实测（0.39.138）：platform-api 一次报出 10 类「鸿蒙分支是空壳」，而任务书没给具体落法 ⇒ " +
+            "agent 只能猜或直接登记 limit；写了代码 ≠ 功能可用（§4-191）"))
     out.add(DirectiveClause("## 鸿蒙知识库（MCP 工具）", DIRECTIVE_WHEN_ALWAYS,
         "0.39.130：cjh 已接入华为开发者知识库（searchDocuments/getDocumentsById），但任务书不写\"何时该查\"，" +
             "agent 会靠模型记忆猜 API 语义——猜错就白烧一轮编译"))
@@ -532,6 +535,35 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     d += "`clipboard-rs` 只有 win/macos/ios/x11/wayland、**没有 ohos**，而鸿蒙 `target_os` 也是 linux ⇒ "
     d += "编译能过、运行时落进 unix 分支找 X11/Wayland（设备上根本没有）。**\"编译过了\"≠\"这平台有实现\"**；"
     d += "补完一个插件，回头把同族常用插件（剪贴板/通知/托盘/全局快捷键）在扫描名单里逐个点名。\n\n"
+
+    // 0.39.141：dbx 那轮（0.39.138）暴露的缺口——`verify` 的 platform-api 项报了 10 类
+    // 「鸿蒙分支是空壳」，而任务书**从没给过这 10 类的具体落法**，agent 只能自己猜，或干脆登记 limit
+    // 了事。这不是加新能力，是把已经有结论的东西写进 agent 唯一必读的入口（与 §4-130 同族：
+    // 能力已经有、说明书没给 = 它只能瞎摸）。
+    d += "## 平台 API 降级落地（`platform-api` 判 fail 时按这张表做）\n"
+    d += "`verify` 报 `platform-api` fail 时，它列的就是**命中了、但鸿蒙分支是空壳**的那几类。"
+    d += "**空壳 = `Ok(None)` / `Some(None)` / `return None` / `todo!()` / `unimplemented!()` / "
+    d += "返回桌面风格路径**，一律算没落地（判空要认这些包装形态，别只看裸 `None`）。\n"
+    d += "| 命中项 | 鸿蒙侧的落法 |\n|---|---|\n"
+    d += "| `app_data_dir` / `app_local_data_dir` / `app_config_dir` / `app_cache_dir` | "
+    d += "**别信返回值**：鸿蒙上不报错却给桌面路径（`/storage/Users/…`），后续 `create_dir_all` 必 EPERM "
+    d += "⇒ `target_env = \"ohos\"` 时定死 `/data/storage/el2/base/files`（配置用其下 `config/`、缓存用 `cache/`）；|\n"
+    d += "| `HOME` / `APPDATA` / `dirs::data_dir()` | 同上：别用环境变量拼路径，直接走沙箱根；|\n"
+    d += "| `std::env::temp_dir()` | 固定 `files/tmp`（先建目录再写）；|\n"
+    d += "| `std::process::Command` | 鸿蒙上**能不用就不用**（多数调用可换成标准库实现）；确需外部命令时必须"
+    d += "**绝对路径 + 超时**，失败要回投——PATH 里没有 coreutils 时是 `exit 127`（§4-71）；|\n"
+    d += "| `tauri_plugin_opener`（开链接 / 开文件 / 定位文件） | 走 Want 桥：`ohos_bridge.rs` 的 "
+    d += "`open_url` / `open_path` + ArkTS 分发器 `startAbility`（`ohos.want.action.viewData`）；"
+    d += "**打开应用沙箱目录三方应用做不到**（真机三条路全证伪，§4-187）⇒ 如实提示路径并登记 limit；|\n"
+    d += "| `tauri-plugin-clipboard-manager` / `clipboard-rs` | `@ohos.pasteboard`：`getChangeCount()` 能知道"
+    d += "\"变了\"，但 `getDataSync()` 在未授权时**返回空而不报错**，声明 `READ_PASTEBOARD` 会装不上"
+    d += "（`9568289`）⇒ 自动采集这类**登记 limit**，别写\"已适配\"（§4-190）；|\n"
+    d += "- **改完必须复验到判据变**：`" + cliRef + " verify --path .` 之后看 `.lingqu/verify/<工程>.json` 的 "
+    d += "`platform-api` 项——要么变 `pass` / `limit`（limit 要逐条说明为什么只能限制），要么仍 fail 且点名到具体 API。"
+    d += "**别只改完代码就报\"已落地\"**（写了代码 ≠ 功能可用，§4-191）。\n"
+    d += "- 有真机时优先让**实测压过静态推断**：`.lingqu/verify/<工程>.probe.json` 里 `platform:<符号>` 的实测结论"
+    d += "优先于扫描结论；没有实测就别把\"静态看着像\"当成通过。\n"
+    d += "- 一条都不许\"顺手删掉\"：`platform-api` 是移植项（进 A4 分母），删条目等于改分母（D-020）。\n\n"
 
     // 0.39.130：cjh 1.6.13 接入华为开发者知识库（MCP http 传输）后，agent 有了权威的
     // 鸿蒙资料源。但"有工具"≠"会用"——不写清何时该查，它会靠模型记忆猜 API 语义

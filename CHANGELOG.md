@@ -5,6 +5,36 @@
 
 ---
 
+## [0.39.141] - 2026-11-23
+
+**任务书新增「平台 API 降级落地」小节：把 dbx 实测那 10 类的具体落法写进 agent 唯一必读的入口。**
+
+### Added
+- `buildAutoPortDirective` 新增 `## 平台 API 降级落地`（`always`，`directiveClauses` 20 → **21**）：
+  - **空壳口径**：`Ok(None)` / `Some(None)` / `return None` / `todo!()` / `unimplemented!()` /
+    返回桌面风格路径，一律算没落地（判空要认包装形态，不能只看裸 `None`）；
+  - **一张落法表**（对应 dbx `platform-api` 报出的 10 类）：`app_data_dir` / `app_local_data_dir` /
+    `app_config_dir` / `app_cache_dir` / `HOME` / `APPDATA` / `dirs::data_dir()` → 定死
+    `/data/storage/el2/base/files`（别信返回值）；`std::env::temp_dir()` → `files/tmp`；
+    `std::process::Command` → 能不用就不用，确需则绝对路径 + 超时 + 失败回投；
+    `tauri_plugin_opener` → Want 桥（沙箱目录三方应用打不开，如实登记 limit）；
+    `tauri-plugin-clipboard-manager` / `clipboard-rs` → 自动采集登记 limit（`getDataSync` 未授权返空、
+    声明 `READ_PASTEBOARD` 会 `9568289` 装不上）；
+  - **复验判据**：改完必须 `verify` 复跑到 `platform-api` 的 `verdict` 变 `pass`/`limit`，
+    「写了代码 ≠ 功能可用」（§4-191）；有实测时 `probe.json` 的 `platform:<符号>` 优先；
+    **不许删条目**（那是移植项分母，D-020）。
+- `docs/任务书规范.md` §3 清单同步（那份文档由单测读真实内容断言，漏一行就红）。
+
+### Verified
+- `cjpm test` **TOTAL=658 / PASSED=658 / FAILED=0 / ERROR=0**（含 `directive_spec_test` 读真实规范文档的断言）；
+  条款数断言 20 → **21**。
+- `cjpm build` success（零警告）。
+
+### 为什么（用户选的路线）
+dbx 的 `platform-api` 长期停在 83%（10 处降级没落地）。按 **D-015**，改样本源码是 **agent 的活**，
+不该由我们代写；所以这一轮只把「已知结论」补进任务书 + 规范，让下一轮 autoport 的 agent 自己按表落地。
+**未验**：真实 autoport 跑一轮看它是否照着做（规范 §8 的验收要求）。
+
 ## [0.39.140] - 2026-11-23
 
 **导出改后台任务 + 停滞必报错；0.39.139 抓到的「卡死」缺陷从"无声"变成"点名到文件"。**
