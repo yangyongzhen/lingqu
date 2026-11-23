@@ -92,3 +92,21 @@ public func testExportStallVerdictOf(): Unit {
     @Assert(exportStallVerdictOf(true, EXPORT_STALL_SECS) == "stalled")
     @Assert(exportStallVerdictOf(true, EXPORT_STALL_SECS + 300) == "stalled")
 }
+
+/*
+ * 分块拷贝的写入长度（0.39.142）：末块只写实读部分是这类改动最容易错的地方——
+ * 多写会把缓冲尾部残留的 0 塞进目标文件，文件大小还对、内容已坏。
+ */
+@Test
+public func testExportWriteLenOf(): Unit {
+    // EOF / 异常返回值：一个字节都不写
+    @Expect(exportWriteLenOf(0, 1024), 0)
+    @Expect(exportWriteLenOf(-1, 1024), 0)
+    // 末块：只写实读部分（这是唯一会坏的边界）
+    @Expect(exportWriteLenOf(500, 1024), 500)
+    // 满块 / 超过缓冲（防御）：夹到缓冲大小，绝不超过
+    @Expect(exportWriteLenOf(1024, 1024), 1024)
+    @Expect(exportWriteLenOf(4096, 1024), 1024)
+    // 块大小本身必须是正数，否则判据形同虚设
+    @Assert(EXPORT_CHUNK_BYTES > 0, true)
+}

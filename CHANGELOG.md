@@ -5,6 +5,31 @@
 
 ---
 
+## [0.39.142] - 2026-11-24
+
+**导出改分块拷贝：46 MB 的 jar 不再是坎（0.39.139/0.39.140 抓到的卡死彻底修掉）；探针兜底超时可配并实测到。**
+
+### Fixed
+- `copyTreeInto` 用 **`File.readFrom` + `File.writeTo`（整文件读进内存再写）** 时，在**应用进程**里拷到
+  `agents/drivers/transwarp/libs/` 那个 **46 MB** 的 jar 就卡死（同工程 CLI 拷同一文件没事 ⇒ 与导出实现无关，
+  是「一次分配 46 MB」这条路在 GUI 进程里走不通）。改成 **1 MB 缓冲的分块拷贝**
+  （`File(src, OpenMode.Read)` + `File.create(dst)` + 反复 `read`/`write`），内存占用与文件大小解耦。
+- 末块边界收成**纯函数** `exportWriteLenOf(n, bufSize)` 并单测（多写会把缓冲尾部残留的 0 塞进目标文件——
+  文件大小还对、内容已坏，这类损坏最难发现）。
+
+### Changed
+- 界面探针的兜底上限做成可配：`LINGQU_EXPORT_PROBE_MS` → 后端 `t2h:env` 的 `exportProbeMs` → 前端 `capMs`；
+  超时/停滞各有独立回投标签（`export-timeout` / `export-stalled`），便于自动断言。
+
+### Verified（`LINGQU_UI_PROBE=export`，成果目录在 E: 盘）
+- **正常路径**：`export-final · exportOk=true · exportFiles=8683 · exportBytes=257,526,499 ·
+  exportDir=E:\tmp\migrated-probe4\dbx-20261124-0004`；dbx 侧 `.lingqu/export/dbx.json` 同步刷新成同一组数
+  ⇒ 此前每次卡在 **913** 个文件的问题不再复现。
+- **超时分支**（`LINGQU_EXPORT_PROBE_MS=15000`）：`exportTries=1 · exportOk=false ·
+  exportErr="导出超过 15 秒仍未结束"` ⇒ 原来"永远跑不到"的兜底路径实测过了一次。
+- **观察口径提醒**：中途的 `export-timeout` 会被随后的 `export-final` 顶掉（`ui-report.json` 只留最后一条），
+  要按 tag 去 `ui-report.log` 找（§4-161 同族）。
+
 ## [0.39.141] - 2026-11-23
 
 **任务书新增「平台 API 降级落地」小节：把 dbx 实测那 10 类的具体落法写进 agent 唯一必读的入口。**

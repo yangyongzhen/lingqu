@@ -231,6 +231,65 @@ public func exportStallVerdictOf(running: Bool, idleSecs: Int64): String {
     return "running"
 }
 
+/** 分块拷贝的块大小（1 MB）：别整文件读进内存——dbx 实测在 46 MB 的 jar 上会卡死在应用进程里 */
+public let EXPORT_CHUNK_BYTES: Int64 = 1024 * 1024
+
+/**
+ * 一块读到 `n` 字节时该写多少（**纯函数**，单测钉住）。
+ *
+ * 这条边界最容易错：`read` 返回 0 表示 EOF；末块 `n < bufSize` 时**必须只写 n**，
+ * 否则会把缓冲尾部残留的 0 写进目标文件——文件"看起来"完整、大小还对，内容却坏了。
+ */
+public func exportWriteLenOf(n: Int64, bufSize: Int64): Int64 {
+    if (n <= 0) {
+        return 0
+    }
+    if (n >= bufSize) {
+        return bufSize
+    }
+    return n
+}
+
+/**
+ * 按块把一个文件拷到目标（0.39.142）。
+ *
+ * 为什么不能继续用 `File.readFrom` + `File.writeTo`：那是**整文件读进内存再写**。dbx 的
+ * `agents/drivers/transwarp/libs/` 里那个 46 MB 的 jar，在**应用进程**里拷到它就卡死（同工程 CLI 拷同一文件没事，
+ * 说明不是导出实现的问题，而是这条"一次分配 46 MB"的路在 GUI 进程里走不通）。
+ * 改成固定 1 MB 缓冲：内存占用与文件大小解耦，进度也能按块刷新。
+ *
+ * 返回值是实际写入的字节数（调用方自己累加，别信文件属性）。
+ */
+func copyFileChunked(src: String, dst: String): Int64 {
+    let input = File(src, OpenMode.Read)
+    let output = File.create(dst)
+    var total: Int64 = 0
+    try {
+        let buf = Array<Byte>(EXPORT_CHUNK_BYTES, repeat: 0)
+        while (true) {
+            let n = input.read(buf)
+            if (n <= 0) {
+                break
+            }
+            let w = exportWriteLenOf(n, EXPORT_CHUNK_BYTES)
+            if (w >= EXPORT_CHUNK_BYTES) {
+                output.write(buf)
+            } else {
+                // 最后一块通常不足 1 MB：只写实读部分，别把缓冲尾巴的 0 也写进去
+                output.write(buf.slice(0, w))
+            }
+            total += w
+        }
+    } catch (e: Exception) {
+        input.close()
+        output.close()
+        throw e
+    }
+    input.close()
+    output.close()
+    return total
+}
+
 func copyTreeInto(srcDir: String, dstDir: String, relPrefix: String, res: ExportResult): Unit {
     ensureDirRecursive(dstDir)
     for (info in Directory.readFrom(Path(srcDir))) {
@@ -251,10 +310,10 @@ func copyTreeInto(srcDir: String, dstDir: String, relPrefix: String, res: Export
             // 而不是"最后拷完的那个"（0.39.140 实测：报出来的是 build.gradle，
             // 真凶是它后面那个 46 MB 的 jar，差一个文件就白猜一轮）。
             noteExportProgress(rel, res.copiedFiles, res.totalBytes)
-            let bytes = File.readFrom(src)
-            File.writeTo(dst, bytes)
+            // 0.39.142：改**分块**拷贝——整文件读进内存那条路在应用进程里会卡死在 46 MB 的文件上
+            let bytes = copyFileChunked(src, dst)
             res.copiedFiles += 1
-            res.totalBytes += bytes.size
+            res.totalBytes += bytes
             noteExportProgress(rel, res.copiedFiles, res.totalBytes)
         } catch (e: Exception) {
             // 单个文件读不了不该中断整次导出，但要计数（别静默丢）

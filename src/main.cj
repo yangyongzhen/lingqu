@@ -285,6 +285,9 @@ public class EnvCommand <: CommandHandler {
         // 界面自检开关：置 1 时页面会自己跑一遍「开设置 → 折叠 → 展开 → 发一句」并逐步上报；
         // 置 approval 时改为发一条会触发危险操作审批的指令（验证审批卡）。
         res.put("uiProbe", JsonString(envOr("LINGQU_UI_PROBE", "")))
+        // 界面探针的兜底超时可配（0.39.142）：默认 10 分钟。`export-timeout` 那条分支要实测就得能调小，
+        // 否则它永远跑不到——"没跑到"不能算"通过"（§4-136）。
+        res.put("exportProbeMs", JsonInt(intEnvOr("LINGQU_EXPORT_PROBE_MS", 600000)))
         // 上次用过的工程（0.39.44）：页面启动时用它把工程带回来（localStorage 不可用，
         // 见 lastProjectOf 的注释与 `LINGQU_UI_PROBE=store` 自检）。
         res.put("lastProject", JsonString(lastProjectFromReport()))

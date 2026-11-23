@@ -2829,6 +2829,9 @@ withBridge(function(tauri){
       // 环境体检回包里带 uiProbe 标志：非空则自动跑一轮界面自检序列。
       // 这样「版面对不对、通道通不通」不再依赖肉眼看截图，CI / 无视觉能力场景也能验证。
       if (d && d.uiProbe) { window.__uiProbeMode = String(d.uiProbe); runUiProbe(); }
+      // 探针兜底超时（0.39.142）：后端把 LINGQU_EXPORT_PROBE_MS 透传下来，默认 10 分钟。
+      // 有了它，`export-timeout` 那条分支才测得动（调小到 15s 即可复现），否则等于没验过。
+      if (d && d.exportProbeMs) { window.__exportProbeMs = Number(d.exportProbeMs); }
       // 克隆探针（0.39.48）：LINGQU_CLONE_URL / LINGQU_CLONE_DIR 透传给页面自检用
       if (d && d.cloneUrl) { window.__cloneProbeUrl = String(d.cloneUrl); }
       if (d && d.cloneDir) { window.__cloneProbeDir = String(d.cloneDir); }
@@ -7304,7 +7307,7 @@ withBridge(function(tauri){
 
     // 0.39.140：导出改后台跑（§4-68），这里**轮询** t2h:export_status，不再等一个可能永不结算的 promise。
     // 之前同步版的实测症状：卡在 46 MB 的 jar 处，界面永远「正在导出…」、exportTries 恒 0（§4-211）。
-    function finish(ok, files, bytes, dir, err){
+    function finish(ok, files, bytes, dir, err, tag){
       window.__exportRes = {
         tries: ((window.__exportRes && window.__exportRes.tries) || 0) + 1,
         ok: ok, files: files, bytes: bytes, dir: dir, err: String(err || '')
@@ -7313,7 +7316,7 @@ withBridge(function(tauri){
       pill.textContent = ok
         ? ('已导出 ' + String(files) + ' 个文件（' + String(bytes) + ' 字节）到：' + String(dir))
         : ('导出失败：' + String(err || '未知错误'));
-      reportUi('export-' + (ok ? 'ok' : 'fail'));
+      reportUi(tag || ('export-' + (ok ? 'ok' : 'fail')));
       btn.disabled = false;
     }
 
@@ -7325,6 +7328,9 @@ withBridge(function(tauri){
         return;
       }
       var waited = 0;
+      // 兜底上限（0.39.142）：默认 10 分钟；`LINGQU_EXPORT_PROBE_MS` 可调小，
+      // 否则这条"超时交回人"的分支永远跑不到（没跑到 ≠ 通过）。
+      var capMs = Number(window.__exportProbeMs) || 600000;
       var tick = setInterval(function(){
         waited += 1000;
         invoke('t2h:export_status', {}).then(function(s){
@@ -7336,7 +7342,7 @@ withBridge(function(tauri){
               // 停滞必须变成**可见的失败**（含"卡在哪个文件"），不许继续转圈
               clearInterval(tick);
               finish(false, Number(s.exportFiles || 0), Number(s.exportBytes || 0), '',
-                String(s.exportErr || '导出停滞（长时间没有新文件拷完）'));
+                String(s.exportErr || '导出停滞（长时间没有新文件拷完）'), 'export-stalled');
             }
             return;
           }
@@ -7351,9 +7357,9 @@ withBridge(function(tauri){
           clearInterval(tick);
           finish(false, 0, 0, '', '查导出状态失败：' + String(e));
         });
-        if (waited > 600000) {   // 客户端兜底：10 分钟还没结束就交回人，别无限转
+        if (waited > capMs) {
           clearInterval(tick);
-          finish(false, 0, 0, '', '导出超过 10 分钟仍未结束');
+          finish(false, 0, 0, '', '导出超过 ' + Math.round(capMs / 1000) + ' 秒仍未结束', 'export-timeout');
         }
       }, 1000);
     }).catch(function(e){
