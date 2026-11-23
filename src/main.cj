@@ -1867,6 +1867,14 @@ public class UiReportCommand <: CommandHandler {
         // 登录入口证据（0.39.82）：卡片状态 + 登录页 URL（有值说明"可点链接"真的给到了界面）
         o.put("signLoginState", JsonString(argStr(args, "signLoginState", "")))
         o.put("signLoginUrl", JsonString(argStr(args, "signLoginUrl", "")))
+        // 「导出移植成果」按钮的读数（0.39.139）：按钮以前没有任何可断言字段，点完只有一行 pill。
+        // 白名单不加等于报告里查不到（§4-60：前端与这里必须两处一起加）。
+        o.put("exportOk", JsonBool(argBool(args, "exportOk", false)))
+        o.put("exportTries", JsonInt(argInt(args, "exportTries", 0)))
+        o.put("exportFiles", JsonInt(argInt(args, "exportFiles", 0)))
+        o.put("exportBytes", JsonInt(argInt(args, "exportBytes", 0)))
+        o.put("exportDir", JsonString(argStr(args, "exportDir", "")))
+        o.put("exportErr", JsonString(argStr(args, "exportErr", "")))
         // 对话通道连不上的原话（0.39.65）：用户实测"网页能打开 8765，软件却说未连接"，
         // 而报告里只有 connected/closed 两态、拿不到原因 —— 加这三项才排得动。
         o.put("wsErr", JsonString(argStr(args, "wsErr", "")))

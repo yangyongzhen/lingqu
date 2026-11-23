@@ -7304,10 +7304,25 @@ withBridge(function(tauri){
            + ' 字节）到：' + String(r.outDir || ''))
         : ('导出失败：' + String(r.error || '未知错误'));
       $('rpPaths').innerHTML += '<br><span class="pill ' + (ok ? 'ok' : 'err') + '">' + esc(msg) + '</span>';
+      // 导出结果留痕（0.39.139）：按钮此前**没有任何可断言的读数** —— 点完只多一行 pill，
+      // 探针与 ui_report 都看不见"导没导成、导到哪、导了多少"。§4-60：新增字段必须两处一起加。
+      window.__exportRes = {
+        tries: ((window.__exportRes && window.__exportRes.tries) || 0) + 1,
+        ok: ok,
+        files: Number(r.copiedFiles || 0),
+        bytes: Number(r.totalBytes || 0),
+        dir: String(r.outDir || ''),
+        err: String(r.error || '')
+      };
       reportUi('export-' + (ok ? 'ok' : 'fail'));
       btn.disabled = false;
     }).catch(function(e){
       $('rpPaths').innerHTML += '<br><span class="pill err">导出失败：' + esc(String(e)) + '</span>';
+      window.__exportRes = {
+        tries: ((window.__exportRes && window.__exportRes.tries) || 0) + 1,
+        ok: false, files: 0, bytes: 0, dir: '', err: String(e)
+      };
+      reportUi('export-fail');
       btn.disabled = false;
     });
   }
@@ -8019,6 +8034,14 @@ withBridge(function(tauri){
       // 这项说清"卡片在不在、链接有没有、点没点过系统浏览器"。
       signLoginState: (typeof SIGNLOGIN !== 'undefined')
         ? (SIGNLOGIN.running ? 'running' : (SIGNLOGIN.done ? 'done' : 'idle')) : 'absent',
+      // 「导出移植成果」按钮的读数（0.39.139）：tries=点过几次，ok=最后一次成没成，
+      // files/bytes=复制规模，dir=落点，err=失败原因。以前点完只有一行 pill，报告里查不到（§4-60）。
+      exportOk: (window.__exportRes ? window.__exportRes.ok === true : false),
+      exportTries: (window.__exportRes ? Number(window.__exportRes.tries || 0) : 0),
+      exportFiles: (window.__exportRes ? Number(window.__exportRes.files || 0) : 0),
+      exportBytes: (window.__exportRes ? Number(window.__exportRes.bytes || 0) : 0),
+      exportDir: (window.__exportRes ? String(window.__exportRes.dir || '') : ''),
+      exportErr: (window.__exportRes ? String(window.__exportRes.err || '') : ''),
       signLoginUrl: (typeof SIGNLOGIN !== 'undefined') ? String(SIGNLOGIN.url || '') : '',
       // 连接失败的原话（0.39.65）：以前只有 connected/closed 两态，连不上时界面与报告都拿不到原因，
       // 只能看着"未连接"干瞪眼（用户实测：网页能开 8765、软件说未连接）
@@ -9042,6 +9065,39 @@ withBridge(function(tauri){
           : { ok: false, fail: prevFail };
         reportUi('verifysections-restored');
       }, 8000);
+      return;
+    }
+    // 「导出移植成果」按钮自检（LINGQU_UI_PROBE=export，0.39.139）：
+    // 这个按钮 0.39.137 加进来后**一次都没被自动验证过**（只验过 CLI 与 IPC 面）。
+    // 判据三条：exportTries ≥ 1（按钮真的把 IPC 发出去了）、exportOk=true（导出成功）、
+    // exportFiles > 0 且 exportDir 非空（结果真回来了、且能说出导到哪）；失败看 exportErr。
+    // 复制整个工程要时间（dbx ≈ 8600 文件 / 250 MB），所以分阶段回投，别只看最后一条。
+    if (mode === 'export') {
+      setTimeout(function(){ switchScreen('report'); }, 1100);
+      setTimeout(function(){
+        var b = $('btnExport');
+        window.__exportClicked = (b ? 1 : 0);
+        if (b) { b.click(); }
+        reportUi('export-clicked');
+      }, 2000);
+      // **不要按固定时长收尾**：dbx 的导出是 8683 文件 / 250 MB，第一版探针按 72 s 收尾，
+      // 结果 `exportTries=0`，看着像"点了没反应"，其实导出还在拷（目录都已建出来了）——
+      // 与 §4-136 同族：探针自己把"还没回来"读成"没发生"。改成轮询 __exportRes，上限 5 分钟。
+      var waited = 0;
+      var tick = setInterval(function(){
+        waited += 5000;
+        if (window.__exportRes) {
+          clearInterval(tick);
+          reportUi('export-final');
+          return;
+        }
+        if (waited >= 300000) {
+          clearInterval(tick);
+          reportUi('export-timeout');
+          return;
+        }
+        if (waited % 15000 === 0) { reportUi('export-wait' + (waited / 1000)); }
+      }, 5000);
       return;
     }
     // 报告与落档同代自检（LINGQU_UI_PROBE=reportstale，0.39.85，§4-133）：
