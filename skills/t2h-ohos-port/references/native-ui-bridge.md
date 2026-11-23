@@ -152,6 +152,32 @@ tauri_build::try_build(attrs).expect("tauri build failed");
    "重复 `main` webview" 把窗口 label 改成了 `dbx-main`，而白名单里还是 `main`
    ⇒ 整套权限一条都没生效（**应用自己的 `invoke` 命令不受 ACL 管，所以别的功能看着正常**，极易误判成"shim 没注册"）。
 
+#### ✅ 已真机打通（2026-11-23 dbx，端到端）
+
+点「SQLite → 文件路径 → 浏览」→ 系统 `DocumentViewPicker` 弹出（版面 bundle 变成
+`com.huawei.hmos.filemanager`，出现「安全访问文件 / 最近」）→ 选一个文件 → 「已选 (1/1)」→「打开」
+→ 回到应用，**「文件路径」被回填成沙箱副本**
+`/data/storage/el2/base/haps/entry/files/imported/<文件名>`。整条链不再出现 ACL 拒绝。
+
+**但"哪一处改动让它通的"尚未坐实**（如实记，别当成结论照抄）：那一轮同时有两处差异——
+① `capabilities/ohos.json` 去掉了 `platforms: ["openHarmony"]`；② 应用 crate 被**整份重编**。
+而据 tauri 2.11.5 源码，`platforms: ["openHarmony"]` 按设计**本该生效**
+（`tauri-build` 写 `TAURI_ENV_TARGET_TRIPLE=aarch64-unknown-linux-ohos` →
+`Target::from_triple` 含 `ohos` → `OpenHarmony` → `Capability::is_active` 为真，
+本机 `build/dbx-*/output` 里能查到这条 env）。所以更可能起作用的是 ②：
+
+> **ACL 是编译期烘进二进制的**（`Resolved::resolve(..., Target)` 在 codegen 阶段算好并内嵌）。
+> 改完 `capabilities/*.json` 若构建没真正重跑 build script，二进制里就是**旧 ACL**——
+> 表现与"白名单没写对"一模一样，而且 `gen/schemas/capabilities.json` 看着是全对的。
+
+**因此纪律**：改 capability 后不要相信"文件对了 + 重编过了"，要强制
+`touch src-tauri/build.rs`（或 `cargo clean -p <应用crate>`）再编；要坐实归因就做**负向对照**
+（把 `platforms` 加回去重编一次）——代价是一轮 45 分钟全量编译，本仓选择如实标注而不是猜。
+
+排查顺序（按成本从低到高）：窗口 label vs `windows` 通配 → 三处联动
+（插件名/命令名、`InlinedPlugin`、capabilities 放行）→ 强制重跑 build script → 带
+`debug-assertions` 的构建拿 `resolve_access_message` 的明细（它会点名是 window / webview / origin 哪一维）。
+
 ## 3. 返回值怎么回去：三种形态，按需选
 | 形态 | 适用 | 代价 |
 |---|---|---|

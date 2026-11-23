@@ -5,6 +5,36 @@
 
 ---
 
+## [0.39.138] - 2026-11-23
+
+**真机 Picker 端到端打通（同名 IPC shim 在鸿蒙成立）；「ACL 是编译期烘进二进制」入坑表。**
+
+> 本版**只改文档**（`AGENTS.md` / 技能 / `docs/进度记录.md` / 本文件 / 版本三处），业务代码零改动。
+
+### Fixed（真机侧，样本工程内）
+- **`plugin:dialog|open not allowed by ACL` 不再复现**：dbx 整份重编（`--target …ohos --lib`，
+  45m48s，`libdbx_lib.so` 97,314,840 B）→ signed HAP 99,631,380 B → 无线真机部署 →
+  `aa force-stop` + `aa start`（pid `56227` → `57095`）→ 点「SQLite → 文件路径 → 浏览」，
+  **系统 `DocumentViewPicker` 真的弹出**（版面 bundle 变 `com.huawei.hmos.filemanager`，
+  出现「安全访问文件 / 最近 / 浏览」），选文件后「已选 (1/1)」→「打开」→
+  应用「文件路径」回填**沙箱副本** `/data/storage/el2/base/haps/entry/files/imported/<文件名>`。
+
+### Docs
+- `AGENTS.md` §4 新增 **209**：ACL 在 codegen 阶段（`Resolved::resolve(..., target)`）烘进二进制，
+  改完 `capabilities/*.json` 若没真正重跑 build script，二进制里就是**旧 ACL**——表现与"白名单写错"
+  一模一样，而 `gen/schemas/capabilities.json` 看着全对。纪律：`touch src-tauri/build.rs` 或
+  `cargo clean -p <应用crate>` 后重编。
+- 技能 `skills/t2h-ohos-port/references/native-ui-bridge.md` §2.3 补「已真机打通」与排查顺序
+  （窗口 label → 三处联动 → 强制重跑 build script → `debug-assertions` 拿三维明细）。
+
+### 诚实边界
+- **归因未坐实**：去掉 `platforms: ["openHarmony"]` 与"整份重编"两处差异同时发生，而据 tauri 2.11.5
+  源码 `TAURI_ENV_TARGET_TRIPLE`（本机 `build/dbx-*/output` 可查）= `aarch64-unknown-linux-ohos`
+  ⇒ `Target::from_triple` 命中 `OpenHarmony` ⇒ `platforms` 按设计**本该生效**。要定论需负向对照
+  （把 `platforms` 加回去重编一次），本版如实标注"未坐实"。
+- `t2h:verify` / `t2h:report` 未按新落档重跑（dbx 的 83% / 8 步 8/8 仍是 0.39.136 的读数）；
+  ⑦ 屏「导出移植成果」按钮的界面点击仍未点过。
+
 ## [0.39.137] - 2026-11-22
 
 **新增「导出移植成果」：把迁移后的工程冻结到独立目录，成果可归档、可直接提交。**
