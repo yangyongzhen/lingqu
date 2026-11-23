@@ -5,6 +5,37 @@
 
 ---
 
+## [0.39.140] - 2026-11-23
+
+**导出改后台任务 + 停滞必报错；0.39.139 抓到的「卡死」缺陷从"无声"变成"点名到文件"。**
+
+### Changed
+- `t2h:export` **只起后台线程、立刻返回**（同时只允许一次，重复点返回"上一次还在跑"）；
+  新增**只读**命令 **`t2h:export_status`**：`running / done / exportOk / exportFiles / exportBytes /
+  exportDir / current / idleSecs / verdict / exportErr`，**绝不重跑导出**（§4-68：分钟级任务不许占命令面）。
+- `copyTreeInto` **每个文件在拷前与拷后各回投一次进度**（`noteExportProgress`，`std.sync.Mutex` 保护）——
+  停滞报错因此能点名**正在拷的文件**，而不是"最后拷完的那个"。
+- 新增**纯函数** `exportStallVerdictOf(running, idleSecs)` + 常量 `EXPORT_STALL_SECS=60`：
+  运行中且 60 秒没有新文件拷完 ⇒ `stalled`（跑完/没开始不算停滞）。单测 3 档 + 边界。
+- 前端导出按钮改成「起任务 → 每秒轮询状态」：停滞 / 状态异常 / 超 10 分钟都变成**可见失败**。
+
+### Verified（`LINGQU_UI_PROBE=export`，成果目录放 E: 盘）
+不再无限转圈，改为点名到文件的失败：
+
+```
+export-fail · exportTries=1 · exportFiles=913
+exportErr = 导出停滞：60 秒没有新文件拷完，当前停在
+「agents/drivers/transwarp/libs/inceptor-sdk-transwarp-6.1.0-SNAPSHOT.jar」（已拷 913 个 / 19873115 字节）
+```
+
+**根因收窄**：卡住的是那个 **46 MB** 的 jar，而同一工程用 CLI 拷它没事（8683 文件全过）
+⇒ 与导出实现无关，问题在**应用进程里"整文件读进内存再写"**这条路（C: 当时只剩 1–2 GB，
+页面文件也在 C:，最可能是内存/提交压力）。
+
+### 未修（下一轮）
+改**分块拷贝**（流式读写，别一次分配 46 MB）后再用探针复验到 `exportOk=true / exportFiles≈8683`；
+探针 `export-timeout` 分支仍未实跑到。详见 `AGENTS.md` §4-211。
+
 ## [0.39.139] - 2026-11-23
 
 **⑦ 屏「导出移植成果」装上自动探针；探针第一轮就抓到一个真缺陷：经 IPC 调用导出会卡死。**

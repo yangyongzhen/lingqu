@@ -73,3 +73,22 @@ public func testExportTargetDirOf(): Unit {
     @Assert(d3.contains("*"), false)
     @Assert(d3.endsWith("a_b_c-20261122-2140"), true)
 }
+
+/*
+ * 导出停滞判据（0.39.140）：导出经 IPC 时曾在大文件处静默卡死（§4-211），
+ * 所以"卡住"必须能被判出来并报错。这里只测纯函数的三档。
+ */
+@Test
+public func testExportStallVerdictOf(): Unit {
+    // 没在跑：idle 再大也不许说"卡住"（跑完了/没开始都不是停滞）
+    @Assert(exportStallVerdictOf(false, 0) == "")
+    @Assert(exportStallVerdictOf(false, 99999) == "")
+    // 在跑且有进展 ⇒ running
+    @Assert(exportStallVerdictOf(true, 0) == "running")
+    // 边界：阈值是"秒"，差 1 秒还不算卡（别把慢文件误判成卡死）
+    @Assert(exportStallVerdictOf(true, EXPORT_STALL_SECS - 1) == "running")
+    // 到阈值（含）⇒ stalled；阈值本身必须为正，否则判据形同虚设
+    @Assert(EXPORT_STALL_SECS > 0, true)
+    @Assert(exportStallVerdictOf(true, EXPORT_STALL_SECS) == "stalled")
+    @Assert(exportStallVerdictOf(true, EXPORT_STALL_SECS + 300) == "stalled")
+}

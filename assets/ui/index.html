@@ -7295,35 +7295,69 @@ withBridge(function(tauri){
     btn.disabled = true;
     var arg = { trigger: 'manual' };
     if (reportPathValue()) { arg.path = reportPathValue(); }
-    $('rpPaths').innerHTML += '<br><span class="pill">正在导出移植成果…</span>';
-    invoke('t2h:export', arg).then(function(r){
-      r = r || {};
-      var ok = (r.ok === true);
-      var msg = ok
-        ? ('已导出 ' + String(r.copiedFiles || 0) + ' 个文件（' + String(r.totalBytes || 0)
-           + ' 字节）到：' + String(r.outDir || ''))
-        : ('导出失败：' + String(r.error || '未知错误'));
-      $('rpPaths').innerHTML += '<br><span class="pill ' + (ok ? 'ok' : 'err') + '">' + esc(msg) + '</span>';
-      // 导出结果留痕（0.39.139）：按钮此前**没有任何可断言的读数** —— 点完只多一行 pill，
-      // 探针与 ui_report 都看不见"导没导成、导到哪、导了多少"。§4-60：新增字段必须两处一起加。
+    var pill = document.createElement('span');
+    pill.className = 'pill';
+    pill.textContent = '正在导出移植成果…';
+    $('rpPaths').appendChild(document.createElement('br'));
+    $('rpPaths').appendChild(pill);
+    window.__exportRes = null;   // 每次重来都清空：别把上一次的结论当成这一次的
+
+    // 0.39.140：导出改后台跑（§4-68），这里**轮询** t2h:export_status，不再等一个可能永不结算的 promise。
+    // 之前同步版的实测症状：卡在 46 MB 的 jar 处，界面永远「正在导出…」、exportTries 恒 0（§4-211）。
+    function finish(ok, files, bytes, dir, err){
       window.__exportRes = {
         tries: ((window.__exportRes && window.__exportRes.tries) || 0) + 1,
-        ok: ok,
-        files: Number(r.copiedFiles || 0),
-        bytes: Number(r.totalBytes || 0),
-        dir: String(r.outDir || ''),
-        err: String(r.error || '')
+        ok: ok, files: files, bytes: bytes, dir: dir, err: String(err || '')
       };
+      pill.className = 'pill ' + (ok ? 'ok' : 'err');
+      pill.textContent = ok
+        ? ('已导出 ' + String(files) + ' 个文件（' + String(bytes) + ' 字节）到：' + String(dir))
+        : ('导出失败：' + String(err || '未知错误'));
       reportUi('export-' + (ok ? 'ok' : 'fail'));
       btn.disabled = false;
+    }
+
+    invoke('t2h:export', arg).then(function(r){
+      r = r || {};
+      if (r.started !== true) {
+        // 起不来（典型：上一次还在跑）——如实报错，别让人以为正在导出
+        finish(false, 0, 0, '', String(r.error || '导出未启动'));
+        return;
+      }
+      var waited = 0;
+      var tick = setInterval(function(){
+        waited += 1000;
+        invoke('t2h:export_status', {}).then(function(s){
+          s = s || {};
+          if (s.running === true) {
+            pill.textContent = '正在导出：已拷 ' + String(s.exportFiles || 0) + ' 个文件'
+              + (s.current ? ('（' + String(s.current).slice(-60) + '）') : '');
+            if (s.verdict === 'stalled') {
+              // 停滞必须变成**可见的失败**（含"卡在哪个文件"），不许继续转圈
+              clearInterval(tick);
+              finish(false, Number(s.exportFiles || 0), Number(s.exportBytes || 0), '',
+                String(s.exportErr || '导出停滞（长时间没有新文件拷完）'));
+            }
+            return;
+          }
+          clearInterval(tick);
+          if (s.done === true) {
+            finish(s.exportOk === true, Number(s.exportFiles || 0), Number(s.exportBytes || 0),
+              String(s.exportDir || ''), String(s.exportErr || ''));
+          } else {
+            finish(false, 0, 0, '', '导出状态异常：既没在跑也没完成');
+          }
+        }).catch(function(e){
+          clearInterval(tick);
+          finish(false, 0, 0, '', '查导出状态失败：' + String(e));
+        });
+        if (waited > 600000) {   // 客户端兜底：10 分钟还没结束就交回人，别无限转
+          clearInterval(tick);
+          finish(false, 0, 0, '', '导出超过 10 分钟仍未结束');
+        }
+      }, 1000);
     }).catch(function(e){
-      $('rpPaths').innerHTML += '<br><span class="pill err">导出失败：' + esc(String(e)) + '</span>';
-      window.__exportRes = {
-        tries: ((window.__exportRes && window.__exportRes.tries) || 0) + 1,
-        ok: false, files: 0, bytes: 0, dir: '', err: String(e)
-      };
-      reportUi('export-fail');
-      btn.disabled = false;
+      finish(false, 0, 0, '', String(e));
     });
   }
   $('btnExport').addEventListener('click', runExport);

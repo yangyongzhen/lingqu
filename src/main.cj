@@ -7230,6 +7230,8 @@ public func build(): AppSpec {
         app.register("t2h:report", ReportCommand())
         // 0.39.137：把迁移成果导出到独立目录（CLI `export` 同款实现）
         app.register("t2h:export", ExportCommand())
+        // 0.39.140：导出的进度与结果靠这条只读命令轮询（§4-68：分钟级任务不许同步占着命令面）
+        app.register("t2h:export_status", ExportStatusCommand())
         app.register("t2h:batch", BatchCommand())
         app.register("t2h:skill", SkillCommand())
         app.register("t2h:agent_context", AgentContextCommand())
@@ -7567,6 +7569,51 @@ func fingerprintsJsonOf(lib: ArrayList<Fingerprint>, userText: String): JsonArra
  *       `out`（成果根目录；缺省 `%USERPROFILE%\lingqu-migrated`，`LINGQU_MIGRATED_DIR` 可覆盖）、
  *       `trigger`（`manual` / `verify-pass`，只用于落档溯源）。
  */
+/** 导出的后台态（0.39.140）：字段读写都在 `gExportJobLock` 里 */
+class ExportJob {
+    var running = false
+    var done = false
+    var ok = false
+    var project = ""
+    var outDir = ""
+    var copied = 0
+    var skipped = 0
+    var bytes = 0
+    var error = ""
+
+    func snapshot(): ExportJob {
+        let s = ExportJob()
+        s.running = this.running
+        s.done = this.done
+        s.ok = this.ok
+        s.project = this.project
+        s.outDir = this.outDir
+        s.copied = this.copied
+        s.skipped = this.skipped
+        s.bytes = this.bytes
+        s.error = this.error
+        return s
+    }
+}
+
+let gExportJobLock = Mutex()
+let gExportJob = ExportJob()
+
+/**
+ * `t2h:export` / `lingqu-cli export`（0.39.137）：把**迁移后的工程**复制到独立目录沉淀。
+ *
+ * 为什么要它：迁移是原地改样本工程的，成果散落在各样本目录里，人找不到、也不好单独提交。
+ * 导出把"这一轮迁移后的样子"冻结成可归档/可提交的目录（附 `MIGRATION.md` + `migration-manifest.json`）。
+ *
+ * **0.39.140 起只起后台线程、立刻返回**：此前它是同步 handler，实测在
+ * `agents/drivers/transwarp/libs/` 里那个 46 MB 的 jar 处静默卡死——目录建出来了、文件拷到 913 个就停住，
+ * 界面永远「正在导出…」、promise 永不结算、报告里 `exportTries` 恒 0（§4-211）。
+ * 分钟级 + 大量文件 IO 的活不该占着命令面（§4-68），进度改由 `t2h:export_status` 轮询。
+ *
+ * 参数：`path`（工程根；缺省取 `LINGQU_EXPORT_PATH`，再缺省取当前工作目录）、
+ *       `out`（成果根目录；缺省 `%USERPROFILE%\lingqu-migrated`，`LINGQU_MIGRATED_DIR` 可覆盖）、
+ *       `trigger`（`manual` / `verify-pass`，只用于落档溯源）。
+ */
 public class ExportCommand <: CommandHandler {
     public init() {}
 
@@ -7585,24 +7632,100 @@ public class ExportCommand <: CommandHandler {
             trigger = "manual"
         }
 
-        let res = exportProjectInto(path, outRoot, trigger)
+        var busy = false
+        synchronized(gExportJobLock) {
+            busy = gExportJob.running
+            if (!busy) {
+                gExportJob.running = true
+                gExportJob.done = false
+                gExportJob.ok = false
+                gExportJob.project = ""
+                gExportJob.outDir = ""
+                gExportJob.copied = 0
+                gExportJob.skipped = 0
+                gExportJob.bytes = 0
+                gExportJob.error = ""
+            }
+        }
         let o = JsonObject()
-        o.put("ok", JsonBool(res.ok))
-        o.put("project", JsonString(res.project))
-        o.put("sourcePath", JsonString(normalizeHostSep(res.sourcePath)))
-        o.put("outDir", JsonString(normalizeHostSep(res.outDir)))
-        o.put("trigger", JsonString(res.trigger))
-        o.put("copiedFiles", JsonInt(res.copiedFiles))
-        o.put("skippedEntries", JsonInt(res.skippedEntries))
-        o.put("totalBytes", JsonInt(res.totalBytes))
-        o.put("verifyRate", JsonInt(res.verifyRate))
-        o.put("error", JsonString(res.error))
-        o.put("outJson", JsonString(lqDirOf(path) + cjhPathSep() + "export" + cjhPathSep() +
-            sanitizeFileName(res.project) + ".json"))
-        o.put("nextStep", JsonString(if (res.ok) {
-            "成果目录：${normalizeHostSep(res.outDir)}（含 MIGRATION.md 与 migration-manifest.json）"
+        if (busy) {
+            // 同时只允许一次导出：重复点按钮不该再起一条线程（否则两个线程往同一父目录写）
+            o.put("ok", JsonBool(false))
+            o.put("started", JsonBool(false))
+            o.put("error", JsonString("上一次导出还在跑；进度看 t2h:export_status"))
+            return o
+        }
+        noteExportProgress("", 0, 0)
+        let srcPath = path
+        let dstRoot = outRoot
+        let trig = trigger
+        spawn {
+            let res = exportProjectInto(srcPath, dstRoot, trig)
+            synchronized(gExportJobLock) {
+                gExportJob.running = false
+                gExportJob.done = true
+                gExportJob.ok = res.ok
+                gExportJob.project = res.project
+                gExportJob.outDir = normalizeHostSep(res.outDir)
+                gExportJob.copied = res.copiedFiles
+                gExportJob.skipped = res.skippedEntries
+                gExportJob.bytes = res.totalBytes
+                gExportJob.error = res.error
+            }
+        }
+        o.put("ok", JsonBool(true))
+        o.put("started", JsonBool(true))
+        o.put("sourcePath", JsonString(path))
+        o.put("outRoot", JsonString(outRoot))
+        o.put("trigger", JsonString(trigger))
+        o.put("note", JsonString("已在后台开始导出；进度与结果看 t2h:export_status"))
+        return o
+    }
+}
+
+/**
+ * `t2h:export_status`（0.39.140）：**纯读共享态，绝不重跑导出**。
+ *
+ * 回投三档：`verdict` = `""`（没在跑）/ `running` / `stalled`（连续 `EXPORT_STALL_SECS` 秒
+ * 没有新文件拷完）。`stalled` 时 `exportErr` 会写明**卡在哪个文件**、已拷多少个——
+ * 这正是 0.39.139 那次"卡死但一个字都不说"缺的东西（D-013：静默失败零容忍）。
+ */
+public class ExportStatusCommand <: CommandHandler {
+    public init() {}
+
+    public func handle(_: String, _: JsonObject, _: IpcContext): JsonValue {
+        var s = ExportJob()
+        synchronized(gExportJobLock) {
+            s = gExportJob.snapshot()
+        }
+        let (cur, pCopied, pBytes, atMs) = exportProgressSnapshot()
+        let nowMs = DateTime.now().toUnixTimeStamp().toMilliseconds()
+        var idleSecs: Int64 = 0
+        if (atMs > 0) {
+            idleSecs = (nowMs - atMs) / 1000
+            if (idleSecs < 0) {
+                idleSecs = 0
+            }
+        }
+        let verdict = exportStallVerdictOf(s.running, idleSecs)
+        let o = JsonObject()
+        o.put("ok", JsonBool(true))
+        o.put("running", JsonBool(s.running))
+        o.put("done", JsonBool(s.done))
+        o.put("exportOk", JsonBool(s.ok))
+        o.put("project", JsonString(s.project))
+        o.put("exportDir", JsonString(s.outDir))
+        // 跑的时候以实时进度为准（结果还没汇总）；跑完以汇总为准
+        o.put("exportFiles", JsonInt(if (s.done) { s.copied } else { pCopied }))
+        o.put("exportBytes", JsonInt(if (s.done) { s.bytes } else { pBytes }))
+        o.put("skippedEntries", JsonInt(s.skipped))
+        o.put("current", JsonString(cur))
+        o.put("idleSecs", JsonInt(idleSecs))
+        o.put("verdict", JsonString(verdict))
+        o.put("exportErr", JsonString(if (verdict == "stalled") {
+            "导出停滞：${EXPORT_STALL_SECS} 秒没有新文件拷完，当前停在「${cur}」（已拷 ${pCopied} 个 / ${pBytes} 字节）"
         } else {
-            "导出失败，先看 error"
+            s.error
         }))
         return o
     }

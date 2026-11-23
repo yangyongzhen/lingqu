@@ -2,6 +2,7 @@ package lingqu
 
 import std.fs.*
 import std.time.*          // DateTime：导出时间戳与落档时刻
+import std.sync.*          // Mutex：导出进度（0.39.140 后台任务的状态）
 import stdx.encoding.json.*
 // `sanitizeFileName` 在扫描器包里（工程名净化共用一份实现，别在本包另写）
 import lingqu.scanner.*
@@ -177,6 +178,59 @@ func verifyStatsOf(projPath: String, projName: String): (Int64, Int64, Int64, In
 }
 
 /** 递归拷贝（`Directory.walk` 非递归，这里自己走；跳过规则由纯函数判定） */
+/** 导出进度（0.39.140）：写点在 `copyTreeInto` 的每个文件之后，读点在 `t2h:export_status`。
+ *
+ * 为什么要它：导出经 IPC 调用时曾在 `agents/drivers/transwarp/libs/` 里那个 46 MB 的 jar 处**静默卡死**
+ * ——目录建出来了、文件拷到 913 个就停住，界面永远「正在导出…」，承诺（promise）永不结算，
+ * 报告里 `exportTries` 恒 0。用户看到的是"点了没反应"，我们连"卡在哪个文件"都说不出来。
+ * 所以：① 导出改后台线程（`t2h:export` 只起线程、立刻返回）；② 进度按文件回投；
+ * ③ 停滞超过阈值必须能被判出来并报错（不许静默）。 */
+public class ExportProgress {
+    public var current: String = ""
+    public var copied: Int64 = 0
+    public var bytes: Int64 = 0
+    public var atMs: Int64 = 0
+}
+
+let gExportProgLock = Mutex()
+let gExportProg = ExportProgress()
+
+/** 记一次进度（每个文件一次；锁粒度很小，8683 个文件的额外开销可忽略） */
+func noteExportProgress(rel: String, copied: Int64, bytes: Int64): Unit {
+    synchronized(gExportProgLock) {
+        gExportProg.current = rel
+        gExportProg.copied = copied
+        gExportProg.bytes = bytes
+        gExportProg.atMs = DateTime.now().toUnixTimeStamp().toMilliseconds()
+    }
+}
+
+/** 进度快照：`(当前条目, 已拷文件数, 已拷字节, 最近一次进展的时间戳ms)` */
+public func exportProgressSnapshot(): (String, Int64, Int64, Int64) {
+    synchronized(gExportProgLock) {
+        return (gExportProg.current, gExportProg.copied, gExportProg.bytes, gExportProg.atMs)
+    }
+}
+
+/** 停滞阈值（秒）：导出期间连续这么多秒没有任何新文件拷完，就判 `stalled` 并报错 */
+public let EXPORT_STALL_SECS: Int64 = 60
+
+/**
+ * 停滞判据（**纯函数**，单测钉住）。
+ *
+ * 返回：`""` = 没在跑（跑完或没开始）；`"running"` = 正常在跑；`"stalled"` = 卡住了。
+ * 判据只认"有没有新进展"，不看耗时长短——导出 8683 个文件本来就要几分钟，按总时长判会误报。
+ */
+public func exportStallVerdictOf(running: Bool, idleSecs: Int64): String {
+    if (!running) {
+        return ""
+    }
+    if (idleSecs >= EXPORT_STALL_SECS) {
+        return "stalled"
+    }
+    return "running"
+}
+
 func copyTreeInto(srcDir: String, dstDir: String, relPrefix: String, res: ExportResult): Unit {
     ensureDirRecursive(dstDir)
     for (info in Directory.readFrom(Path(srcDir))) {
@@ -193,13 +247,19 @@ func copyTreeInto(srcDir: String, dstDir: String, relPrefix: String, res: Export
             continue
         }
         try {
+            // 先记"正在拷这个"再拷：停滞报错要点名**真正卡住的文件**，
+            // 而不是"最后拷完的那个"（0.39.140 实测：报出来的是 build.gradle，
+            // 真凶是它后面那个 46 MB 的 jar，差一个文件就白猜一轮）。
+            noteExportProgress(rel, res.copiedFiles, res.totalBytes)
             let bytes = File.readFrom(src)
             File.writeTo(dst, bytes)
             res.copiedFiles += 1
             res.totalBytes += bytes.size
+            noteExportProgress(rel, res.copiedFiles, res.totalBytes)
         } catch (e: Exception) {
             // 单个文件读不了不该中断整次导出，但要计数（别静默丢）
             res.skippedEntries += 1
+            noteExportProgress(rel, res.copiedFiles, res.totalBytes)
         }
     }
 }
