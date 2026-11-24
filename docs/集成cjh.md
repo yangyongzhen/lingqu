@@ -45,7 +45,7 @@ cjh web --port 8765 --bind 127.0.0.1
 | `/api/sessions/{id}` | GET/… | 单会话详情（`{id, title, created_at, messages, corrupted, defects}`）；支持重命名/删除 |
 | `/api/models` | GET | 可用模型列表 |
 | `/api/model/switch` | POST | 切换模型 |
-| `/api/skills` | GET | 已装技能列表 |
+| `/api/skills` | GET | 已装技能列表（**注意：只说明目录里有、元数据齐全，不证明正文进了 web 会话的提示词**——按 cjh 1.6.18 源码，`runWeb` 没调 `buildSystemPrompt`，见 `docs/上游回馈-cjh.md` 第 13 条 / cjh issue #16） |
 | `/api/mcp` | GET | MCP 服务器配置 |
 | `/api/tasks` | GET | 当前任务列表 |
 | `/api/settings` | GET/POST | 读取/写回 settings.json（GET 对 apiKey 脱敏） |

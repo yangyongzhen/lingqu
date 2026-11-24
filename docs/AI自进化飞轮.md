@@ -172,7 +172,9 @@ lingqu-cli notes --path . --action archive   # 已入库的移出候选池 + 台
 |---|---|---|---|
 | 错误指纹库 | `src/port/diagnose.cj` 的 `fingerprintLibrary()` | **FP-001…FP-024**（22 条；008/009 是空位，从未存在） | `t2h:diagnose` 命中即给修法，**不调模型**（省轮次） |
 | 机械改造规则 | `src/port/*.cj` + `src/main.cj`（`R2-PORT-001…017`） | **17 条**，auto / guide 两档（017 只报不写） | `t2h:port` 直接改；guide 档计一次人工介入（A3 口径） |
-| 技能库 | `skills/t2h-ohos-port/SKILL.md` + `references/{cargo-patches,toolchain,arkweb-shims,signing,pitfalls,native-ui-bridge,plugin-adaptation,startup-and-first-screen}.md` | 1 技能 + **8 参考**（0.39.136：新增 `startup-and-first-screen.md`——启动四连坑） | `t2h:skill` 装进 `~/.cjh/skills/t2h-ohos-port.md`（正文进 **system prompt**） |
+| 技能库 | `skills/t2h-ohos-port/SKILL.md` + `references/{cargo-patches,toolchain,arkweb-shims,signing,pitfalls,native-ui-bridge,plugin-adaptation,startup-and-first-screen,device-probe,cli-and-selfcheck}.md` | 1 技能 + **10 参考**（0.39.145：新增 `device-probe.md` 与 `cli-and-selfcheck.md`，由 `SKILL.md` 下沉而来） | `t2h:skill` 装进 `~/.cjh/skills/t2h-ohos-port.md`（**`cli/json/tui` 正文进 system prompt；`--web` 按 cjh 源码未注入，见 issue #16**） |
+| 技能的**注入体量** | `skills/t2h-ohos-port/SKILL.md`（≤ 6,000 字节，**索引**） | `SKILL.md` 只放"不做就必错"的动作 + 10 行 references 索引；细节全部在 `references/`（不进提示词）。实测 cjh 的**技能区上限 ≈ 6,000 字节**，超出截断、后面的技能整份丢弃 | 新增经验时：**短判据进 `SKILL.md`，长细节进 `references/`**——写回 10 KB 会把别人的技能挤掉（§4-214 / cjh issue #16） |
+| 技能安装件的**新鲜度** | `src/skill_install.cj` 的 `skillRefsDriftOf` / `skillStateWithRefsOf` | 逐份比 `references` 的 SHA256；正文一致但任一份缺/不同 ⇒ `outdated` | `t2h:skill status` 点名到文件；agent 顺着技能里的绝对链接读到旧版，等于"沉淀了但没送到"（§4-212） |
 | 坑清单 | `AGENTS.md` §4 | **196 条**（编号到 §4-205，中间有留给保留项的号） | 人和 agent 都读；改代码前的对照表 |
 
 **同源不是靠纪律，是靠单测**（0.39.111）：指纹库里出现的**唯一错误码**（全数字、≥7 位，如 `9568322`）

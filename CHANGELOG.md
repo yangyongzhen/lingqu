@@ -5,6 +5,103 @@
 
 ---
 
+## [0.39.145] - 2026-11-24
+
+**技能改「索引 + 按需读」：`SKILL.md` 14,096 → 5,503 字节；并把 cjh 的 6,000 字节技能区上限实测出来。**
+
+### Changed
+- `skills/t2h-ohos-port/SKILL.md` 按"渐进披露"重写：只留「不做就必错」的动作（核心认知 3 条、
+  8 步流程每步一行、验证纪律、工具 8 行、真机自测/回复格式/失败现场各 1–2 行）+ **10 行 references 索引**；
+  `description` 改成触发式写法（把"移植到鸿蒙 / 适配 HarmonyOS / 打 HAP / 装真机 / 具体报错码"都写进去）。
+- 细节下沉成两份新 reference（内容不丢）：`references/device-probe.md`（真机功能自测闭环六步、判定口径、
+  "纯数字/标点不算变化"的反例、`No Error` ≠ 点中）、`references/cli-and-selfcheck.md`
+  （`lingqu-cli` 全量子命令、中文走文件、`devecocli` 自装与边界、**技能区预算的说明**）。
+- 技能库：1 技能 + **8 → 10 参考**；`docs/AI自进化飞轮.md` 增「技能的注入体量」一行（索引纪律）。
+- `README.md` 新增 **「🏷 移植版仓库（工程源码 + 真机截图 + `.lingqu/` 落档）」** 小节：
+  把 `dbx-ohos` / `ecopaste-ohos` / `m3u8dl-tauri-ohos` / `habit-tree` / `mark_note` / `cc-switch-harmonyos`
+  的源码仓、验收读数与仓内真机截图挂上去；上方成果表里 EcoPaste 的「本地工作区（未单推仓）」、
+  m3u8dl 的「源码镜像」、habit-tree 的「源码镜像」三处旧说法一并改成指向移植版仓；样本台账三行同步补链接。
+  口径仍写作「**仓里写什么就是验到什么**」——m3u8dl 那条明确写「未签名 ⇒ 真机未取证」，
+  habit-tree 那条明确写「`.lingqu/` 落档当时未纳入本仓」。
+
+### Verified（实测读数）
+- 体量：`SKILL.md` **14,096 → 5,503 B**；安装件（真正进提示词的部分）**13,738 → 5,995 B**；
+  `references/` 10 份共 93,643 B（隐藏目录，**不进提示词**）。
+- 预算余量（`--mode json` + 探针两次）：安装件 5,995 B 时，一份 136 B 与一份 **1,206 B** 的第二技能
+  都出现在提示词（`### Skill: t2h-ohos-port` + `### Skill: zz-probe`）；而改造前 7,655 B 时连 136 B 的都进不去。
+- 装完 `t2h:skill status` = `installed / refs=10 / refDriftCount=0`。
+
+### 关键发现（阈值）
+cjh 1.6.18 的**技能区上限约 6,000 字节**——模型自己在回复里点破：「the skills section was truncated by cjh
+(the marker says the source exceeded 6000 bytes)」。超出即截断，**排在后面的技能整份丢失**，而
+`GET /api/skills` 仍对每一份回 `enabled: true`。已回投 cjh issue #16，并由 [`AGENTS.md`](AGENTS.md) §4-214
+钉住纪律：**短判据进 `SKILL.md`，长细节进 `references/`；`SKILL.md` 超过 6 KB 等于把别人的技能挤掉**。
+
+### 未验
+- 6,000 这个数是**二分实测的边界**（7,655 进不去 / 5,995 + 1,206 进得去），没读到 cjh 里的常量；
+  截断是按字节还是按字符、是否保留尾部，均未坐实。
+- 真实 autoport 跑一轮的行为验收仍未做。
+
+## [0.39.144] - 2026-11-24
+
+**技能的 references 陈旧能被抓到了；任务书里那句「先读技能」不再是相对路径死链。**
+
+### Added
+- **references 漂移判据**（`src/skill_install.cj`）：`SkillRefHash` / `skillRefHashesOf` /
+  `skillRefsDriftOf` / `skillRefsDriftTextOf` / `skillStateWithRefsOf`。
+  `references` 是**逐份另拷**的，而旧判据只比 `SKILL.md` 正文的 SHA256 ⇒ 正文没变时它们可以静默陈旧。
+  现在正文一致但任一 references 缺失/内容不同，状态即 `outdated`，并点名到文件。
+- **agent 侧技能指向**（`skillRefPointerCoreOf` / `skillRefPointerFor`）：优先给"已装进 cjh 的那份
+  绝对路径"，其次来源目录绝对路径，都没有就退化成"技能名 + `lingqu-cli skill --action install`"——
+  **绝不产出 `skills/…` 相对形态**（agent 的 cwd 是目标工程，那条路径在那边不存在）。
+- `t2h:skill` 新增回投 `refDriftCount` / `refDrift` / `refDriftText` / `refSourceDir` / `refNote`；
+  界面技能卡片显示「N 份待更新」并说明原因；`ui_report` 增 `skillRefDrift` / `skillRefDriftText`
+  （前端与后端白名单两处一起加）。
+- 单测 **659 → 663**（`testSkillRefsDrift` / `testSkillStateWithRefs` / `testSkillRefPointerCore` /
+  `testSkillRefPointerForReal`）。
+
+### Changed
+- `src/autoport.cj` 的「原生 UI 能力」小节：`细则见技能 skills/t2h-ohos-port/…` 改成由
+  `skillRefPointerFor("native-ui-bridge")` 生成的可达指向；同一句里「三条铁律」改为「铁律（逐条对一遍）」
+  （下面实际列了 7 条，旧措辞与内容不符）。
+- `installSkill` 收尾改为「正文 + references」双判据；`skillRefsDriftOf` 只报"源里有、安装件缺/不同"，
+  安装件多出来的旧文件不报（`installSkill` 刻意不删，且没有 `SKILL.md` 索引指向它们）。
+
+### Fixed
+- **真实现场**：`~/.cjh/skills` 的 references 停在 11-21，仓里 11-23 又更新过——
+  `native-ui-bridge.md` 9,576 B vs 15,818 B、`startup-and-first-screen.md` 整份缺失，
+  而 `t2h:skill status` 一直报 `installed`。新判据当场报 `outdated / refDriftCount=4`；
+  重装后 `installed / 0`，并用 `sha256sum` 独立核对 8 份全 OK。
+
+### 上游
+- cjh issue [#16](https://atomgit.com/qq8864/cjh/issues/16)：`--web` 模式下技能正文与 `AGENTS.md`
+  不进系统提示词（`runWeb` 没调 `buildSystemPrompt`），且技能/提示词只在进程启动时读一次（无热加载）。
+  本项目据此把"新经验"的通道定在**任务书（每轮重新下发）+ `.lingqu/notes` 落档**，
+  技能只承担"人可查、按需读的细节库"（见 `docs/上游回馈-cjh.md` 第 13 条）。
+
+### Verified
+`cjpm build` 零警告；`cjpm test` **TOTAL=663 / PASSED=663 / FAILED=0 / ERROR=0**；
+`cj-tauri check` 通过（`com.lingqu.migrator@0.39.144`，sync 之后）；
+`targets/desktop` 与 `cli/` 构建均 0 warning；页面脚本 `node --check` 通过。
+
+### 未验
+- 技能正文到底有没有进 web 会话的提示词，**只有源码口径**，没做运行期探针（issue #16 里给了判据命令）。
+- 真实 autoport 跑一轮的行为验收仍未做（0.39.141 / 0.39.143 的口径同样待验）。
+
+### 探针实测补记（同日，官方 v1.6.18 Windows 包；一条被推翻、一条坐实、一条新发现）
+- **推翻（我先前判断错了）**：`--mode json` / `--cli` / `--tui` 下技能正文**是会注入的**。
+  问模型「列出 system prompt 里以 `### Skill` 开头的行」，它原样给出 `### Skill: t2h-ohos-port`。
+  教训：`buildSystemPrompt` 在不在调用链上，与"模型会不会照技能里的指令做"是两件事——
+  判"注入有没有发生"必须用**引用正文**的判据（本轮先用"指令有没有执行"，得到的是错的结论）。
+- **新发现（真缺陷，已回投 issue #16）**：技能注入有**总量预算，超出后按目录遍历顺序静默丢弃**。
+  `t2h-ohos-port.md`(13,738 B) + 272 B 探针 → 探针不出现；把探针改名 `aa-probe.md`（内容不变）→ 两者都在。
+  而 `/api/skills` 对两份都回 `enabled: true` ⇒ 集成方看不出"写了但没生效"。
+- **坐实（源码口径仍未变）**：`--web` 的 `GET /api/settings` 的 `systemPrompt` 是**原始配置值**（`""`），
+  `src/web/` 也没有 `buildSystemPrompt` / `loadSkills` / `loadProjectInstructions` 调用；
+  但要把这条做成运行期结论需要一条 WS 会话，**本轮未做**，仍按源码口径看待。
+- 附带观察：`AGENTS.md` 与技能指令冲突时，模型明确选项目指令并报告冲突（"项目指令 > 按需参考技能"）。
+
+
 ## [0.39.143] - 2026-11-24
 
 **任务书「原生 UI 能力」补第 6/7 条：同名 IPC shim 的三处联动、ACL 是编译期烘死的。**

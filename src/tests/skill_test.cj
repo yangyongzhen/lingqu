@@ -119,3 +119,99 @@ public func testSkillHashOfBytesIsStable(): Unit {
     @Assert(a == c, false)
     @Assert(a.size, 64)     // SHA256 十六进制 = 64 字符
 }
+
+/*
+ * 0.39.144：**references 陈旧也要能被抓到**。
+ *
+ * 现场：`~/.cjh/skills/.t2h-ohos-port/references/native-ui-bridge.md` 停在 11-21（9,576 B），
+ * 仓里 11-23 已到 15,818 B，而 `t2h:skill status` 报 `installed`——因为旧判据只比 SKILL.md 正文。
+ * 后果不是"少一份文档"，而是 agent 顺着技能里的**绝对链接**读到**旧版**，新口径（同名 IPC shim、
+ * 路径 API 不信返回值、目录打不开）一条都看不到。
+ */
+
+@Test
+public func testSkillRefsDrift(): Unit {
+    let src = ArrayList<SkillRefHash>()
+    src.add(SkillRefHash("a.md", "h1"))
+    src.add(SkillRefHash("b.md", "h2"))
+    src.add(SkillRefHash("c.md", "h3"))
+
+    // 一致 → 空表
+    let same = ArrayList<SkillRefHash>()
+    same.add(SkillRefHash("a.md", "h1"))
+    same.add(SkillRefHash("b.md", "h2"))
+    same.add(SkillRefHash("c.md", "h3"))
+    @Assert(skillRefsDriftOf(src, same).size, 0)
+
+    // 内容不同（b）+ 缺失（c），明细要能点名到文件、并说清是哪种
+    let inst = ArrayList<SkillRefHash>()
+    inst.add(SkillRefHash("a.md", "h1"))
+    inst.add(SkillRefHash("b.md", "OLD"))
+    let drift = skillRefsDriftOf(src, inst)
+    @Assert(drift.size, 2)
+    @Assert(drift[0].contains("b.md"), true)
+    @Assert(drift[0].contains("内容不同"), true)
+    @Assert(drift[1].contains("c.md"), true)
+    @Assert(drift[1].contains("缺失"), true)
+
+    // 安装件多出来的**不报**：installSkill 刻意不删旧文件，且没有 SKILL.md 索引指向它们
+    let extra = ArrayList<SkillRefHash>()
+    extra.add(SkillRefHash("a.md", "h1"))
+    extra.add(SkillRefHash("b.md", "h2"))
+    extra.add(SkillRefHash("c.md", "h3"))
+    extra.add(SkillRefHash("old-removed.md", "hx"))
+    @Assert(skillRefsDriftOf(src, extra).size, 0)
+
+    // 一份都没装 → 全是缺失
+    @Assert(skillRefsDriftOf(src, ArrayList<SkillRefHash>()).size, 3)
+    // 来源为空（只剩内嵌正文）→ 无漂移：无法比对时不许凭空报，改由 refNote 如实说"没比"
+    @Assert(skillRefsDriftOf(ArrayList<SkillRefHash>(), inst).size, 0)
+
+    // 文案要点出份数与"重跑安装"；无漂移回空串（调用方据此判"没漂移"）
+    let text = skillRefsDriftTextOf(drift)
+    @Assert(text.contains("2 份"), true)
+    @Assert(text.contains("重跑一次安装"), true)
+    @Assert(skillRefsDriftTextOf(ArrayList<String>()), "")
+}
+
+@Test
+public func testSkillStateWithRefs(): Unit {
+    // 正文一致 + references 陈旧 = outdated（正是 0.39.144 那个假"已安装"）
+    @Assert(skillStateWithRefsOf("installed", 1), "outdated")
+    @Assert(skillStateWithRefsOf("installed", 0), "installed")
+    // 没装就是没装——别用"内容不一致"盖住"从来没装过"
+    @Assert(skillStateWithRefsOf("missing", 3), "missing")
+    @Assert(skillStateWithRefsOf("outdated", 0), "outdated")
+}
+
+@Test
+public func testSkillRefPointerCore(): Unit {
+    // 已装进 cjh → 用那份的绝对路径（SKILL.md 里的链接也指向它，人机读到同一份）
+    let p1 = skillRefPointerCoreOf("C:\\Users\\u\\.cjh\\skills\\.t2h-ohos-port\\references\\x.md", "",
+        "t2h-ohos-port", "x")
+    @Assert(p1.contains("C:\\Users\\u\\.cjh\\skills"), true)
+    @Assert(p1.contains("先跑"), false)
+
+    // 只有来源目录 → 也给绝对路径，并说明本机还没装进 cjh
+    let p2 = skillRefPointerCoreOf("", "E:\\repo\\skills\\t2h-ohos-port\\references\\x.md", "t2h-ohos-port", "x")
+    @Assert(p2.contains("E:\\repo\\skills"), true)
+    @Assert(p2.contains("没装进 cjh"), true)
+
+    // 两边都没有 → 只给技能名 + 安装命令，**绝不产出相对路径**
+    // （agent 的 bash cwd 是目标工程，`skills/t2h-ohos-port/...` 在那边不存在，AGENTS §4-70）
+    let p3 = skillRefPointerCoreOf("", "", "t2h-ohos-port", "native-ui-bridge")
+    @Assert(p3.contains("t2h-ohos-port"), true)
+    @Assert(p3.contains("native-ui-bridge"), true)
+    @Assert(p3.contains("skill --action install"), true)
+    @Assert(p3.startsWith("`skills/"), false)
+}
+
+@Test
+public func testSkillRefPointerForReal(): Unit {
+    // 真实调用（读本机与仓库）：结果要么是绝对路径，要么是"未装 + 安装命令"，
+    // 绝不许再出现任务书里那句相对路径 `skills/t2h-ohos-port/references/...`
+    let p = skillRefPointerFor("native-ui-bridge")
+    @Assert(p.contains("native-ui-bridge"), true)
+    @Assert(p.startsWith("`skills/"), false)
+    @Assert(p.contains("references") || p.contains("未装"), true)
+}

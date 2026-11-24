@@ -1960,6 +1960,8 @@ public class UiReportCommand <: CommandHandler {
         o.put("skillState", JsonString(argStr(args, "skillState", "")))
         o.put("skillPath", JsonString(argStr(args, "skillPath", "")))
         o.put("skillRefs", JsonInt(argInt(args, "skillRefs", 0)))
+        o.put("skillRefDrift", JsonInt(argInt(args, "skillRefDrift", 0)))
+        o.put("skillRefDriftText", JsonString(argStr(args, "skillRefDriftText", "")))
         o.put("skillCjhSeen", JsonBool(argBool(args, "skillCjhSeen", false)))
         o.put("skillCjhCount", JsonInt(argInt(args, "skillCjhCount", 0)))
         o.put("skillSource", JsonString(argStr(args, "skillSource", "")))
@@ -5507,8 +5509,18 @@ public class SkillCommand <: CommandHandler {
         let installedHash = skillHashOfFile(target)
         let finalBody = skillFinalBodyOf(home)
         let sourceHash = if (finalBody != "") { skillHashOfBytes(finalBody.toArray()) } else { "" }
-        let state = skillStateOf(installedHash != "", installedHash, sourceHash)
+        let bodyState = skillStateOf(installedHash != "", installedHash, sourceHash)
         let refs = skillRefFiles(skillRefDirOf(home))
+        // references 是逐份另拷的：正文一致不代表它们一致（0.39.144——安装件陈旧时 status 曾报 installed）
+        let srcRefs = if (srcDir != "") { srcDir + cjhPathSep() + "references" } else { "" }
+        let refDrift = skillRefsDriftOf(skillRefHashesOf(srcRefs), skillRefHashesOf(skillRefDirOf(home)))
+        let state = skillStateWithRefsOf(bodyState, Int64(refDrift.size))
+        // 来源里没有 references（只剩内嵌正文）时无法比对——如实说，别把"没比"当"一致"
+        var refNote = ""
+        if (srcRefs == "" && refs.size > 0) {
+            refNote = "来源里没有 references（只找到内嵌正文），无法比对安装件是否陈旧；" +
+                "要核对就置 LINGQU_SKILL_SRC 指向仓库的 skills/t2h-ohos-port 再查"
+        }
         // 问 cjh：真看见了才算生效（没在跑就如实说未验证）
         let seen = cjhSkillNames(cjhPort())
         var seenIt = false
@@ -5525,6 +5537,15 @@ public class SkillCommand <: CommandHandler {
         res.put("targetPath", JsonString(target))
         res.put("refDir", JsonString(skillRefDirOf(home)))
         res.put("refCount", JsonInt(Int64(refs.size)))
+        res.put("refDriftCount", JsonInt(Int64(refDrift.size)))
+        res.put("refDriftText", JsonString(skillRefsDriftTextOf(refDrift)))
+        res.put("refSourceDir", JsonString(srcRefs))
+        res.put("refNote", JsonString(refNote))
+        var driftArr = JsonArray()
+        for (d in refDrift) {
+            driftArr.add(JsonString(d))
+        }
+        res.put("refDrift", driftArr)
         res.put("sourceDir", JsonString(srcDir))
         res.put("sourceKind", JsonString(sourceKind))
         res.put("enableNote", JsonString(enableNote))

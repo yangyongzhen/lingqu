@@ -7926,7 +7926,7 @@ withBridge(function(tauri){
   /* ===== AI 迁移技能（2026-11-01，AI 接入第 1 步）=====
    * cjh 的技能是 ~/.cjh/skills/<name>.md，正文拼进 system prompt。
    * 装之前 AI 不知道鸿蒙移植的坑/签名/工具链；装完并且 cjh 真的加载了，才算接上。 */
-  var SKILL = { state: '', target: '', refs: 0, source: '', cjhSeen: false,
+  var SKILL = { state: '', target: '', refs: 0, refDrift: 0, refDriftText: '', source: '', cjhSeen: false,
                 cjhCount: 0, note: '', res: null };
 
   function renderSkill(r){
@@ -7935,6 +7935,9 @@ withBridge(function(tauri){
       state: String(r.state || ''),
       target: String(r.targetPath || ''),
       refs: (typeof r.refCount === 'number') ? r.refCount : 0,
+      // references 是逐份另拷的：正文一致不代表它们一致（0.39.144 安装件陈旧却报 installed）
+      refDrift: (typeof r.refDriftCount === 'number') ? r.refDriftCount : 0,
+      refDriftText: String(r.refDriftText || ''),
       source: String(r.sourceKind || ''),
       cjhSeen: r.cjhSeen === true,
       cjhCount: (typeof r.cjhSkills === 'number') ? r.cjhSkills : 0,
@@ -7950,8 +7953,10 @@ withBridge(function(tauri){
     // cjh 没在跑时不能说"没加载"——那只是没验过
     $('skillSeen').textContent = SKILL.cjhSeen ? '是' : (SKILL.cjhCount === 0 ? '未验证（cjh 未就绪）' : '否');
     $('skillSeen').style.color = SKILL.cjhSeen ? 'var(--ok)' : 'var(--warn)';
-    $('skillRefs').textContent = SKILL.refs > 0 ? (SKILL.refs + ' 份') : '0 份（仅正文）';
-    $('skillRefs').style.color = SKILL.refs > 0 ? '' : 'var(--warn)';
+    $('skillRefs').textContent = SKILL.refs > 0
+      ? (SKILL.refs + ' 份' + (SKILL.refDrift > 0 ? '（' + SKILL.refDrift + ' 份待更新）' : ''))
+      : '0 份（仅正文）';
+    $('skillRefs').style.color = SKILL.refs > 0 ? (SKILL.refDrift > 0 ? 'var(--warn)' : '') : 'var(--warn)';
     $('skillSource').textContent = SKILL.source === 'repo' ? '仓库'
       : (SKILL.source === 'env' ? 'LINGQU_SKILL_SRC' : (SKILL.source === 'embedded' ? '内嵌副本' : '—'));
     $('skillPath').textContent = SKILL.target ? ('技能文件：' + SKILL.target) : '';
@@ -7961,7 +7966,9 @@ withBridge(function(tauri){
       note.textContent = '技能安装失败：' + String(r.error);
     } else {
       note.style.color = '';
-      note.textContent = [String(r.enableNote || ''), SKILL.note].filter(function(x){ return !!x; }).join('　')
+      // 漂移要显式说出来：agent 顺着绝对链接读到的会是**旧版**，而状态看着是"已安装"
+      note.textContent = [String(r.enableNote || ''), SKILL.refDriftText, String(r.refNote || ''), SKILL.note]
+        .filter(function(x){ return !!x; }).join('　')
         || '技能 = ~/.cjh/skills/t2h-ohos-port.md；装好并且 cjh 已加载后，AI 助手才会真正"懂"鸿蒙移植。';
     }
     reportUi('skill-' + (SKILL.state || 'unknown'));
@@ -8184,6 +8191,8 @@ withBridge(function(tauri){
       skillState: SKILL.state || "",
       skillPath: SKILL.target || "",
       skillRefs: (typeof SKILL.refs === "number") ? SKILL.refs : 0,
+      skillRefDrift: (typeof SKILL.refDrift === "number") ? SKILL.refDrift : 0,
+      skillRefDriftText: SKILL.refDriftText || "",
       skillCjhSeen: SKILL.cjhSeen === true,
       skillCjhCount: (typeof SKILL.cjhCount === "number") ? SKILL.cjhCount : 0,
       skillSource: SKILL.source || "",

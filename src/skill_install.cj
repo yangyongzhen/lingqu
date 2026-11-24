@@ -284,6 +284,114 @@ public func skillRefFiles(refDir: String): ArrayList<String> {
     return out
 }
 
+/** 一份 references 文件的身份：名字 + 内容 SHA256（哈希空 = 文件不在 / 读不到） */
+public class SkillRefHash {
+    public var name: String = ""
+    public var hash: String = ""
+
+    public init(name: String, hash: String) {
+        this.name = name
+        this.hash = hash
+    }
+}
+
+/** 收集一个 references 目录下每份文件的「名字 + 哈希」（IO 侧；判定在 `skillRefsDriftOf`） */
+public func skillRefHashesOf(refDir: String): ArrayList<SkillRefHash> {
+    let out = ArrayList<SkillRefHash>()
+    for (name in skillRefFiles(refDir)) {
+        out.add(SkillRefHash(name, skillHashOfFile(refDir + cjhPathSep() + name)))
+    }
+    return out
+}
+
+/**
+ * 纯函数：references 漂移明细（空表 = 一致）。
+ *
+ * 为什么需要这条：`skillStateOf` 只比 **SKILL.md 正文**的哈希，而 references 是**逐份另拷**的
+ * ——正文没变时它们可以静默陈旧。0.39.144 实测现场：安装件停在 11-21，仓里 11-23 又更新过，
+ * `native-ui-bridge.md` 安装件 9,576 B / 仓里 15,818 B（`pitfalls.md` 同族），而 `t2h:skill status`
+ * 报 `installed`。后果很具体：agent 顺着技能里的**绝对链接**去读，读到的是**没有新口径的旧版**
+ * （§4-143「文件在 ≠ 内容对」）。
+ *
+ * 判两条：源里有、安装件没有（缺失）；两边都有但哈希不同（内容不同）。
+ * 安装件多出来的**不报**——`installSkill` 刻意不删旧文件，且没有 SKILL.md 索引指向它们。
+ */
+public func skillRefsDriftOf(src: ArrayList<SkillRefHash>, installed: ArrayList<SkillRefHash>): ArrayList<String> {
+    let out = ArrayList<String>()
+    for (s in src) {
+        var found = ""
+        for (i in installed) {
+            if (i.name == s.name) {
+                found = i.hash
+            }
+        }
+        if (found == "") {
+            out.add(s.name + "（安装件缺失）")
+        } else if (found != s.hash) {
+            out.add(s.name + "（安装件与来源内容不同）")
+        }
+    }
+    return out
+}
+
+/** 漂移明细拼成一句话（空表 → 空串，调用方据此判"没漂移"，不许拿话术兜成"已是最新"） */
+public func skillRefsDriftTextOf(drift: ArrayList<String>): String {
+    if (drift.size == 0) {
+        return ""
+    }
+    return "references 有 ${drift.size} 份与来源不一致：${joinNames(drift)}——重跑一次安装即整体覆盖"
+}
+
+/**
+ * 纯函数：把 references 漂移并进状态。
+ *
+ * 正文一致但 references 陈旧 = `outdated`——这正是"装过一次就再也不看"会漏掉的那一档。
+ * `missing` 保持 `missing`（没装就是没装，别用"内容不一致"盖住"从来没装过"）。
+ */
+public func skillStateWithRefsOf(bodyState: String, refDriftCount: Int64): String {
+    if (bodyState == "installed" && refDriftCount > 0) {
+        return "outdated"
+    }
+    return bodyState
+}
+
+/**
+ * 纯函数（核心）：任务书里「去哪读技能细则」的指向文本。
+ *
+ * **给 agent 的路径一律绝对**（AGENTS §4-70）：它的 bash cwd 是目标工程，
+ * `skills/t2h-ohos-port/references/x.md` 这种相对路径在那边根本不存在
+ * （0.39.144 实测：`~/lingqu-workspaces/dbx/skills/` 里只有样本自己的技能目录）。
+ * 优先级：已装进 cjh 的那份（SKILL.md 里的链接也指向它，人机读到的是同一份）→ 来源目录 → 只给技能名 + 安装命令。
+ */
+public func skillRefPointerCoreOf(installedPath: String, sourcePath: String, skillName: String,
+                                  refStem: String): String {
+    if (installedPath != "") {
+        return "`" + installedPath + "`"
+    }
+    if (sourcePath != "") {
+        return "`" + sourcePath + "`（本机还没装进 cjh，读这份也一样）"
+    }
+    return "技能 `${skillName}` 的 `${refStem}`（本机未装：先跑 `lingqu-cli skill --action install` 装进 cjh，" +
+        "装好后正文里带绝对链接）"
+}
+
+/** 解析两侧路径后生成指向文本（IO 侧；本机两边都没有 → 退化成"技能名 + 安装命令"，绝不产出相对路径） */
+public func skillRefPointerFor(refStem: String): String {
+    let home = userHomeDir()
+    let installed = skillRefDirOf(home)
+    let ip = if (installed != "") { installed + cjhPathSep() + refStem + ".md" } else { "" }
+    let installedOk = if (ip != "" && exists(Path(ip))) { ip } else { "" }
+    var sourceOk = ""
+    let srcDir = skillSourceDir()
+    if (srcDir != "") {
+        let sp = srcDir + cjhPathSep() + "references" + cjhPathSep() + refStem + ".md"
+        if (exists(Path(sp))) {
+            sourceOk = sp
+        }
+    }
+    return skillRefPointerCoreOf(installedOk, sourceOk, SKILL_NAME, refStem)
+}
+
 /** 安装结果（命令层据此回投界面与 ui_report） */
 public class SkillInstallResult {
     public var ok: Bool = false
@@ -377,8 +485,9 @@ public func installSkill(home: String): SkillInstallResult {
     }
 
     // ③ 拷 references（先拷再改写链接，保证链接指向的文件真的在）
-    if (srcDir != "") {
-        let srcRefs = srcDir + cjhPathSep() + "references"
+    // srcRefs 提到外层：⑤ 要用同一个路径复算"是否真的一致"，别让两侧各拼一份（§4-33）
+    let srcRefs = if (srcDir != "") { srcDir + cjhPathSep() + "references" } else { "" }
+    if (srcRefs != "") {
         for (name in skillRefFiles(srcRefs)) {
             try {
                 if (!exists(Path(refDir))) {
@@ -404,10 +513,16 @@ public func installSkill(home: String): SkillInstallResult {
     // ⑤ 复算状态（用写入后的真实内容与来源比）
     let writtenHash = skillHashOfFile(target)
     let sourceHash = skillHashOfBytes(finalBody.toArray())
-    r.state = skillStateOf(true, writtenHash, sourceHash)
+    let bodyState = skillStateOf(true, writtenHash, sourceHash)
+    // references 是**逐份另拷**的：正文一致不代表它们一致（0.39.144 那族，拷失败/来源缺文件都要说出来）
+    let refDrift = skillRefsDriftOf(skillRefHashesOf(srcRefs), skillRefHashesOf(refDir))
+    r.state = skillStateWithRefsOf(bodyState, Int64(refDrift.size))
     r.ok = r.state == "installed"
-    if (!r.ok) {
-        r.note += "（写完复核哈希不一致——可能被别的进程改写？）"
+    if (refDrift.size > 0) {
+        r.note += "（${skillRefsDriftTextOf(refDrift)}）"
+    }
+    if (bodyState != "installed") {
+        r.note += "（写完复核正文哈希不一致——可能被别的进程改写？）"
     }
     return r
 }

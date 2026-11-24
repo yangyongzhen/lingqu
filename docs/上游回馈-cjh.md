@@ -458,6 +458,65 @@ find.exe  PID 23964  起于 13:30:55  累计 CPU 605s（会话 bash 已于 ~13:3
 （`CreateJobObject` + `AssignProcessToJobObject` + 超时 `TerminateJobObject`），
 即使子孙再 re-parent 也逃不出 job。pid 文件方案已能解掉挂死与残留，故不阻塞本次修复。
 
+---
+
+## 13. `--web` 模式下技能正文与 `AGENTS.md` 不进系统提示词；且技能/提示词只在进程启动时读一次（已提 issue #16）
+
+**现象**（2026-11-24 源码核对，v1.6.12 树；已提
+[issue #16](https://atomgit.com/qq8864/cjh/issues/16)）
+
+`cjh --web` 下 `~/.cjh/skills/*.md` 的**正文**与工作目录的 `AGENTS.md` 都没有进入系统提示词，
+而 `GET /api/skills` 会正常列出这些技能（name / description 齐全）⇒ 集成方据此判"技能已加载可用"，
+模型其实看不到任何正文。顺带：两者都是**进程启动快照**，改完文件不重启没有任何效果
+（`/api/skills` 每请求扫目录，反而"看起来"更新了）。
+
+**判据（一条命令可区分）**：技能正文写唯一 marker → 起 `cjh --web --port 8766` →
+`curl -s http://127.0.0.1:8766/api/settings | grep <marker>` **无输出**，而同一条命令换
+`cjh --json` / `--cli` / `--tui` 时 marker 在提示词里。
+
+**根因**（源码口径）：`src/entries.cj` 的 `runWeb()` 只调 `loadSkillTools(...)`
+（读 frontmatter 的 `tools:` 段注册声明式工具），**没有**调 `buildSystemPrompt(...)`；
+后者只在 `runCli` / `runJson` / `runTui` 三个入口被调用（`src/entries.cj:298 / 456 / 641`）。
+而 `src/web/session_mgr.cj` 的 `buildAgent()` 直接用 `this.config.systemPrompt`
+（`settings.json` 原值）+ 启动时构造好的 `this.registry`。同一函数还负责 `memoryDir` 的项目记忆注入，
+所以 web 模式下项目记忆也没有进提示词。
+
+**建议**：① `runWeb()` 与其它三个入口对齐（启动时同样走 `buildSystemPrompt`，或把组装挪进
+`buildAgent()` 每会话现算）；② 加 `POST /api/skills/reload` 热加载；③ `GET /api/skills`
+区分 `listed` 与 `injected`，别让"目录里有"被读成"模型能看到"。
+
+**本项目的规避方式**（不阻塞，但要记清代价）：技能**不适合作"及时复用"的通道**——
+新经验走两条正路：任务书（每轮重新下发，天然最新）与 `.lingqu/notes` 落档；
+技能只承担"人可查、agent 需要时按需读的细节库"。若确需让运行中的引擎看到新技能，
+`POST /api/settings {"systemPrompt": "<base + 技能正文拼接>"}` 可即时生效（只改内存、重启回落）。
+
+### 13.1 探针实测（2026-11-24，官方 v1.6.18 Windows 包）：一条被推翻、一条被坐实、一条新发现
+
+**① 推翻**：`--mode json` / `--cli` / `--tui` 下技能正文**是会注入的**——此前只看源码就写成"没注入"，错了。
+实测：往 `~/.cjh/skills/` 放一份带唯一标识的探针技能，问模型「列出 system prompt 里以 `### Skill` 开头的行」，
+它原样给出 `### Skill: t2h-ohos-port`（1.6.18 的分节标题是英文 `## Available skills (load on demand)`）。
+**教训**：`buildSystemPrompt` 在不在调用链上，与"模型能不能照它做"是两件事；判"注入有没有发生"
+要用**引用正文**的判据，别用"指令有没有被执行"（技能是"按需参考"，模型可能不照做，那是设计不是缺陷）。
+
+**② 新发现（真缺陷）：技能注入有总量预算，超出按遍历顺序静默丢弃**。同一台机、同一二进制、`--mode json`：
+
+| `~/.cjh/skills/` 内容 | 模型看到的 `### Skill` 行 |
+|---|---|
+| `t2h-ohos-port.md`（13,738 B）+ `zz-probe.md`（272 B） | 只有 `t2h-ohos-port` —— 272 B 那份**被丢掉** |
+| 把探针改名 `aa-probe.md`（内容不变） | `zz-probe` 与 `t2h-ohos-port` **都在** |
+
+而 `GET /api/skills` 对两份都回 `enabled: true` ⇒ 集成方看不出"写了但没生效"。
+已把实测与建议（`/api/skills` 增 `injected/reason`，或至少打日志）回投 issue #16。
+**判据**：见到的技能条目数与 `ls ~/.cjh/skills/*.md` 的份数不一致，就先怀疑预算/顺序，别怀疑文件写坏了。
+
+**③ web 那条仍是源码口径**：`src/web/` 没有 `buildSystemPrompt` / `loadSkills` /
+`loadProjectInstructions` 调用；`GET /api/settings` 的 `systemPrompt` 是**原始配置值**（本例 `""`），
+不是会话提示词。要坐实需要一条 WS 会话，本轮没做 ⇒ 第 13 条前半句仍按源码口径看待。
+
+**④ 附带行为观察**：`AGENTS.md` 与技能指令冲突时，模型明确选项目指令并报告冲突
+（「`AGENTS.md` requires AAGMARKER77, while the `zz-probe` skill text requires ZZMARKER42;
+I followed the project instruction」）——与"项目指令 > 按需参考技能"的分层一致。
+
 
 
 
