@@ -45,7 +45,8 @@ cjh web --port 8765 --bind 127.0.0.1
 | `/api/sessions/{id}` | GET/… | 单会话详情（`{id, title, created_at, messages, corrupted, defects}`）；支持重命名/删除 |
 | `/api/models` | GET | 可用模型列表 |
 | `/api/model/switch` | POST | 切换模型 |
-| `/api/skills` | GET | 已装技能列表（**注意：只说明目录里有、元数据齐全，不证明正文进了 web 会话的提示词**——按 cjh 1.6.18 源码，`runWeb` 没调 `buildSystemPrompt`，见 `docs/上游回馈-cjh.md` 第 13 条 / cjh issue #16） |
+| `/api/skills` | GET | 已装技能列表。**1.6.23 起每项带 `injected` / `reason`**，且注入形态改为**渐进披露**：系统提示词里只有技能索引（名字 + description），正文由 agent 按需调 `skill_load` 取（cjh 1.6.23 实测：prompt 里明写 "Skill bodies are not loaded"）。⇒ 看 `injected:true` 只说明"索引进了提示词"，正文是否被读走要看会话里有没有 `skill_load` 调用 |
+| `/api/skills/reload` | POST | **1.6.23 新增**：热加载技能目录，不必重启引擎（就是 cjh issue #16 的建议②） |
 | `/api/mcp` | GET | MCP 服务器配置 |
 | `/api/tasks` | GET | 当前任务列表 |
 | `/api/settings` | GET/POST | 读取/写回 settings.json（GET 对 apiKey 脱敏） |

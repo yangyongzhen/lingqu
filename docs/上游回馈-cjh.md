@@ -460,7 +460,20 @@ find.exe  PID 23964  起于 13:30:55  累计 CPU 605s（会话 bash 已于 ~13:3
 
 ---
 
-## 13. `--web` 模式下技能正文与 `AGENTS.md` 不进系统提示词；且技能/提示词只在进程启动时读一次（已提 issue #16）
+## 13. `--web` 模式下技能正文与 `AGENTS.md` 不进系统提示词；且技能/提示词只在进程启动时读一次（已提 issue #16；**v1.6.23 已修复，实测复核**）
+
+> ✅ **2026-11-24 复核（随包升到 cjh v1.6.23）**：本条两条诉求都落地了。
+> - **`AGENTS.md` 进 web 会话了**：在 cwd 放带 `MARKER-AGENTS-1623` 的 `AGENTS.md`，起 `cjh web --port 8766`，
+>   用最小 WS 客户端发一轮 chat 问"你的 system prompt 里有没有这个串"→ **YES**。
+> - **技能改成「索引 + 按需加载正文」（渐进披露）**：prompt 里是
+>   `## Available skills (progressive disclosure)` + 明写 *"Skill bodies are not loaded … call `skill_load` with its name"*；
+>   我们 `SKILL.md` 正文里的串（`铁律（逐条对一遍）`）**不在** prompt 里 ⇒ 只注入索引，正文按需 `skill_load`。
+>   `/api/skills` 每项新增 `injected` / `reason` 字段（正是本条第 ③ 条建议），并新增热加载端点
+>   **`POST /api/skills/reload`**（建议 ②）。
+> - 附带影响：**"6,000 字节技能区上限"只适用 ≤1.6.18**，1.6.23 不再注入正文，也就不存在截断丢技能的问题。
+> - 仍未验：`--web` 下"每会话重建提示词"这个实现细节（探针只证明内容在，不证明时机）；`skill_load` 返回正文时
+>   链接是否仍是我们改写好的绝对路径（未逐字核）。
+
 
 **现象**（2026-11-24 源码核对，v1.6.12 树；已提
 [issue #16](https://atomgit.com/qq8864/cjh/issues/16)）

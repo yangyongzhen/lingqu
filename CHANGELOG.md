@@ -5,6 +5,52 @@
 
 ---
 
+## [0.39.146] - 2026-11-24
+
+**随包 AI 引擎升到 cjh v1.6.23；issue #16 的两条诉求实测确认已修；note-gen 移植版入仓。**
+
+### Changed
+- `vendor/cjh` 从 **1.6.18 → 1.6.23**（Windows 自包含包 + Linux 单文件）。包哈希与官方
+  `SHA256SUMS-v1.6.23.txt` 逐一核对：win zip `0a083426…`、linux tar.gz `1bf6a2d2…`；
+  解包后**六个文件**（`cjh.exe` + 4 DLL + linux `cjh`）重算并同步进 `vendor/cjh/SHA256SUMS` 与
+  `src/cjh_host.cj` 的 `CJH_VENDOR_FILES` / `CJH_LINUX_SHA`（两处必须同改，漏一处就"验不过即不执行"）。
+  注意 **`libcangjie-runtime.dll` 也跟着换**（只换 exe 会让整套清单对不上），
+  `boundscheck` / `ssl` / `crypto` 三个与 1.6.18 逐字节相同。
+- `README.md`：「移植版仓库」表补 **note-gen-ohos**；成果表里 note-gen 的「本地工作区（未单推仓）」
+  与样本台账两处旧表述一并改成指向移植版仓；「最后更新」改 2026-11-24；知识底座行注明随包 cjh 已是 1.6.23。
+
+### Fixed（上游，已由 v1.6.23 修复 —— cjh issue #16 的两条）
+- **`--web` 模式现在注入 `AGENTS.md`**：cwd 放带唯一 marker 的 `AGENTS.md`，起 `cjh web --port 8766`，
+  用最小 WS 客户端发一轮 chat 问"提示词里有没有这个串" → **YES**。
+- **技能改成「索引 + 按需 `skill_load`」（渐进披露）**：prompt 里是 `## Available skills (progressive disclosure)`
+  并明写 *"Skill bodies are not loaded … call `skill_load`"*；我们 `SKILL.md` 正文里的串不在 prompt 里。
+- `/api/skills` 每项新增 **`injected` / `reason`**，并新增热加载端点 **`POST /api/skills/reload`**
+  （正是 issue 里建议的 ②/③）。
+
+### Docs（随之修正的判断）
+- **"技能区 6,000 字节上限"只适用 ≤1.6.18**：1.6.23 不再注入正文，也就不存在截断丢技能。
+  已在 `AGENTS.md` §4-214 末尾、`skills/t2h-ohos-port/references/cli-and-selfcheck.md` §3、
+  `docs/AI自进化飞轮.md` 三处写明「索引化仍值得（索引短、匹配准），但不必再为字节数恐慌」。
+- `docs/上游回馈-cjh.md` 第 13 条标记为**已修复**并附实测证据；`docs/集成cjh.md` 的
+  `/api/skills` 说明补 `injected/reason` 语义与 `injected ≠ 正文被读走` 的判据。
+
+### Added
+- 移植版仓 [**qq8864/note-gen-ohos**](https://atomgit.com/qq8864/note-gen-ohos)：note-gen 的鸿蒙移植版
+  （1651 文件；`README.ohos.md` 标注来自灵渠并回链、`ohos/screenshots/` 三张真机取证图、
+  `.lingqu/` 落档随仓提交）。验收读数：8 步 **8/8**、移植验收 **83%**（移植项 7：通 5 / 未过 1 / 未测 1）、
+  signed HAP **34,792,260 B**。
+
+### Verified
+- 随包一致性：`cd vendor/cjh && sha256sum -c SHA256SUMS` 六项全 OK；`cjh --version` → `cjh v1.6.23`；
+  特征串 `replace_all`（1.6.23 特性）与 `/api/skills/reload` 均在二进制里。
+- 门禁：`cjpm build` 0 warning · `cjpm test` **663/663** · `cj-tauri check` `com.lingqu.migrator@0.39.146` ·
+  页面脚本 `node --check` · `targets/desktop` 与 `cli/` 均 0 warning。
+
+### 未验
+- `--web` 下"每会话重建提示词"的实现细节（探针只证明内容在，没证明时机）；
+  `skill_load` 返回正文时的链接是否仍是我们改写好的绝对路径（未逐字核）。
+- 真实 autoport 行为验收仍未做。
+
 ## [0.39.145] - 2026-11-24
 
 **技能改「索引 + 按需读」：`SKILL.md` 14,096 → 5,503 字节；并把 cjh 的 6,000 字节技能区上限实测出来。**

@@ -679,10 +679,11 @@ func cjhBinName(): String {
  */
 @When[os == "Windows"]
 let CJH_VENDOR_FILES: Array<(String, String)> = [
-    // cjh v1.6.18（selfcontained 五件套：exe + 4 DLL；4 个 DLL 与 1.6.5 逐字节相同）
-    // 1.6.18 官方发布版（dist/SHA256SUMS-v1.6.18.txt 核对）：exe 69c8f3d…。
-    ("cjh.exe", "69c8f3d978b4631a7123e9d750faf862e5fa40acef116aac25c74da18fe48ba6"),
-    ("libcangjie-runtime.dll", "03f4d59a13c7fc1d71523bdd42a05587657105aff14c8288adfdd8fbe5bea089"),
+    // cjh v1.6.23（selfcontained 五件套：exe + 4 DLL）
+    // 官方发布版 `SHA256SUMS-v1.6.23.txt` 核对：exe 757a13d…、libcangjie-runtime 3cb25d7…（这两个换了），
+    // boundscheck / ssl / crypto 与 1.6.18 逐字节相同。
+    ("cjh.exe", "757a13d5fc9c7d4a740b84c70c4498c5f2e02e4e2464fdfa099498378350d0fb"),
+    ("libcangjie-runtime.dll", "3cb25d76976fdd57a729e4734ae6ddc500dd9cd9d6ed06f373c01f127e6a91bb"),
     ("libboundscheck.dll", "07b33dd3de22489b442cc32f0fe8ddfc80b753443b17fb2053133b2e7ffb6c78"),
     ("libssl-3-x64.dll", "bbaf8a8c37b4cfdd7fe5feee9ff1d0072078f430bb5ef2b3da38a600f4039b03"),
     ("libcrypto-3-x64.dll", "a997e132b8c548212d4c292bb3f61bcdee88cf726b89c60f32969ad6cbaa9698")
@@ -750,7 +751,7 @@ public func cjhVendorVerified(dir: String): Bool {
 
 /** Linux 版随包二进制的 SHA256：单文件、静态链接，没有随行 DLL（与 Windows 形态不同） */
 @When[os != "Windows"]
-let CJH_LINUX_SHA: String = "676709b9b4fd3ca8959064ba77cfaecd0752ccc969f58e4b93f391eba3bcc8bf"
+let CJH_LINUX_SHA: String = "e38f35d3e0f9963699eac8a23ae4612601f4c39f45f9d0654b905ed3864fe2a9"
 
 @When[os != "Windows"]
 public func cjhVendorVerified(dir: String): Bool {

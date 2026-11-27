@@ -66,10 +66,13 @@ command -v devecocli                      # 有就直接用
 
 ## 3. 技能空间的预算（装新技能前必须知道）
 
-cjh 把 `~/.cjh/skills/*.md` 的**正文**拼进 system prompt，但**总长度有预算，超出后按目录遍历顺序
-静默丢弃**（2026-11-24 实测：13.7 KB 的技能 + 272 B 的探针 → 探针不出现；把探针改名到字母序靠前 → 两者都在；
-而 `/api/skills` 对两份都回 `enabled: true`）。
+cjh **≤1.6.18** 会把 `~/.cjh/skills/*.md` 的**正文**拼进 system prompt，且**总长度有预算、超出后按目录
+遍历顺序静默丢弃**（2026-11-24 实测：13.7 KB 的技能 + 272 B 的探针 → 探针不出现；把探针改名到字母序靠前 →
+两者都在；而 `/api/skills` 对两份都回 `enabled: true`）。
 
-⇒ 本技能因此改成「索引 + `references/` 按需读」：`SKILL.md` 只留必做动作，细节都在 `references/`
-（隐藏子目录，**不进提示词**）。新增经验时：**短的进 `SKILL.md` 的判据/索引，长的进 `references/`**，
-别把 `SKILL.md` 又写回 10 KB 以上——那会把别人的技能挤出预算（AGENTS §4-214 / cjh issue #16）。
+**1.6.23 起机制变了（本仓随包就是这个版本）**：改成**渐进披露**——提示词里只有技能索引（名字 + description），
+正文由 agent 按需调 `skill_load` 取（prompt 原话 "Skill bodies are not loaded"），`/api/skills` 每项带
+`injected`/`reason`，还有热加载端点 `/api/skills/reload`。⇒ 不再有"6 KB 就挤掉别人"的问题。
+
+仍然建议本技能保持「**索引 + `references/` 按需读**」的形态：索引短则匹配准、按需读省 token。
+新增经验时：**短的进 `SKILL.md` 的判据/索引，长的进 `references/`**（AGENTS §4-214 / cjh issue #16）。
