@@ -679,10 +679,13 @@ func cjhBinName(): String {
  */
 @When[os == "Windows"]
 let CJH_VENDOR_FILES: Array<(String, String)> = [
-    // cjh v1.6.23（selfcontained 五件套：exe + 4 DLL）
-    // 官方发布版 `SHA256SUMS-v1.6.23.txt` 核对：exe 757a13d…、libcangjie-runtime 3cb25d7…（这两个换了），
-    // boundscheck / ssl / crypto 与 1.6.18 逐字节相同。
-    ("cjh.exe", "757a13d5fc9c7d4a740b84c70c4498c5f2e02e4e2464fdfa099498378350d0fb"),
+    // cjh v1.6.24（selfcontained 五件套：exe + 4 DLL）
+    // exe 与官方 release 附件 `cjh-windows-x64.exe` 逐字节一致（sha256 c5372e7…，2026-11-26 发布）。
+    // 4 个随行 DLL 沿用 1.6.23 那份：1.6.24 的单 exe 包里不带 DLL，而 exe 的 PE 导入表里
+    // **没有** libcangjie-runtime / libboundscheck（静态链接进 exe，挪走照样跑），真正按名字
+    // LoadLibrary 的只有 openssl 两件，且这两件 1.6.18 起逐字节未变。实测新 exe 在这套 DLL 下
+    // `--version`（cjh v1.6.24）与 `--mock` 全链（FINAL-DONE）都通过。
+    ("cjh.exe", "c5372e72f3c943fd34461883bc4b1a3f49cb629c85e7ff48400d029035440efe"),
     ("libcangjie-runtime.dll", "3cb25d76976fdd57a729e4734ae6ddc500dd9cd9d6ed06f373c01f127e6a91bb"),
     ("libboundscheck.dll", "07b33dd3de22489b442cc32f0fe8ddfc80b753443b17fb2053133b2e7ffb6c78"),
     ("libssl-3-x64.dll", "bbaf8a8c37b4cfdd7fe5feee9ff1d0072078f430bb5ef2b3da38a600f4039b03"),
@@ -751,7 +754,7 @@ public func cjhVendorVerified(dir: String): Bool {
 
 /** Linux 版随包二进制的 SHA256：单文件、静态链接，没有随行 DLL（与 Windows 形态不同） */
 @When[os != "Windows"]
-let CJH_LINUX_SHA: String = "e38f35d3e0f9963699eac8a23ae4612601f4c39f45f9d0654b905ed3864fe2a9"
+let CJH_LINUX_SHA: String = "bbec6eb585300811822da7b23e21b36a0c4df99b5407935a223ed9239f379a3e"
 
 @When[os != "Windows"]
 public func cjhVendorVerified(dir: String): Bool {

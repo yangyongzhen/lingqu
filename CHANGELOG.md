@@ -5,6 +5,54 @@
 
 ---
 
+## [0.39.147] - 2026-11-27
+
+**随包 AI 引擎升到 cjh v1.6.24（长任务缓存 / 每轮耗时 / 写域封堵）。**
+
+### Changed
+- `vendor/cjh` 从 **1.6.23 → 1.6.24**（上游 2026-11-26 发布）。取包与核对：
+  - Windows：`cjh-v1.6.24-windows-x64.zip`（5,427,842 B，sha256 `4b3a42ff…`），包内
+    `cjh-windows-x64.exe`（14,516,224 B）与官方附件 digest `c5372e72…` **逐字节一致**；
+  - Linux：`cjh-v1.6.24-linux-x64.tar.gz`（6,600,242 B，sha256 `8cd5851c…`），包内
+    `cjh-linux-x64`（19,420,232 B，sha256 `bbec6eb5…`）；
+  - 六个文件清单同步进 `vendor/cjh/SHA256SUMS` 与 `src/cjh_host.cj` 的 `CJH_VENDOR_FILES` /
+    `CJH_LINUX_SHA`（两处必须同改，漏一处就是"验不过绝不执行"）。
+- **随行 DLL 沿用 1.6.23 那份**（官方单 exe 包不带 DLL）。判据不是猜，是三条实测：
+  ① `llvm-objdump -p` 的导入表里**没有** `libcangjie-runtime.dll` / `libboundscheck.dll`
+  （静态链进 exe——把这四个 DLL 全挪走后 `--version` 照样跑）；② 真正按名字 `LoadLibrary` 的
+  只有 openssl 两件，而它们 1.6.18 起逐字节未变；③ 新 exe 在这套 DLL 下 `--version` →
+  `cjh v1.6.24`、`--mock` 全链 → `FINAL-DONE`（exit=0）。判断依据写进 `src/cjh_host.cj`
+  注释与 `vendor/cjh/README.md`，免得下一个人重新猜一遍。
+
+### 上游 1.6.24 里对本项目有直接影响的改动
+- **写域封堵**：`task` 的 `scope` 不再被 `bash`/技能/MCP/插件工具绕过；子代理失败
+  （failed / timeout / budget_exceeded）现在回 `isError=true` 并带 provider 根因 ⇒ 父代理不会再把
+  "失败"当结论继续推进，与 D-015「落档说了算」同向。
+- **长任务省轮次**：回合内只读工具结果缓存（`read_file`/`grep`/`glob`/`list_dir`，写工具执行后整表
+  失效；目录结果不缓存）、DAG 写域按 glob 语义判重叠、`explore` 轮次可配（默认 8）、
+  连续立即 poll 第 3 次自动提示 `wait_ms`。
+- **路径契约**：文件工具锚定工作区根（`bash cd` 不再改变解释基准），Windows 路径统一 `/` 归一
+  ⇒ 对应本项目 §4-70 / §4-213 那族"相对路径在 agent 侧失效"的上游半边。
+- **可观测**：`--mode json` 输出 `usage.model_ms` / `usage.tool_ms` / `usage.tool_cache_hits`，
+  TUI 状态行与 `/stats` 给每轮耗时 ⇒ 以后判"轮次预算花在哪"有读数。
+- **Anthropic prompt caching**（默认开，第三方代理不认时 `prompt_cache: false` 退回旧形状）
+  与工具前缀稳定排序。
+- **`CJH_CONFIG_DIR=` 空串启动崩溃**修掉（空白串同样中招）。
+
+### Verified
+- `cd vendor/cjh && sha256sum -c SHA256SUMS` 六项全 OK；`cjh.exe --version` → `cjh v1.6.24`；
+  `--mock` 全链输出 `FINAL-DONE`（exit=0）；WSL 里 `cjh-linux-x64 --version` → `cjh v1.6.24`。
+- 门禁六项全绿（`scripts/test.sh` 实跑，exit=0）：`cjpm build` 0 warning · `cjpm test` **663/663**
+  （FAILED=0 / ERROR=0）· `cj-tauri check` → `check 通过：com.lingqu.migrator@0.39.147（lingqu）` ·
+  页面脚本 `node --check` · `targets/desktop` 0 warning · `cli/` 0 warning。
+
+### 未验
+- **官方 `-selfcontained.zip` 没取到**（AtomGit release 附件需登录，匿名直链一律 401），
+  所以"随行 DLL 在 1.6.24 到底有没有更新"只有上面三条间接证据；拿到自包含包后用 `sha256sum`
+  复核一次即可定论。
+- 1.6.24 的 `--web` 行为（提示词注入、缓存命中、`usage.tool_cache_hits`）未实测；
+  应用链路 `/api/health` 的版本串待下一次启动应用时确认。
+
 ## [0.39.146] - 2026-11-24
 
 **随包 AI 引擎升到 cjh v1.6.23；issue #16 的两条诉求实测确认已修；note-gen 移植版入仓。**

@@ -5,7 +5,7 @@
   cjc-version = "1.0.5"
   name = "lingqu"
   description = "lingqu - cj-tauri 业务包"
-  version = "0.39.146"
+  version = "0.39.147"
   target-dir = ""
   output-type = "static"
   compile-option = ""
