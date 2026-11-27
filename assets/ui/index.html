@@ -2810,6 +2810,7 @@ withBridge(function(tauri){
   }
   function loadEnv(){
     invoke('t2h:env').then(function(d){
+      window.__envLoaded = true;   // 0.39.148：探针必须等它，否则 __scanPath 还没到就退回「上次工程」
       renderEnv(d);
       // 启动带回上次工程（0.39.44）：**localStorage 在本应用里被 WebView2 拒**（实测 setItem 抛
       // SecurityError，见 LINGQU_UI_PROBE=store），所以"记住的工程"只能由后端给——
@@ -9606,19 +9607,34 @@ withBridge(function(tauri){
     // ⓪ AI 自动迁移自检（0.37.0）：起一次真的 agent 循环，用 ui_report 断言
     //   aiPortDirective>0（任务书发出去了）、aiPortPolls>0（在盯落档）、toolCards>0（它真的调了工具）
     if (mode === 'ai' || mode === 'ai-full' || mode === 'autoport') {
-      // 批量全自动实证：LINGQU_UI_PROBE=ai-full 时跑一个从没迁过的样本（scope=all）
-      // 0.39.54：新增 `autoport` 模式——工程由 `LINGQU_SCAN_PATH`（或当前工程）给，探针只负责
-      // **点真按钮**（`#btnAiPort` 的那条路径：技能/上下文/工具路径准备 → 发任务书 → 轮询落档）。
       var fullProj = (mode === 'ai-full') ? 'E:/test/rust/m3u8dl-tauri' : 'E:/test/rust/habit-tree';
       if (mode === 'autoport') {
-        var envProj = String(window.__scanPath || '');
-        fullProj = envProj || String((typeof PROJECT !== 'undefined' && PROJECT.path) || '');
+        // 0.39.148：**先等 `t2h:env` 回来再定目标工程**。原来固定 2.6s 就取 `__scanPath`，
+        // env 慢（它要挨个探 hdc / cargo / node …）时那个值还没到，于是静默退回「上次工程」——
+        // 2026-11-27 实测：`LINGQU_SCAN_PATH=juCang` 却把任务书发给了 dbx，juCang 只跑了 scan/deps。
+        // 判据：`window.__probeTargetSrc` 必须是 `scanPath`，否则说明点错了工程。
+        var waited = 0;
+        var pickTarget = function(){
+          var envProj = String(window.__scanPath || '');
+          if (!envProj && !window.__envLoaded && waited < 12000) {
+            waited += 400;
+            return setTimeout(pickTarget, 400);
+          }
+          var proj = envProj || String((typeof PROJECT !== 'undefined' && PROJECT.path) || '');
+          window.__probePath = proj;
+          window.__probeTarget = proj;
+          window.__probeTargetSrc = envProj ? 'scanPath' : 'lastProject';
+          window.__probeWaitMs = waited;
+          setTimeout(function(){ setCurrentProject(proj); startAiPort(); }, 300);
+        };
+        setTimeout(pickTarget, 2600);
+      } else {
+        window.__probePath = fullProj;
+        setTimeout(function(){
+          setCurrentProject(fullProj);   // 0.39.8：路径框只读了，探针改用「当前工程」
+          startAiPort();
+        }, 2600);
       }
-      window.__probePath = fullProj;
-      setTimeout(function(){
-        setCurrentProject(fullProj);   // 0.39.8：路径框只读了，探针改用「当前工程」
-        startAiPort();
-      }, 2600);
       setTimeout(function(){ reportUi('probe-ai-early'); }, 12000);
       setTimeout(function(){ reportUi('probe-ai-mid'); }, 60000);
       setTimeout(function(){ reportUi('probe-ai-done'); }, 150000);

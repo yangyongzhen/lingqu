@@ -5737,8 +5737,32 @@ func liveHdcTargetsText(hdc: String): String {
     if (hdc == "") {
         return ""
     }
+    // 聊天窗口里给的地址**不会自己生效**（聊天文字不改变 hdc 的连接）。所以给一个显式入口：
+    // LINGQU_DEVICE=192.168.3.13:46163 时先 tconn 一次，失败也不影响后面的列表（设备可能本来就在线）。
+    let want = firstNonEmptyEnv(["LINGQU_DEVICE"])
+    if (want.size > 0) {
+        try {
+            let (code, _, _) = executeWithOutput(hdc, ["tconn", want])
+            let _ = code
+        } catch (e: Exception) {
+            eprintln("[lingqu] hdc tconn ${want} 失败：${e}")
+        }
+    }
+    let verbose = runHdcListRaw(hdc, true)
+    let plain = runHdcListRaw(hdc, false)
+    // `-v` 在无线调试下会偶发只列 COM1/COM2 串口噪声（实测 2026-11-27），纯列表兜底；
+    // 判据收在纯函数里：mergeHdcTargetsTextOf（有单测）。
+    return mergeHdcTargetsTextOf(verbose, plain)
+}
+
+/** 跑一次 `hdc list targets [-v]`，返回原始输出（含 stderr）；失败给空串 */
+func runHdcListRaw(hdc: String, verbose: Bool): String {
     try {
-        let (code, out, errOut) = executeWithOutput(hdc, ["list", "targets", "-v"])
+        var args: Array<String> = ["list", "targets"]
+        if (verbose) {
+            args = ["list", "targets", "-v"]
+        }
+        let (code, out, errOut) = executeWithOutput(hdc, args)
         let _ = code
         return lenientUtf8(out) + "\n" + lenientUtf8(errOut)
     } catch (e: Exception) {

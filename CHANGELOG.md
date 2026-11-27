@@ -5,6 +5,75 @@
 
 ---
 
+## [0.39.149] - 2026-11-27
+
+**真机明明连着，agent 却去启模拟器 —— 修掉「只看 `-v` 的设备探测」并给任务书写死纪律。**
+
+### Fixed
+- **`hdc list targets -v` 偶发只列串口噪声，导致把在线真机判成「没有设备」**。
+  用户实测（无线调试 `192.168.3.13:46163`）：真机连着、聊天里说了几遍，agent 却去拉
+  `D:\oh\DevEcoStudio\tools\emulator\Emulator.exe`。现场取证：设备在时 `hdc list targets` 有
+  `192.168.3.13:46163`，而**同一时刻 `hdc list targets -v` 只有 `COM1`/`COM2 UART`**；设备掉线重连期间两边都会空。
+  旧实现 `liveHdcTargetsText()` **只跑 `-v`** ⇒ 判成"没有设备" ⇒ 任务书跟着写「真机不在线」。
+  现在新增纯函数 `mergeHdcTargetsTextOf(verbose, plain)`（`src/compiler/deploy.cj`）：
+  `-v` 解析出设备就用 `-v`（带 state 证据更全），否则回落纯列表，两边都没有才原样返回 `-v`（保留噪声看现场）。
+  `liveHdcTargetsText()` 相应跑两条命令并走这个判据；新增单测
+  `testMergeHdcTargetsFallsBackToPlainList`（三种形态：只有噪声→回落、`-v` 有→用 `-v`、两边空→0 台）。
+- **聊天里给的设备地址没有任何入口**。新增 `LINGQU_DEVICE=<ip:port>`：探测前先 `hdc tconn <addr>` 一次
+  （失败不影响后续列表），这样"人把地址给你"能真正落到工具上。
+
+### Changed（任务书层，D-015：只补说明书不代做）
+- 「## 真机」小节与「## 纪律」各补一条**设备优先级**：**真机 > 模拟器（兜底）**——
+  ① 先认真机（`hdc list targets`，别只看 `-v`）；② 人给了地址就 `hdc tconn <ip:port>`（或 `LINGQU_DEVICE`）；
+  ③ **确实一台真机都没有时**才可用 DevEco 模拟器兜底，且结论必须标明「模拟器：<镜像>，非真机」、
+  **不许据此把「真机可用」判成通过**（真机项仍记「未测」）。
+  另写明**聊天窗口里的地址不会自己生效**（既不改 `hdc` 连接，也不进工具）；连不上又没有模拟器可用时，
+  用 `lingqu-decision` 把「请先连真机：`hdc tconn <ip:port>`」交回给人。
+  （口径按用户当场纠正：**不要一刀切禁用模拟器**——没有真机时，兜底跑通「装得上 / 起得来 / 渲染得出」仍有价值。）
+
+### 已知边界
+- `LINGQU_DEVICE` 只是"帮人跑一次 tconn"，**不解决无线调试自己掉线**；掉线期间工具仍会如实报"没有设备"。
+- 本轮没做「设备掉线自动重连」的守护，也没在界面加设备输入框（后者属产品决定）。
+
+## [0.39.148] - 2026-11-27
+
+**探针取目标工程改成「等 env 就绪」；顺带把 cjh 1.6.24 升级做了两条运行期实测。**
+
+### Fixed
+- **`LINGQU_UI_PROBE=autoport` 会把任务书发给上一个工程**。起因：探针在固定 2.6 s 时读
+  `window.__scanPath`，而这个值由 `t2h:env` 回调写入，env 要挨个探 hdc / cargo / node …，慢一点就还是空
+  ⇒ 静默退回 `PROJECT.path`（上次工程）。2026-11-27 实测：`LINGQU_SCAN_PATH=E:/test/rust/juCang`
+  却把 23,776 字符的任务书写进了 `lingqu-workspaces/dbx/.lingqu/autoport-directive.md`，
+  agent 第一个工具调用就是读 dbx 的任务书，而界面照样显示"在跑"。
+  现在 `loadEnv` 落 `window.__envLoaded`，`autoport` 探针**轮询等待**（上限 12 s）再定目标，
+  并留 `window.__probeTarget` / `__probeTargetSrc`（`scanPath` / `lastProject`）/ `__probeWaitMs` 当判据：
+  **源不是 `scanPath` 就说明点错了工程**。修后同一命令实测任务书落进 `juCang/.lingqu/autoport-directive.md`
+  （`工程：juCang`，23,553 字符）。
+
+### Verified（运行期实测，不是推断）
+- **T1 升级是否真生效**：起桌面应用后 `GET /api/health` 回 `{"status":"ok","version":"1.6.24"}`；
+  `Get-Process cjh` 的 `Path` = `E:\test\rust\test1\lingqu\vendor\cjh\win-x64\cjh.exe`（**不是**
+  `%LOCALAPPDATA%\lingqu\cjh` 那份 11-02 旧副本）；`ui_report` 回投 `cjhState=running` /
+  `cjhBin=vendor\cjh\win-x64\cjh.exe` / `consoleHidden=true`；`.lingqu/cjh-start.log` 记
+  `拉起后就绪 526ms`。旧副本仍在盘上（13,503,488 B，sha256 `07f5427a…`）但被 SHA256 判掉并跳过
+  （CLI 侧实见 `部署目录副本与随包清单不符，跳过 …lingqu\cjh\cjh.exe`）⇒ §4-122 那条判据成立。
+  **反思**：`cjh_deploy` 只在有 `LINGQU_CJH_BUNDLE` 时才会真正"刷新"副本，否则如实拒绝执行未校验二进制
+  （读码确认，未实跑该分支）。
+- **T3 1.6.24 新特性**（`--mode json` 实跑，真模型）：
+  - 同参数连读两遍同一文件 ⇒ `usage.tool_cache_hits = 1`，第二次 `read_file` `duration_ms = 0`；
+  - `usage` 里 `model_ms` / `tool_ms` / `duration_ms` 三者自洽（`4690 + 0 ≈ 4694`；另一轮
+    `3381 + 10873 ≈ 14255`）⇒ 以后能分清"等模型"还是"等工具"；
+  - **写域封堵**：`task`（`subagent_type=worker` + `scope=src/cjh_host.cj`）让子代理跑 `ls -la`，
+    子代理拿到的原文拒绝是 `超出本子代理写域 (scope): bash 可执行任意路径写入，scope 模式下不可用。
+    请改用 write_file/edit 等带 path 参数的写工具，或由父代理执行 shell。` ⇒ 属实。
+  - 顺带确认 `explore` 子代理**本身没有 bash 工具**（用它测写域封堵测不到，必须用 `worker`）。
+- **中文 argv 又撞一次**（§4-119）：`cjh --mode json "中文提示"` 直接
+  `IllegalArgumentException: Invalid unicode scalar value`；换纯 ASCII 提示即正常。
+
+### 未验
+- 官方 `-selfcontained.zip` 仍未取到 ⇒ 随行 DLL 是否在 1.6.24 更新，只有 0.39.147 那三条间接证据。
+- T4（在未迁移样本 `juCang` 上真实跑一轮 autoport）本轮尚在进行中，口径核对结果另记 `docs/进度记录.md`。
+
 ## [0.39.147] - 2026-11-27
 
 **随包 AI 引擎升到 cjh v1.6.24（长任务缓存 / 每轮耗时 / 写域封堵）。**

@@ -104,8 +104,29 @@ public func resolveDeviceKeyOf(liveTargets: String, recorded: String): String {
     return devices[0].serial
 }
 
-/** COM1 / COM12 这类串口名 */func isComPort(s: String): Bool {
-    if (!s.startsWith("COM")) {
+/**
+ * 合并 `hdc list targets -v` 与 `hdc list targets` 的原始输出，挑一份"真的有设备"的。
+ *
+ * 起因（2026-11-27 无线真机，用户反馈「聊天里说了几遍真机已连接，cjh 还在启动模拟器」）：
+ * 无线调试下 `list targets -v` 会**偶发只列 `COM1`/`COM2` 串口噪声、甚至整段为空**，
+ * 而同一时刻 `list targets`（不带 -v）却有 `192.168.3.13:46163`。只认 `-v` ⇒ 把"已连上的真机"
+ * 判成"没有设备" ⇒ 任务书写「真机不在线」 ⇒ agent 自己去找模拟器（§4-38 同族：
+ * 观测手段的缺口被读成"世界就是这个样子"）。
+ *
+ * 判据：`-v` 解析出设备就用 `-v`（它带 state，证据更全）；否则纯列表能解析出设备就用纯列表；
+ * 两者都没有时把 `-v` 原样返回（保留串口噪声，便于事后看现场）。
+ */
+public func mergeHdcTargetsTextOf(verbose: String, plain: String): String {
+    if (parseHdcTargets(verbose).size > 0) {
+        return verbose
+    }
+    if (parseHdcTargets(plain).size > 0) {
+        return plain
+    }
+    return verbose
+}
+
+/** COM1 / COM12 这类串口名 */func isComPort(s: String): Bool {    if (!s.startsWith("COM")) {
         return false
     }
     if (s.size <= 3) {

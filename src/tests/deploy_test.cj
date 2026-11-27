@@ -8,6 +8,28 @@ import lingqu.compiler.*
  * fixture 全部是 2026-10-31 在真机上抓到的**原始输出**（鸿蒙 PC HAD-W32 / HarmonyOS 7.0.0.111 / API 26）。
  */
 
+/*
+ * 0.39.149：无线调试下 `hdc list targets -v` 会偶发只列 `COM1/COM2` 串口噪声、甚至整段为空，
+ * 而同一时刻 `hdc list targets` 有设备（用户实测：真机已连，cjh 却去启模拟器）。
+ * 判据：`-v` 解析出设备就用 `-v`（带 state），否则回落纯列表。
+ */
+@Test
+public func testMergeHdcTargetsFallsBackToPlainList(): Unit {
+    let verboseNoise = "COM1\t\tUART\tReady\tunknown...\thdc\nCOM2\t\tUART\tReady\tunknown...\thdc\n"
+    let plainWithDev = "192.168.3.13:46163\n"
+    // ① -v 只有噪声 → 回落纯列表，能解析出那台真机
+    let devs = parseHdcTargets(mergeHdcTargetsTextOf(verboseNoise, plainWithDev))
+    @Assert(devs.size, 1)
+    @Assert(devs[0].serial, "192.168.3.13:46163")
+    // ② -v 有设备 → 用 -v（不信纯列表那份，避免两份口径打架）
+    let verboseDev = "192.168.3.13:46163\t\tTCP\tConnected\tlocalhost\thdc\n"
+    let m2 = parseHdcTargets(mergeHdcTargetsTextOf(verboseDev, "3QC0124B20000048\n"))
+    @Assert(m2.size, 1)
+    @Assert(m2[0].serial, "192.168.3.13:46163")
+    // ③ 两边都没设备 → 原样返回 -v（保留噪声便于看现场），解析结果仍是 0 台
+    @Assert(parseHdcTargets(mergeHdcTargetsTextOf(verboseNoise, "[Empty]\n")).size, 0)
+}
+
 @Test
 public func testParseHdcTargetsSkipsSerialNoise(): Unit {
     // 真实输出：真设备一行 + 两条 COM/UART 噪声（本项目踩过"把 COM 口当设备"的坑）
