@@ -244,6 +244,22 @@ public func cliRunVerdictOf(state: String, elapsedSecs: Int64, budgetMinutes: In
     return "看起来已中断（超过预算 ${budget} 分钟 + 2 分钟仍无终态；看 cli-run.log 尾巴）"
 }
 
+/**
+ * 纯函数：设备不在线时该不该**拦住这一轮**（0.39.157）。
+ *
+ * 为什么要拦：任务书里的「真机」是生成那一刻的快照。设备离线时起跑，agent 会跳过
+ * deploy/verify/probe，或更糟——`verify` 把真机项记成 `unknown`（0.39.154 的行为）覆盖掉上次
+ * 真机证据。用户为此已经付过一次代价（juCang 17:09 那轮，83% 被压成 50%）。
+ * 所以默认**拒绝起跑**并说清怎么办；确实要离线跑（只想让它改代码/看落档）就加 `--allow-offline`。
+ */
+public func autoPortOfflineGuardOf(device: Bool, allowOffline: Bool): String {
+    if (device || allowOffline) {
+        return ""
+    }
+    return "设备不在线：这一轮会跳过 deploy/verify/probe，还可能把 verify 里的真机结论写成 unknown。" +
+        "连上设备（`hdc tconn <ip:port>` 或插 USB）后重跑；确实要离线跑就加 `--allow-offline`"
+}
+
 /** 建目录并写文件（失败返回原因，别静默） */
 func writeTextUnderDirOf(dir: String, file: String, text: String): String {
     try {
@@ -294,6 +310,20 @@ public func runAutoPortHeadlessRound(args: JsonObject): JsonObject {
     let directivePath = match (prep.get("directivePath")) {
         case Some(v) => v.asString().getValue()
         case None => path
+    }
+    // 0.39.157：设备离线默认**不白烧一轮**（见 autoPortOfflineGuardOf 的注释）
+    let deviceNow = match (prep.get("device")) {
+        case Some(v) => v.asBool().getValue()
+        case None => false
+    }
+    let guard = autoPortOfflineGuardOf(deviceNow, argBool(args, "allow-offline", false))
+    if (guard.size > 0) {
+        res.put("ok", JsonBool(false))
+        res.put("state", JsonString("refused"))
+        res.put("device", JsonBool(deviceNow))
+        res.put("directivePath", JsonString(directivePath))
+        res.put("error", JsonString(guard))
+        return res
     }
     let lessonsItems = match (prep.get("lessonsDigestItems")) {
         case Some(v) => v.asInt().getValue()

@@ -32,7 +32,7 @@ public let CLI_COMMANDS: Array<String> = [
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
 func cliIsBoolFlag(key: String): Bool {
     for (k in ["screenshot", "verifyOnly", "apply", "start", "all", "json", "wait", "applyPort",
-               "preflight", "force", "shot", "checkMaterial", "run", "status"]) {
+               "preflight", "force", "shot", "checkMaterial", "run", "status", "allow-offline"]) {
         if (k == key) {
             return true
         }

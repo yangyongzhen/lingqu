@@ -5,6 +5,28 @@
 
 ---
 
+## [0.39.157] - 2026-11-28
+
+**`autoport --run` 不再在设备离线时白烧一轮。**
+
+### Fixed
+- `autoport --run` 起跑前先过一道**离线闸门**（纯函数 `autoPortOfflineGuardOf(device, allowOffline)`）：
+  设备不在线时**默认拒绝起跑**并说清怎么办（`hdc tconn <ip:port>` 或插 USB），因为这种轮次里
+  agent 会跳过 deploy/verify/probe，更糟的是 `verify` 会把真机项重新记成 `unknown`
+  —— juCang 17:09 那次 83%→50% 就是这么来的。确实要离线跑（只想让它改代码/看落档）就加
+  `--allow-offline`，这时**不拦**。在线时永远放行。
+- 单测 **680 → 681**（`offlineRoundIsRefusedUnlessAllowed`：离线拦 + 文案含开关名、离线带开关放行、在线放行）。
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **681/681** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+
+### 未验
+- 这条闸门**只在单测层面验过**：本轮设备一直 Offline，没能拿真机跑一遍"在线放行 + 离线拒绝"的
+  端到端对照；等设备回来跑无界面轮时会顺带看到 `state=refused` 或正常起跑。
+
+---
+
 ## [0.39.156] - 2026-11-28
 
 **真机「白屏一闪就退」定位到根因：setup 里第二处 `app_data_dir()` + panic hook 装得太早 —— 规则补上，下次不再踩。**

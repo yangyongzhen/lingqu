@@ -565,3 +565,18 @@ public func cliRunVerdictDistinguishesRunningFromAborted(): Unit {
     // 认不出的 state 如实说"未知"，不许默默当成跑着
     @Assert(cliRunVerdictOf("weird", 10, 40).contains("未知"), true)
 }
+
+// ===== 0.39.157：设备离线默认不白烧一轮（除非显式 --allow-offline）=====
+
+@Test
+public func offlineRoundIsRefusedUnlessAllowed(): Unit {
+    // 离线 + 没给开关 ⇒ 拦住，并说清怎么办（这是 juCang 83%→50% 那次的教训）
+    let msg = autoPortOfflineGuardOf(false, false)
+    @Assert(msg.contains("设备不在线"), true)
+    @Assert(msg.contains("--allow-offline"), true)
+    // 离线但显式允许 ⇒ 放行（只想让它改代码/看落档）
+    @Assert(autoPortOfflineGuardOf(false, true), "")
+    // 在线 ⇒ 永远放行，不给开关也不拦
+    @Assert(autoPortOfflineGuardOf(true, false), "")
+    @Assert(autoPortOfflineGuardOf(true, true), "")
+}
