@@ -1051,3 +1051,56 @@ public func offlineVerdictKeepsPriorDeviceEvidence(): Unit {
         @Assert(d != "platform-api", true)
     }
 }
+
+// ===== 0.39.159：probe --auto 的文本键要被 verify 消费（单列 smoke，不进 A4 分母）=====
+
+@Test
+public func smokeProbesReadTextKeysOnly(): Unit {
+    // 真实形态：features 里既有 platform:/event: 专门的键，也有按按钮文本记的键
+    let probe = JsonValue.fromStr(
+        "{\"features\":{\"最新↓\":{\"verdict\":\"pass\",\"note\":\"点后多出「最旧↑」\"}," +
+            "\"全部\":{\"verdict\":\"unknown\",\"note\":\"点了没反应\"}," +
+            "\"platform:clipboard\":{\"verdict\":\"fail\",\"note\":\"x\"}," +
+            "\"event:download\":{\"verdict\":\"pass\",\"note\":\"y\"}}}")
+    let rows = smokeProbesOf(probe)
+    // 只认文本键：两个前缀各归各的通道，不能被当成冒烟条目（否则数字重复计）
+    @Assert(rows.size, 2)
+    @Assert(rows[0].text, "最新↓")
+    @Assert(rows[0].verdict, "pass")
+    @Assert(rows[1].text, "全部")
+    @Assert(rows[1].verdict, "unknown")
+    // 没有 features 时给空表，不许抛
+    @Assert(smokeProbesOf(JsonValue.fromStr("{}")).size, 0)
+}
+
+@Test
+public func smokeProbesStayOutOfA4Denominator(): Unit {
+    let inp = ChecklistInput()
+    inp.commandCount = 0
+    inp.smokeProbes.add(SmokeProbeInput("最新↓", "pass", "点后多出「最旧↑」"))
+    inp.smokeProbes.add(SmokeProbeInput("全部", "unknown", "点了没反应"))
+    let items = buildChecklist(inp)
+    var smoke = 0
+    var smokePass = 0
+    for (it in items) {
+        if (it.category == "smoke" && it.id.startsWith("feat:probe:")) {
+            smoke += 1
+            if (it.verdict == "pass") {
+                smokePass += 1
+            }
+            // 道具：冒烟条目必须带来源证据，人能顺着复核
+            @Assert(it.evidence.size > 0, true)
+        }
+    }
+    @Assert(smoke, 2)
+    @Assert(smokePass, 1)
+    // 关键：冒烟条数再多，也**不进移植验收分母**（D-020）
+    let st = computeStats(items)
+    var transplant = 0
+    for (it in items) {
+        if (it.category == "transplant") {
+            transplant += 1
+        }
+    }
+    @Assert(st.total, transplant)
+}

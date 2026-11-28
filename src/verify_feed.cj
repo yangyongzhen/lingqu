@@ -41,6 +41,29 @@ public func platformProbeVerdictOf(probe: JsonValue, name: String): (String, Str
     }
 }
 
+/**
+ * 纯函数：取出 `probe.json` 里**按按钮文本**记的实测条目（0.39.159）。
+ *
+ * 排除 `platform:` / `event:` 两个前缀——它们各有专门通道（平台能力实测优先、事件触发计数），
+ * 剩下的键才是 `probe --auto` 按按钮文本点出来的冒烟结论。以前这些条目**没有任何消费方**
+ * ⇒ 「probe 完再 verify」是空操作（实测 8 条 2 pass，verify 的 `feat:*` 依旧全未测）。
+ */
+public func smokeProbesOf(probe: JsonValue): ArrayList<SmokeProbeInput> {
+    let out = ArrayList<SmokeProbeInput>()
+    let feats = objFieldOf(probe, "features")
+    match (feats.kind()) {
+        case JsonKind.JsObject =>
+            for ((k, v) in feats.asObject().getFields()) {
+                if (k.startsWith("platform:") || k.startsWith("event:")) {
+                    continue
+                }
+                out.add(SmokeProbeInput(k, jsonStrField(v, "verdict"), jsonStrField(v, "note")))
+            }
+        case _ => ()
+    }
+    return out
+}
+
 /** 从落档 JSON 文本里取一层对象字段（找不到给空 JsonObject，省得每处判 None） */
 func objFieldOf(root: JsonValue, key: String): JsonValue {
     match (root.kind()) {

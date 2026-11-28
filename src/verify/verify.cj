@@ -93,6 +93,24 @@ public class CheckItem {
  * 为什么不直接吃扫描器的类型：这一层要能在**没有工程**时也跑（只做真机侧报告），
  * 松耦合的入参让"清单规则"能被单测逐条覆盖，而不必搭一整套扫描 fixture。
  */
+/**
+ * 一处**按按钮文本**的真机点按实测（0.39.159）。
+ *
+ * 来源：`probe --auto` 写的 `.lingqu/verify/<工程>.probe.json` 里 `features` 的**非前缀键**
+ * （`platform:` / `event:` 另有通道）。只进 `smoke` 单列，**不进 A4 分母**。
+ */
+public class SmokeProbeInput {
+    public var text: String = ""
+    public var verdict: String = ""
+    public var note: String = ""
+
+    public init(text: String, verdict: String, note: String) {
+        this.text = text
+        this.verdict = verdict
+        this.note = note
+    }
+}
+
 public class ChecklistInput {
     /** 扫描结果：命令 / 事件 / 插件 / 前端文件 / 平台 API 的条数（0 = 没扫过） */
     public var commandCount: Int64 = 0
@@ -144,6 +162,15 @@ public class ChecklistInput {
      * 为空时说明没扫过——这时只能退回旧的聚合口径，并且**必须在报告里说清"没覆盖功能"**。
      */
     public var features: ArrayList<FeatureInput> = ArrayList<FeatureInput>()
+    /**
+     * 真机**点按**实测（0.39.159）：`probe --auto` 把结论按**按钮文本**写进
+     * `.lingqu/verify/<工程>.probe.json` 的 `features`。
+     *
+     * 为什么要它：`verify` 以前只消费 `platform:<符号>` 与 `event:<事件>` 两个前缀，
+     * 按文本记的条目**没有任何消费方** ⇒「probe 完再 verify」是空操作（实测：8 条里 2 pass，
+     * verify 的 `feat:*` 依旧全「未测」）。它单列 `category=smoke`、**不进 A4 分母**（D-020）。
+     */
+    public var smokeProbes: ArrayList<SmokeProbeInput> = ArrayList<SmokeProbeInput>()
     /** 平台 API 明细（scan 的 `items.platform`）：判"降级方案落地了吗"用 */
     public var platformItems: ArrayList<PlatformInput> = ArrayList<PlatformInput>()
 }
@@ -1608,6 +1635,27 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
             }
         }
         items.add(lim)
+    }
+
+    // ⑨ 真机点按冒烟（0.39.159）：`probe --auto` 按**按钮文本**记的结论单列成行。
+    //    以前这些条目躺在 `.probe.json` 里没人读 ⇒ 界面上永远"实测 0 条"（§4-135 同族）。
+    //    口径不变：`category=smoke`，**不进 A4 分母**（D-020）。
+    for (sp in inp.smokeProbes) {
+        if (sp.text == "") {
+            continue
+        }
+        let sm = CheckItem("feat:probe:${sp.text}", "${sp.text}（真机点按）")
+        sm.kind = "feature"
+        sm.category = "smoke"
+        sm.verdict = if (sp.verdict == "pass" || sp.verdict == "fail" || sp.verdict == "limit") {
+            sp.verdict
+        } else {
+            // probe 里记 unknown 的（例如"点了没反应，可能是没点中"）就保持 unknown，不升也不降
+            "unknown"
+        }
+        sm.note = if (sp.note != "") { sp.note } else { "真机点按（结论见 .probe.json）" }
+        sm.evidence.add("来源：.lingqu/verify/<工程>.probe.json（probe --auto）")
+        items.add(sm)
     }
 
     return items

@@ -5,6 +5,35 @@
 
 ---
 
+## [0.39.159] - 2026-11-28
+
+**`probe --auto` 的结果终于有人读了：冒烟单列进 verify，仍不进 A4 分母。**
+
+### Fixed
+- **探针按「按钮文本」记的结论过去没有任何消费方**。实测现场：`probe --auto --max 8` → `ok=true`、
+  8 条里 **2 pass**（「最新↓」/「最旧↑」互相切出对方）、6 unknown，落在
+  `.lingqu/verify/<工程>.probe.json` 的 `features`；随后复跑 `verify` **可用率仍是 83%、`feat:*` 依旧全
+  「未测」**——因为 `verify` 只消费 `platform:<符号>` 与 `event:<事件>` 两个前缀（§4-135 同族：干活的那方
+  写了落档，显示的那方没读回；这次连读回通道都没建）。
+  现在：新增 `SmokeProbeInput` + `ChecklistInput.smokeProbes`，`verify` 读 `features` 里**非前缀键**
+  （`smokeProbesOf`，排除 `platform:`/`event:` 免得重复计数），生成 `feat:probe:<文本>` 条目，
+  `category=smoke`、verdict 用实测值（`pass`/`fail`/`unknown` 原样，不升不降）、带来源证据行。
+  **口径不变**：冒烟单列、**不进移植验收分母**（D-020）。
+- 单测 **681 → 683**（`smokeProbesReadTextKeysOnly`：只认文本键、两个前缀各归各的通道、空 features 不抛；
+  `smokeProbesStayOutOfA4Denominator`：冒烟 2 条（1 pass）时 `stats.total` 仍等于 transplant 条数）。
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **683/683** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+- 复跑实测见 `docs/进度记录.md` 0.39.159 节（⑥ 屏/报告里的「真机冒烟：实测 N 条」）。
+
+### 未验
+- 冒烟条目仍**不进**可用率、也不参与 A4 判定——这是有意的（D-020），别把它当"功能验收通过"。
+- 探针点的多是列表页按钮（「全部/视频/文章」点了没反应），因此大多数冒烟条目是 `unknown`；
+  要把它们变成 `pass` 得让探针能点进详情页（属探针能力，不在本版）。
+
+---
+
 ## [0.39.158] - 2026-11-28
 
 **无界面轮第一次带着真机跑通：`verify` 被重建为 83%，顺手修掉一条把人带偏的日志。**
