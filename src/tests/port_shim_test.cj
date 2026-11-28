@@ -278,3 +278,84 @@ public func setupWiringCreatesDirBeforeInstallingHook(): Unit {
     @Assert(createAt > dirAt, true)
     @Assert(hookAt > createAt, true)
 }
+
+// ===== 0.39.161：&AppHandle 版 helper 与跨模块改写 =====
+
+@Test
+public func appHandleHelperIsInjected(): Unit {
+    let block = libRsInjectionBlock()
+    // 两个版本都要在：App 版给 lib.rs 内的 setup，AppHandle 版给其他模块
+    @Assert(block.contains("fn resolve_app_data_dir(app: &tauri::App)"), true)
+    @Assert(block.contains("pub(crate) fn resolve_app_data_dir_handle(h: &tauri::AppHandle)"), true)
+}
+
+@Test
+public func moduleRewritePicksHelperBySignature(): Unit {
+    // cache.rs 的真实形态：拿 &AppHandle ⇒ 必须走 handle 版（塞 App 版会类型不符）
+    let cacheRs = "pub fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {\n" +
+        "    let dir = app.path().app_data_dir().map_err(|e| format!(\"{e}\"))?;\n" +
+        "    Ok(dir)\n" +
+        "}\n"
+    @Assert(dataDirHelperForOf(cacheRs, "app"), "resolve_app_data_dir_handle")
+    let (fixed1, n1, u1) = rewriteDataDirInModuleOf(cacheRs)
+    @Assert(n1, 1)
+    @Assert(u1, 0)
+    @Assert(fixed1.contains("crate::resolve_app_data_dir_handle(app)"), true)
+    // 幂等：改完再跑一遍不再变
+    let (again, n2, _) = rewriteDataDirInModuleOf(fixed1)
+    @Assert(n2, 0)
+    @Assert(again, fixed1)
+
+    // 拿 &tauri::App 的模块 ⇒ App 版（不能因为 App 是 AppHandle 的前缀就判错）
+    let libLike = "fn helper(app: &tauri::App) -> Result<PathBuf, tauri::Error> {\n" +
+        "    app.path().app_data_dir()\n" +
+        "}\n"
+    @Assert(dataDirHelperForOf(libLike, "app"), "resolve_app_data_dir")
+
+    // 签名里查不到类型 ⇒ 判不出，**保持原样**（不猜）
+    let noSig = "fn f(x: &Foo) { let d = app.path().app_data_dir(); }\n"
+    @Assert(dataDirHelperForOf(noSig, "app"), "")
+    let (same, n3, u3) = rewriteDataDirInModuleOf(noSig)
+    @Assert(n3, 0)
+    @Assert(u3, 1)
+    @Assert(same, noSig)
+}
+
+// ===== 0.39.161 补充：跨行接收者 + helper 自身函数体保护 =====
+
+@Test
+public func moduleRewriteHandlesMultiLineReceiver(): Unit {
+    // juCang cache.rs 的真实形态：接收者在上一行（跨行）——初版只认单行，一处都没改到
+    let src = "fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {\n" +
+        "    let dir = app\n" +
+        "        .path()\n" +
+        "        .app_data_dir()\n" +
+        "        .map_err(|e| format!(\"{e}\"))?;\n" +
+        "    Ok(dir)\n" +
+        "}\n"
+    let (fixed, changed, unknown) = rewriteDataDirInModuleOf(src)
+    @Assert(changed, 1)
+    @Assert(unknown, 0)
+    @Assert(fixed.contains("crate::resolve_app_data_dir_handle(app)"), true)
+    let (again, n2, _) = rewriteDataDirInModuleOf(fixed)
+    @Assert(n2, 0)
+}
+
+@Test
+public func helperBodyIsProtectedAndTypeFollowsEnclosingFn(): Unit {
+    // 同一文件里 `app` 既是 &App（helper 自己）又是 &AppHandle（save）：按所在函数签名判，不能按整文件
+    let src = "fn resolve_app_data_dir(app: &tauri::App) -> Result<PathBuf, tauri::Error> {\n" +
+        "    app.path().app_data_dir()\n" +
+        "}\n" +
+        "fn save(app: &tauri::AppHandle) {\n" +
+        "    let _ = app\n" +
+        "        .path()\n" +
+        "        .app_data_dir();\n" +
+        "}\n"
+    let (fixed, changed, unknown) = rewriteDataDirInModuleOf(src)
+    @Assert(changed, 1)
+    @Assert(unknown, 0)
+    // helper 体内那处**不许动**（动了就是递归）；外面那处改走 handle 版（模块内不带 crate::… 这里带）
+    @Assert(fixed.contains("    app.path().app_data_dir()\n"), true)
+    @Assert(fixed.contains("crate::resolve_app_data_dir_handle(app)"), true)
+}

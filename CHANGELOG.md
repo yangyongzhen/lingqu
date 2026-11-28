@@ -5,6 +5,37 @@
 
 ---
 
+## [0.39.161] - 2026-11-28
+
+**R2-PORT-009 补上 `&AppHandle` 版 helper，并把改写扩到 lib.rs 之外的其他 `.rs` 模块。**
+
+### Added
+- 注入块里新增 `pub(crate) fn resolve_app_data_dir_handle(h: &tauri::AppHandle)`，与既有的
+  `resolve_app_data_dir(app: &tauri::App)` 并存：其他模块（`cache.rs` / `commands/xxx.rs`）拿的是
+  `&AppHandle`，塞给收 `&App` 的版本会**类型不符**（编不过）——这正是 0.39.160 查出来的规则缺口。
+- 动作层 `rewriteDataDirInModulesOf(srcDir, backupDir, depth)`：递归（深度 3）把 `src-tauri/src` 下
+  其他 `.rs` 里的裸 `X.path().app_data_dir()` 改走对应 helper；跳过 `gen/`（脚手架）、`target/`（产物）
+  与自带 helper 定义的文件（防递归）。
+- 纯函数 `dataDirHelperForOf(fileText, receiver)`：**按文件里的签名**决定用哪个 helper
+  （`&tauri::AppHandle` → handle 版；`&tauri::App` → App 版；判不出 → `""`，**保持原样不猜**）。
+  顺序上先判 `AppHandle`：`&tauri::App` 是 `&tauri::AppHandle` 的前缀，反了会误判。
+- 纯函数 `rewriteDataDirInModuleOf(text)` → (新文本, 改了几处, 判不出几处)；幂等。
+- **回滚成对**（§4-33）：模块级改写逐文件备份到 `<备份目录>/modules/<rel 拍平>.bak`，并写
+  `modules/manifest.txt`；`t2h:revert` 新增按 manifest 还原的循环——没有这一段就等于"只有备份没有回滚"。
+- 单测 **684 → 686**（`appHandleHelperIsInjected`、`moduleRewritePicksHelperBySignature`）。
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **686/686** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+- juCang 上 `port --apply` + `verify` 的复跑读数见 `docs/进度记录.md` 0.39.161 节。
+
+### 未验
+- 判不出接收者类型的调用点（例如写成 `(app).path().app_data_dir()` 或签名里没有该参数）**保持原样**，
+  只在 note 里计数；这类要靠人或 `platform-api` 的逐处判定点名（0.39.160 已能点名位置）。
+- `tauri_plugin_opener` 与 `app_data_dir` 不同：它需要**真机桥接**或登记 `limit`，本轮不涉及。
+
+---
+
 ## [0.39.160] - 2026-11-28
 
 **`platform-api` 判据升级为「逐处命中点判定」——查完发现 juCang 这一条是**真缺口**，不是假红。**

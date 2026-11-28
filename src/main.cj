@@ -1480,6 +1480,11 @@ public class PortCommand <: CommandHandler {
                         // juCang 真机实测：setup 里第二次用 `app.path().app_data_dir()` 开 SQLite，
                         // 鸿蒙上拿到不可写路径且不报错 ⇒ setup Err ⇒ SIGABRT 白屏闪退、hilog 零线索。
                         File.writeTo(p, rewriteAppDataDirCallsOf(old + o.after).toArray())
+                        // 0.39.161：lib.rs 之外的其他 .rs 模块也改（它们拿 &AppHandle，走 handle 版 helper）
+                        let (mf, mr, mu) = rewriteDataDirInModulesOf("${srcTauriDir}/src", backupPath, 3)
+                        if (mf > 0) {
+                            o.note = o.note + "；另改 ${mf} 个模块文件（${mr} 处；判不出 ${mu} 处保持原样）"
+                        }
                         wroteAny = true
                     }
                     if (o.id == "R2-PORT-010" && o.applied) {
@@ -1686,6 +1691,29 @@ public class RevertCommand <: CommandHandler {
                     restored.add(JsonString(target))
                 } catch (e: Exception) {
                     errMsg = "回滚 ${target} 失败：${e}"
+                }
+            }
+            // 0.39.161：模块级改写（R2-PORT-009 改的其他 .rs）按 manifest 回滚——
+            // 没有这一段，那批文件就只有备份没有回滚，正是 §4-33 记的"静默破坏另一条链路"。
+            let modManifest = "${dir}/modules/manifest.txt"
+            if (exists(Path(modManifest)) && revSrcDir.size > 0) {
+                let modText = lenientUtf8(File.readFrom(modManifest))
+                for (line in modText.split("\n", -1)) {
+                    let rel = line.trimAscii()
+                    if (rel.size == 0) {
+                        continue
+                    }
+                    let bak = "${dir}/modules/${rel.replace("/", "__")}.bak"
+                    if (!exists(Path(bak))) {
+                        continue
+                    }
+                    let target = "${revSrcDir}/src/${rel}"
+                    try {
+                        File.writeTo(target, File.readFrom(bak))
+                        restored.add(JsonString(target))
+                    } catch (e: Exception) {
+                        errMsg = "回滚 ${target} 失败：${e}"
+                    }
                 }
             }
             // 014 生成的前端资源：带 lingqu 标记才算工具产物，删掉才算"回到干净仓库"
