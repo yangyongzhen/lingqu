@@ -21,9 +21,12 @@
 - 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **681/681** · `cj-tauri check` PASS ·
   页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
 
+### 补充实测（离线拒绝分支，已验）
+设备 Offline 时真跑 `autoport --run`：回 `ok=false / state=refused / device=false`，文案含「怎么连设备 +
+`--allow-offline`」；**没起 cjh**（进程 0），`cli-run.json` 未被改写（不写 running）⇒ 拒绝分支成立。
+
 ### 未验
-- 这条闸门**只在单测层面验过**：本轮设备一直 Offline，没能拿真机跑一遍"在线放行 + 离线拒绝"的
-  端到端对照；等设备回来跑无界面轮时会顺带看到 `state=refused` 或正常起跑。
+- "在线放行 + 真跑一整轮"仍待设备回来做（本轮设备一直 Offline）。
 
 ---
 
