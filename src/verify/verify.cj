@@ -120,6 +120,14 @@ public class ChecklistInput {
     /** HAP 装配闸是否通过（`t2h:hap` 落档） */
     public var hapOk: Bool = false
     public var hasHap: Bool = false
+    /**
+     * 设备**现在**能不能用（0.39.154）：`hdc list targets` 里一台能用的都没有时为 true。
+     *
+     * 为什么要这个位：设备离线时 `deploy` 不会写"装上了"，`verify` 于是把 `launch` 判成
+     * `fail`（理由「没装上」）——**「没跑」被写成「跑了没过」**（§4-63 同族），实测把 juCang
+     * 的 83% 压成 50%。离线只能判「本次未测」，不能判失败。
+     */
+    public var deviceOffline: Bool = false
     /** HAP 装配的子判据：编出来了吗 / 签名了吗 / 闸门第一条失败说什么 */
     public var hapBuilt: Bool = false
     public var hapSigned: Bool = false
@@ -1330,6 +1338,39 @@ public class VerifyStats {
 }
 
 /**
+ * 纯函数：设备离线时，这一项的判定该落成什么（0.39.154）。
+ *
+ * 两条规则，都指向"没跑 ≠ 跑了没过"（§4-63）：
+ *   ① 本次判出来的 `pass` 保留（设备离线也测得出的事实，如编译/装配）；
+ *   ② 上次落档是 `pass` 的，**沿用**——那是真机实测过的证据，不该因为今天手机没连上就消失；
+ *   ③ 本次 `fail` 降成 `unknown`：没有设备时"装不上"根本判不了，写 fail 是把观测缺陷当功能缺陷。
+ *
+ * [newVerdict] 本次算出来的，[priorVerdict] 上次落档里的（没有就给空串）。
+ */
+public func verdictUnderDeviceOfflineOf(newVerdict: String, priorVerdict: String): String {
+    if (newVerdict == "pass") {
+        return "pass"
+    }
+    if (priorVerdict == "pass") {
+        return "pass"
+    }
+    if (newVerdict == "fail") {
+        return "unknown"
+    }
+    return newVerdict
+}
+
+/**
+ * 纯函数：设备离线时哪些条目**依赖真机**（只有它们做上面的合并）。
+ *
+ * `build` / `hap` / `platform-api` 这些在设备离线时照样能判——把它们也降级就是把
+ * 已经确凿的结论一起丢掉（另一种瞒报）。
+ */
+public func deviceDependentCheckIds(): Array<String> {
+    return ["launch", "frontend", "events"]
+}
+
+/**
  * 从输入生成功能清单。
  *
  * 清单是**推导**出来的，不是手写死的：命令/事件/插件/前端/平台 API 的条数决定有没有这一项，
@@ -1352,7 +1393,11 @@ public func buildChecklist(inp: ChecklistInput): ArrayList<CheckItem> {
     if (inp.crashCount > 0) {
         launch.evidence.add("faultlog 崩溃记录 ${inp.crashCount} 条")
     }
-    if (!inp.installed) {
+    if (inp.deviceOffline) {
+        // 0.39.154：设备不在线 ≠ 没装上。以前这里落进 `!installed` 分支判 fail，把上次真机证据也盖掉
+        launch.verdict = "unknown"
+        launch.note = "设备不在线：本次未复测（**不是失败**；连上设备后重跑 verify）"
+    } else if (!inp.installed) {
         launch.verdict = "fail"
         launch.note = "没装上（先跑 ⑥ 屏「安装并启动」；签名问题看 ⑤ 屏「签名体检」）"
     } else if (!inp.started) {

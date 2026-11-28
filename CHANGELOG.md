@@ -5,6 +5,37 @@
 
 ---
 
+## [0.39.154] - 2026-11-28
+
+**设备离线把胜利果实抹掉了一次 —— `deploy` 不再覆盖上次真机证据，`verify` 不再把「没跑」写成「失败」。**
+
+### Fixed
+- **`deploy` 在"没有可用设备"时照样写落档**，把上次真机装启成功的记录整份盖成
+  `deviceCount=0 / install.ok=false`。现场（本日）：设备离线后重跑 `deploy`，juCang 当天 15:47 那次
+  「安装 + 启动成功」的证据被覆盖；紧接着 `verify` 读档，把 `launch` 判成 **`fail`（理由「没装上」）**
+  ⇒ 移植验收 **83% 变 50%**。现在没设备时**直接返回** `ok=false` + `recordKept=true` + 明确下一步
+  （`hdc tconn <ip:port>` 或插 USB），**不改写** `.lingqu/deploy/<工程>.json`。
+- **`verify` 把「设备离线、本次没测」判成「失败」**（§4-63 同族：没跑 ≠ 跑了没过）。现在
+  `ChecklistInput.deviceOffline` 由活的 `hdc` 探测决定（`onlineHdcTargetsOf`）；离线时 `launch` 落
+  `unknown` + 「设备不在线：本次未复测（**不是失败**）」，且按纯函数 `verdictUnderDeviceOfflineOf`
+  与上次落档合并：**上次 `pass` 的沿用**（那是真机实测过的证据），**本次 `fail` 降成 `unknown`**
+  （没有设备根本判不了"装不上"）。只动真机依赖项（`launch` / `frontend` / `events`）——
+  `build` / `hap` / `platform-api` 离线照样能判，降级它们就是另一种瞒报。
+- 单测 **674 → 675**（`offlineVerdictKeepsPriorDeviceEvidence`）。
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **675/675** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+
+### 未验 / 边界
+- **juCang 的 83% 记录已被修复前的那次运行覆盖**（`deploy`/`verify` 落档都是 17:09 那份"没设备"结果）：
+  这次修复只能保证**以后不再发生**，被覆盖的证据无法凭空恢复 ⇒ 设备重连后重跑一次 `deploy` + `verify`
+  才能把真机结论重新建立起来。
+- 本轮**没有真机**（`hdc list targets` 空、`tconn` 失败、`ping` 回"无法访问目标主机"、无 USB），
+  所以"修复后的 deploy/verify 在真机在线时是否照常"仍待真机复验。
+
+---
+
 ## [0.39.153] - 2026-11-28
 
 **`lingqu-cli autoport`：把"跑一轮迁移"从界面里解耦出来（任务书仍只有一份）。**

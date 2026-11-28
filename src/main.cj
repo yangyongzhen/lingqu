@@ -4134,6 +4134,80 @@ func profileBundleOf(p7bPath: String): String {
  * 口径（详见 `src/verify/verify.cj` 文件头）：平台限制不计入分母；未采集 ≠ 通过；证据逐项挂。
  * **采不到证据只会让该项变成"未验证"，绝不会变成"通过"**——这是这个命令存在的意义。
  */
+/**
+ * 读上一次 `verify` 落档里每项的判定（读不到给空表——「没有旧档」不是错误）。
+ *
+ * 只给"设备离线时的合并"用：`launch` / `frontend` / `events` 上一次若判过 `pass`，
+ * 那是真机实测过的证据，不该因为今天手机没连上就消失（0.39.154）。
+ */
+func priorVerifyVerdictsOf(jsonPath: String): HashMap<String, String> {
+    let out = HashMap<String, String>()
+    if (!exists(Path(jsonPath))) {
+        return out
+    }
+    try {
+        let root = JsonValue.fromStr(lenientUtf8(File.readFrom(jsonPath)))
+        match (root.asObject().get("items")) {
+            case Some(v) =>
+                let arr = v.asArray()
+                var i: Int64 = 0
+                while (i < arr.size()) {
+                    let o = arr[i].asObject()
+                    let id = match (o.get("id")) {
+                        case Some(x) => x.asString().getValue()
+                        case None => ""
+                    }
+                    let vd = match (o.get("verdict")) {
+                        case Some(x) => x.asString().getValue()
+                        case None => ""
+                    }
+                    if (id.size > 0) {
+                        out.add(id, vd)
+                    }
+                    i += 1
+                }
+            case None => ()
+        }
+    } catch (e: Exception) {
+        let _ = e
+    }
+    return out
+}
+
+/**
+ * 设备离线时按 `verdictUnderDeviceOfflineOf` 合并上次判定（**只动真机依赖项**）。
+ *
+ * 只碰 `launch` / `frontend` / `events`：`build` / `hap` / `platform-api` 在设备离线时照样能判，
+ * 把它们也降级等于把已确凿的结论一起丢掉（另一种瞒报）。
+ */
+func mergeOfflinePriorVerdicts(items: ArrayList<CheckItem>, prior: HashMap<String, String>): Unit {
+    for (it in items) {
+        var dep = false
+        for (d in deviceDependentCheckIds()) {
+            if (d == it.id) {
+                dep = true
+            }
+        }
+        if (!dep) {
+            continue
+        }
+        let old = match (prior.get(it.id)) {
+            case Some(v) => v
+            case None => ""
+        }
+        let merged = verdictUnderDeviceOfflineOf(it.verdict, old)
+        if (merged == it.verdict) {
+            continue
+        }
+        if (merged == "pass") {
+            it.note = it.note + "；沿用上次真机证据（本次设备离线未复测）"
+        } else {
+            it.note = it.note + "；设备离线：本次判不了（不是失败）"
+        }
+        it.verdict = merged
+    }
+}
+
 public class VerifyCommand <: CommandHandler {
     public init() {}
 
@@ -4171,6 +4245,8 @@ public class VerifyCommand <: CommandHandler {
 
         // ① + ② 取数与采证
         let inp = collectVerifyInput(projName, path)
+        // 0.39.154：设备离线时不许把"没跑"判成"失败"（实测把 83% 压成 50%）
+        inp.deviceOffline = onlineHdcTargetsOf(liveHdcTargetsText(hdc)).size == 0
         let ev = collectEvidence(projName, path, hdc, serial, wantShots)
         if (ev.saved > 0) {
             inp.screenshotCount = ev.saved
@@ -4179,6 +4255,10 @@ public class VerifyCommand <: CommandHandler {
 
         // ③ 清单 / 可用率 / 报告
         let items = buildChecklist(inp)
+        if (inp.deviceOffline) {
+            let priorPath = lqDirOf(path) + cjhPathSep() + "verify" + cjhPathSep() + "${projName}.json"
+            mergeOfflinePriorVerdicts(items, priorVerifyVerdictsOf(priorPath))
+        }
         let stats = computeStats(items)
         let ctx = ReportContext(projName)
         ctx.bundleName = deployBundleOf(projName, path)
@@ -6767,6 +6847,29 @@ public class DeployCommand <: CommandHandler {
                     }
                 }
             }
+        }
+
+        // 0.39.154：**没有可用设备时不许覆盖上次成功的部署落档**。
+        // 现场（2026-11-28 实测）：设备离线后重跑 `deploy`，它照样把 `deviceCount=0 / install.ok=false`
+        // 写进 `.lingqu/deploy/<工程>.json`，把当天 15:47 那次真机装启成功的证据整份盖掉；
+        // 紧接着 `verify` 读档就把 `launch` 判成 `fail`（理由「没装上」）⇒ 83% 变 50%。
+        // 「没跑」被写成「跑了没过」（§4-63 同族），而且从此再也证明不了那天真的装上过。
+        if (!serialOk) {
+            let why = if (allDevices.size > 0) {
+                "设备不可用：${allDevices.size} 台已登记但均 Offline/Unauthorized（先 `hdc tconn <ip:port>` 或插 USB 授权）"
+            } else {
+                "没有设备：`hdc list targets` 为空（先 `hdc tconn <ip:port>` 或插 USB）"
+            }
+            res.put("ok", JsonBool(false))
+            res.put("deviceCount", JsonInt(Int64(devices.size)))
+            res.put("serial", JsonString(serial))
+            res.put("installed", JsonBool(false))
+            res.put("started", JsonBool(false))
+            res.put("reason", JsonString(why))
+            res.put("nextStep", JsonString("连上设备后重跑 deploy；本次**没有**改写落档，上次的真机证据保留"))
+            res.put("recordKept", JsonBool(true))
+            eprintln("[lingqu][deploy] ${why}（本次未执行、未改写落档）")
+            return res
         }
 
         // ---- ② 安装 ----

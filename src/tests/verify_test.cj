@@ -1026,3 +1026,28 @@ public func testPlatformSiteTwoLevelEvidenceNamesChain(): Unit {
     @Expect(why.contains("app_data_dir"), true)
     @Expect(why.contains("bootstrap_dir"), true)
 }
+
+// ===== 0.39.154：设备离线时「未测」不能写成「失败」，也不许丢掉上次真机证据 =====
+
+@Test
+public func offlineVerdictKeepsPriorDeviceEvidence(): Unit {
+    // ① 本次设备离线判不出（unknown），上次真机判过 pass ⇒ 沿用，别把证据丢掉
+    @Assert(verdictUnderDeviceOfflineOf("unknown", "pass"), "pass")
+    // ② 没设备时算出的 fail 其实"判不了"，不许当失败（实测把 juCang 的 83% 压成 50%）
+    @Assert(verdictUnderDeviceOfflineOf("fail", ""), "unknown")
+    @Assert(verdictUnderDeviceOfflineOf("fail", "pass"), "pass")
+    // ③ 本来就 pass 的保留（编译/装配这类离线也测得出）
+    @Assert(verdictUnderDeviceOfflineOf("pass", ""), "pass")
+    // ④ unknown / limit 原样，别乱升也别乱降
+    @Assert(verdictUnderDeviceOfflineOf("unknown", ""), "unknown")
+    @Assert(verdictUnderDeviceOfflineOf("limit", "unknown"), "limit")
+    // ⑤ 只有真机依赖项参与合并：build/hap/platform-api 离线照样能判，降级它们就是另一种瞒报
+    let ids = deviceDependentCheckIds()
+    @Assert(ids.size, 3)
+    @Assert(ids[0], "launch")
+    for (d in ids) {
+        @Assert(d != "build", true)
+        @Assert(d != "hap", true)
+        @Assert(d != "platform-api", true)
+    }
+}
