@@ -172,3 +172,29 @@ public func autoportIsReachableFromCli(): Unit {
     @Assert(ok, false)
     @Assert(why.contains("一键迁移"), true)
 }
+
+// ===== 0.39.155：CLI 的数值/布尔参数不许"传了等于没传" =====
+
+@Test
+public func cliNumericAndBoolArgsAreNotSilentlyIgnored(): Unit {
+    // argvToJson 把值一律存成字符串；argInt 认不认它，决定 `--minutes 6` 是不是等于没传
+    @Assert(intArgOfText("6", 40), 6)
+    @Assert(intArgOfText(" 12 ", 40), 12)
+    @Assert(intArgOfText("-3", 40), -3)
+    @Assert(intArgOfText("0", 40), 0)
+    // 不是数字就回落（别把 "abc" 当 0）
+    @Assert(intArgOfText("abc", 40), 40)
+    @Assert(intArgOfText("12x", 40), 40)
+    @Assert(intArgOfText("", 40), 40)
+    @Assert(intArgOfText("-", 40), 40)
+    // 布尔同理：`--run false` 得真的当 false
+    @Assert(boolArgOfText("false", true), false)
+    @Assert(boolArgOfText("true", false), true)
+    @Assert(boolArgOfText("0", true), false)
+    @Assert(boolArgOfText("1", false), true)
+    @Assert(boolArgOfText("maybe", true), true)
+    // 端到端形态：`--minutes 6` 解析出来就是字符串 "6"
+    let o = argvToJsonWithValues(["autoport", "--path", "E:/p", "--minutes", "6"])
+    @Assert(intArgOfText("6", 40), 6)
+    @Assert(o.get("autoport").isSome(), true)
+}

@@ -534,3 +534,34 @@ public func headlessPromptIsAsciiAndPointsAtDirective(): Unit {
     // 反例：工程路径含中文时，绝对路径就会带非 ASCII ⇒ 调用方应退回相对路径
     @Assert(hasNonAsciiOf("E:/工作/juCang/.lingqu/autoport-directive.md"), true)
 }
+
+// ===== 0.39.155：无界面轮的观测（进度解析 + 状态判定）=====
+
+@Test
+public func cjhProgressCountsToolsFromStderr(): Unit {
+    // cjh --mode json 把进度写 stderr：`[cjh] tool start: bash`
+    let err = "[cjh] json mode: running 0s\n[cjh] tool start: read_file\n[cjh] tool done: read_file 3ms\n" +
+        "[cjh] tool start: bash\n[cjh] tool done: bash 169ms\n[cjh] tool start: skill_load\n"
+    let (tools, last) = cjhProgressOf(err)
+    @Assert(tools, 3)
+    @Assert(last, "skill_load")
+    // 没有进度行时给 0 与空串（别把"没输出"读成"跑了 1 次"）
+    let (t0, l0) = cjhProgressOf("")
+    @Assert(t0, 0)
+    @Assert(l0, "")
+}
+
+@Test
+public func cliRunVerdictDistinguishesRunningFromAborted(): Unit {
+    // 终态直接说清
+    @Assert(cliRunVerdictOf("done", 10, 40), "已完成")
+    @Assert(cliRunVerdictOf("error", 10, 40).contains("失败"), true)
+    // 还在预算内 ⇒ 跑着
+    @Assert(cliRunVerdictOf("running", 60, 40), "跑着")
+    // 超预算 + 2 分钟还没有终态 ⇒ 不能一直显示"跑着"（§4-136 第三态）
+    @Assert(cliRunVerdictOf("running", 40 * 60 + 200, 40).contains("看起来已中断"), true)
+    // 预算缺失时用默认值兜底，别把 limit 算成 2 分钟
+    @Assert(cliRunVerdictOf("running", 600, 0), "跑着")
+    // 认不出的 state 如实说"未知"，不许默默当成跑着
+    @Assert(cliRunVerdictOf("weird", 10, 40).contains("未知"), true)
+}

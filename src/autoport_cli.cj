@@ -3,8 +3,11 @@ package lingqu
 import cjTauri.*
 import std.collection.*
 import std.fs.*
+import std.process.*
+import std.time.*
 import stdx.encoding.json.*
 import lingqu.scanner.*
+import lingqu.compiler.*
 
 /*
  * `lingqu-cli autoport`（0.39.153）——**无界面**地准备现场并生成任务书。
@@ -173,5 +176,316 @@ public func prepareAutoPortHeadless(args: JsonObject): JsonObject {
     res.put("cjhBin", JsonString(cjhBinPath()))
     // 建议的下一步（人/CI 照着跑；prompt 是 ASCII，可以直接进 argv）
     res.put("runHint", JsonString("cd " + path + " && " + cjhBinPath() + " --mode json \"" + prompt + "\""))
+    return res
+}
+
+/* ===== 0.39.155：无界面轮的观测（`--run` 写状态、`--status` 只读回看） =====
+ *
+ * 起因（0.39.153 实测留下的话柄）：无界面轮只有在**末尾**吐一串 JSON，跑的过程中外面什么都看不到；
+ * 应用侧那套 `.lingqu/agent/trace.jsonl` / `ui_report` / 停滞监控**一概没有**。
+ * 于是补两件最小可用的"眼睛"：状态文件（首尾两次写入）+ 进度原文日志 + 一条只读状态命令。
+ * **诚实边界**：`executeWithOutput` 是一条阻塞调用，拿不到逐行流 ⇒ 状态只在首尾更新，
+ * `--status` 判"还在跑"靠的是时间（超预算 + 2 分钟还没终态 ⇒ 看起来已中断），不是真监控。
+ */
+
+/** 无界面轮的状态文件：`<工程>/.lingqu/agent/cli-run.json` */
+public func autoPortRunStatusPathOf(projDir: String): String {
+    return projDir + cjhPathSep() + ".lingqu" + cjhPathSep() + "agent" + cjhPathSep() + "cli-run.json"
+}
+
+/** 无界面轮的进度原文：`<工程>/.lingqu/agent/cli-run.log`（cjh 的 stderr） */
+public func autoPortRunLogPathOf(projDir: String): String {
+    return projDir + cjhPathSep() + ".lingqu" + cjhPathSep() + "agent" + cjhPathSep() + "cli-run.log"
+}
+
+/**
+ * 纯函数：从 cjh 的 stderr 进度里数工具调用次数与最后一次工具名。
+ *
+ * `cjh --mode json` 把进度写 stderr（`[cjh] tool start: bash`），stdout 只在末尾一次性给 JSON ⇒
+ * 想看"它在动"只能数这份 stderr。
+ */
+public func cjhProgressOf(stderrText: String): (Int64, String) {
+    var tools: Int64 = 0
+    var last = ""
+    let marker = "tool start: "
+    for (line in stderrText.split("\n", -1)) {
+        let l = line.trimAscii()
+        match (l.indexOf(marker)) {
+            case Some(i) =>
+                tools += 1
+                last = l[(i + marker.size)..].trimAscii()
+            case None => ()
+        }
+    }
+    return (tools, last)
+}
+
+/**
+ * 纯函数：无界面轮的状态判定。
+ *
+ * 状态文件只在**首尾**更新 ⇒ `state=running` 且已超「预算 + 2 分钟」还没有终态时，多半进程没了；
+ * 这时必须说「看起来已中断」——一直显示"跑着"就是 §4-136 那种第三态缺失。
+ */
+public func cliRunVerdictOf(state: String, elapsedSecs: Int64, budgetMinutes: Int64): String {
+    if (state == "done") {
+        return "已完成"
+    }
+    if (state == "error") {
+        return "失败（看 cli-run.log 尾部）"
+    }
+    if (state != "running") {
+        return "未知（状态文件里的 state=${state}）"
+    }
+    let budget = if (budgetMinutes > 0) { budgetMinutes } else { AUTOPORT_MAX_MINUTES }
+    let limit = budget * 60 + 120
+    if (elapsedSecs <= limit) {
+        return "跑着"
+    }
+    return "看起来已中断（超过预算 ${budget} 分钟 + 2 分钟仍无终态；看 cli-run.log 尾巴）"
+}
+
+/** 建目录并写文件（失败返回原因，别静默） */
+func writeTextUnderDirOf(dir: String, file: String, text: String): String {
+    try {
+        if (!exists(Path(dir))) {
+            Directory.create(Path(dir), recursive: true)
+        }
+        File.writeTo(file, text.toArray())
+        return ""
+    } catch (e: Exception) {
+        return "${e}"
+    }
+}
+
+/** 动作层：写状态文件（best effort；失败进返回值，调用方负责回投） */
+func writeCliRunStatusOf(projDir: String, obj: JsonObject): String {
+    let p = autoPortRunStatusPathOf(projDir)
+    let dir = projDir + cjhPathSep() + ".lingqu" + cjhPathSep() + "agent"
+    return writeTextUnderDirOf(dir, p, obj.toJsonString())
+}
+
+/** 动作层：`autoport --run` —— 真起一轮无界面回合，并把状态与进度落盘 */
+public func runAutoPortHeadlessRound(args: JsonObject): JsonObject {
+    let res = JsonObject()
+    var path = argStr(args, "path", "")
+    if (path.size == 0) {
+        path = envOr("LINGQU_SCAN_PATH", "")
+    }
+    if (path.size == 0) {
+        res.put("ok", JsonBool(false))
+        res.put("error", JsonString("autoport --run 需要 --path（或置 LINGQU_SCAN_PATH）"))
+        return res
+    }
+    let prep = prepareAutoPortHeadless(args)
+    let prepOk = match (prep.get("ok")) {
+        case Some(v) => v.asBool().getValue()
+        case None => false
+    }
+    if (!prepOk) {
+        res.put("ok", JsonBool(false))
+        res.put("error", JsonString("准备现场失败（任务书没写成），未起回合"))
+        res.put("prepareError", JsonString(match (prep.get("error")) {
+            case Some(v) => v.asString().getValue()
+            case None => ""
+        }))
+        return res
+    }
+    let minutes = argInt(args, "minutes", AUTOPORT_MAX_MINUTES)
+    let directivePath = match (prep.get("directivePath")) {
+        case Some(v) => v.asString().getValue()
+        case None => path
+    }
+    let lessonsItems = match (prep.get("lessonsDigestItems")) {
+        case Some(v) => v.asInt().getValue()
+        case None => 0
+    }
+    let prompt = autoPortHeadlessPromptOf(AUTOPORT_DIRECTIVE_REL)
+    let cjh = cjhBinPath()
+    let projName = sanitizeFileName(projectNameOf(path))
+    let startedMs = DateTime.now().toUnixTimeStamp().toMilliseconds()
+
+    var running = JsonObject()
+    running.put("schema", JsonString("lingqu/cli-run/v1"))
+    running.put("state", JsonString("running"))
+    running.put("project", JsonString(projName))
+    running.put("path", JsonString(path))
+    running.put("directivePath", JsonString(directivePath))
+    running.put("cjhBin", JsonString(cjh))
+    running.put("prompt", JsonString(prompt))
+    running.put("budgetMinutes", JsonInt(minutes))
+    running.put("lessonsDigestItems", JsonInt(lessonsItems))
+    running.put("startedAtMs", JsonInt(startedMs))
+    running.put("logPath", JsonString(autoPortRunLogPathOf(path)))
+    let startWriteErr = writeCliRunStatusOf(path, running)
+
+    var code: Int64 = -1
+    var stdoutText = ""
+    var stderrText = ""
+    var runErr = ""
+    try {
+        let (c, out, err) = executeWithOutput(cjh, ["--mode", "json", prompt], workingDirectory: Path(path))
+        code = c
+        stdoutText = lenientUtf8(out)
+        stderrText = lenientUtf8(err)
+    } catch (e: Exception) {
+        runErr = "${e}"
+    }
+    let elapsedSecs = (DateTime.now().toUnixTimeStamp().toMilliseconds() - startedMs) / 1000
+    let (tools, lastTool) = cjhProgressOf(stderrText)
+    var rounds: Int64 = 0
+    var truncated = false
+    if (stdoutText.trimAscii().size > 0) {
+        try {
+            let root = JsonValue.fromStr(stdoutText)
+            let o = root.asObject()
+            match (o.get("usage")) {
+                case Some(u) => rounds = intFieldOf(u, "rounds", 0)
+                case None => ()
+            }
+            truncated = match (o.get("truncated")) {
+                case Some(v) => v.asBool().getValue()
+                case None => false
+            }
+        } catch (e: Exception) {
+            let _ = e
+        }
+    }
+    let state = if (runErr.size > 0 || code != 0) { "error" } else { "done" }
+    let verdict = cliRunVerdictOf(state, elapsedSecs, minutes)
+
+    // 进度原文落盘（cjh 的 stderr 就是"它在干什么"）
+    let logDir = path + cjhPathSep() + ".lingqu" + cjhPathSep() + "agent"
+    var logText = "[cli-run] cjh=${cjh}\n[cli-run] cwd=${path}\n[cli-run] directive=${directivePath}\n" +
+        "[cli-run] prompt=${prompt}\n[cli-run] exitCode=${code} elapsedSecs=${elapsedSecs}\n\n" +
+        "[stderr]\n" + stderrText + "\n[stdoutChars] ${stdoutText.size}\n"
+    let logErr = writeTextUnderDirOf(logDir, autoPortRunLogPathOf(path), logText)
+
+    var done = JsonObject()
+    done.put("schema", JsonString("lingqu/cli-run/v1"))
+    done.put("state", JsonString(state))
+    done.put("project", JsonString(projName))
+    done.put("path", JsonString(path))
+    done.put("directivePath", JsonString(directivePath))
+    done.put("cjhBin", JsonString(cjh))
+    done.put("budgetMinutes", JsonInt(minutes))
+    done.put("lessonsDigestItems", JsonInt(lessonsItems))
+    done.put("startedAtMs", JsonInt(startedMs))
+    done.put("elapsedSecs", JsonInt(elapsedSecs))
+    done.put("exitCode", JsonInt(code))
+    done.put("tools", JsonInt(tools))
+    done.put("lastTool", JsonString(lastTool))
+    done.put("rounds", JsonInt(rounds))
+    done.put("truncated", JsonBool(truncated))
+    done.put("stdoutChars", JsonInt(Int64(stdoutText.size)))
+    done.put("verdict", JsonString(verdict))
+    done.put("logPath", JsonString(autoPortRunLogPathOf(path)))
+    done.put("runError", JsonString(runErr))
+    let statusErr = writeCliRunStatusOf(path, done)
+
+    res.put("ok", JsonBool(state == "done"))
+    res.put("state", JsonString(state))
+    res.put("exitCode", JsonInt(code))
+    res.put("elapsedSecs", JsonInt(elapsedSecs))
+    res.put("tools", JsonInt(tools))
+    res.put("lastTool", JsonString(lastTool))
+    res.put("rounds", JsonInt(rounds))
+    res.put("verdict", JsonString(verdict))
+    res.put("directivePath", JsonString(directivePath))
+    res.put("lessonsDigestItems", JsonInt(lessonsItems))
+    res.put("logPath", JsonString(autoPortRunLogPathOf(path)))
+    res.put("statusPath", JsonString(autoPortRunStatusPathOf(path)))
+    res.put("statusWriteError", JsonString(startWriteErr + statusErr + logErr))
+    res.put("runError", JsonString(runErr))
+    return res
+}
+
+/** 状态文件里取字符串（缺键给空串；文件是我们自己写的，类型可信） */
+func statusStrOf(o: JsonObject, key: String): String {
+    return match (o.get(key)) {
+        case Some(v) => v.asString().getValue()
+        case None => ""
+    }
+}
+
+/** 状态文件里取整数（缺键给默认值） */
+func statusIntOf(o: JsonObject, key: String, fallback: Int64): Int64 {
+    return match (o.get(key)) {
+        case Some(v) => v.asInt().getValue()
+        case None => fallback
+    }
+}
+
+/**
+ * 动作层：`autoport --status` —— **只读**回看无界面轮（绝不重跑）。
+ *
+ * 回投 `state / verdict / elapsedSecs / tools / rounds / lastTool / logTail`：无界面轮没有界面那套
+ * 监管态，这份状态文件 + `cli-run.log` 就是它全部的"眼睛"。
+ */
+public func autoPortRunStatusOf(args: JsonObject): JsonObject {
+    var path = argStr(args, "path", "")
+    if (path.size == 0) {
+        path = envOr("LINGQU_SCAN_PATH", "")
+    }
+    let res = JsonObject()
+    if (path.size == 0) {
+        res.put("ok", JsonBool(false))
+        res.put("error", JsonString("autoport --status 需要 --path（或置 LINGQU_SCAN_PATH）"))
+        return res
+    }
+    let statusPath = autoPortRunStatusPathOf(path)
+    let logPath = autoPortRunLogPathOf(path)
+    if (!exists(Path(statusPath))) {
+        res.put("ok", JsonBool(false))
+        res.put("state", JsonString("none"))
+        res.put("statusPath", JsonString(statusPath))
+        res.put("error", JsonString("还没有无界面轮的记录（先跑 `lingqu-cli autoport --run --path .`）"))
+        return res
+    }
+    var o = JsonObject()
+    var readErr = ""
+    try {
+        o = JsonValue.fromStr(lenientUtf8(File.readFrom(statusPath))).asObject()
+    } catch (e: Exception) {
+        readErr = "${e}"
+    }
+    if (readErr.size > 0) {
+        res.put("ok", JsonBool(false))
+        res.put("statusPath", JsonString(statusPath))
+        res.put("error", JsonString("状态文件读不出来：${readErr}"))
+        return res
+    }
+    let state = statusStrOf(o, "state")
+    let started = statusIntOf(o, "startedAtMs", 0)
+    let budget = statusIntOf(o, "budgetMinutes", AUTOPORT_MAX_MINUTES)
+    let elapsedSecs = if (started > 0) {
+        (DateTime.now().toUnixTimeStamp().toMilliseconds() - started) / 1000
+    } else {
+        0
+    }
+    let verdict = cliRunVerdictOf(state, elapsedSecs, budget)
+    var logTail = ""
+    if (exists(Path(logPath))) {
+        let lines = lenientUtf8(File.readFrom(logPath)).split("\n", -1)
+        let total = Int64(lines.size)
+        var i = if (total > 6) { total - 6 } else { 0 }
+        while (i < total) {
+            logTail = logTail + lines[i] + "\n"
+            i += 1
+        }
+    }
+    res.put("ok", JsonBool(state == "done"))
+    res.put("state", JsonString(state))
+    res.put("verdict", JsonString(verdict))
+    res.put("elapsedSecs", JsonInt(elapsedSecs))
+    res.put("budgetMinutes", JsonInt(budget))
+    res.put("exitCode", JsonInt(statusIntOf(o, "exitCode", -1)))
+    res.put("tools", JsonInt(statusIntOf(o, "tools", 0)))
+    res.put("rounds", JsonInt(statusIntOf(o, "rounds", 0)))
+    res.put("lastTool", JsonString(statusStrOf(o, "lastTool")))
+    res.put("lessonsDigestItems", JsonInt(statusIntOf(o, "lessonsDigestItems", 0)))
+    res.put("directivePath", JsonString(statusStrOf(o, "directivePath")))
+    res.put("statusPath", JsonString(statusPath))
+    res.put("logPath", JsonString(logPath))
+    res.put("logTail", JsonString(logTail))
     return res
 }

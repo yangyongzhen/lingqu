@@ -5,6 +5,60 @@
 
 ---
 
+## [0.39.155] - 2026-11-28
+
+**无界面轮终于有"眼睛"了：`autoport --run` 写状态与进度原文，`--status` 只读回看。**
+
+### Added
+- **`lingqu-cli autoport --path . --run`**：真起一轮无界面回合（`cjh --mode json`，cwd = 工程根），
+  并在 `<工程>/.lingqu/agent/` 落两份观测：
+  - `cli-run.json`：`state(running|done|error)` / `startedAtMs` / `elapsedSecs` / `exitCode` /
+    `tools` / `lastTool` / `rounds` / `truncated` / `stdoutChars` / `budgetMinutes` / `verdict` /
+    `directivePath` / `lessonsDigestItems` ——**跑前写一次 running，跑完写终态**；
+  - `cli-run.log`：cjh 的 stderr 进度原文（`[cjh] tool start: bash` 这一族）+ 头部元信息，
+    这就是"它在干什么"的原始证据。
+- **`lingqu-cli autoport --path . --status`**：**只读**回看那一轮（绝不重跑），回投
+  `state / verdict / elapsedSecs / tools / rounds / lastTool / logTail`；没有记录时如实说
+  `state=none` 并给出先跑哪条命令。
+- 纯函数（可测）：`cjhProgressOf(stderr)` → `(工具次数, 最后一次工具名)`；
+  `cliRunVerdictOf(state, elapsedSecs, budgetMinutes)` → `已完成 / 失败 / 跑着 / 看起来已中断 / 未知`。
+  超预算 + 2 分钟还没终态时必须说「看起来已中断」——一直显示"跑着"就是 §4-136 那种第三态缺失。
+- 单测 **675 → 677**（`cjhProgressCountsToolsFromStderr`、`cliRunVerdictDistinguishesRunningFromAborted`）。
+
+### Fixed
+- **CLI 的数值/布尔参数被静默忽略**（实跑 `--run` 时撞见）：`argvToJson` 把 `--minutes 6` 存成
+  **`JsonString("6")`**，而 `argInt` / `argBool` 只认 `JsInt` / `JsBool` ⇒ 传了等于没传
+  （实测 `--minutes 6` 落成默认 40、`notes --action digest --max 3` 落成 8）。
+  新增纯函数 `intArgOfText` / `boolArgOfText`（认 `"6"` / `"-3"` / `"true"` / `"false"` / `"1"` / `"0"`，
+  认不出就回落而不是当 0），`argInt` / `argBool` 两种形态都认（§4-115 同族：同一设置两种拼写）。
+  单测 **677 → 678**（`cliNumericAndBoolArgsAreNotSilentlyIgnored`）。
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **678/678** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+- **实跑读数（设备离线，样本 juCang）**：
+  - 无记录时 `--status` → `ok=false / state=none / "还没有无界面轮的记录（先跑 … --run …）"`；
+  - 跑到一半时 `cli-run.json` = `state=running`（`budgetMinutes=40`、`lessonsDigestItems=3`），
+    `--status` → `state=running / verdict=跑着 / elapsedSecs=132`；
+  - 跑完后 `--run` 回投 `ok=true / state=done / exitCode=0 / elapsedSecs=178 / tools=66 /
+    lastTool=read_file / rounds=41 / verdict=已完成`，`statusWriteError` 与 `runError` 均为空。
+
+### Changed
+- `autoport` 现在三种动作：默认只准备现场+出任务书；`--run` 真起回合；`--status` 只读回看。
+  CLI 用法文本同步（子命令数仍是 24）。
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **677/677** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+
+### 未验 / 边界
+- **`executeWithOutput` 是阻塞调用，拿不到逐行流** ⇒ 状态文件只在首尾更新，`--status` 判"还在跑"
+  靠时间（超预算+2 分钟），**不是真监控**；也没有界面那侧的监管态/自动续跑/停滞判定。
+- 本轮**没能在有真机的情况下跑 `--run`**（设备离线），所以"`--run` + 真机 deploy/verify"这一整条
+  仍待真机复验；`--run` 的行为只由纯函数单测 + 编译期保证，**没有实跑读数**。
+
+---
+
 ## [0.39.154] - 2026-11-28
 
 **设备离线把胜利果实抹掉了一次 —— `deploy` 不再覆盖上次真机证据，`verify` 不再把「没跑」写成「失败」。**

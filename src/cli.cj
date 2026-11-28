@@ -32,7 +32,7 @@ public let CLI_COMMANDS: Array<String> = [
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
 func cliIsBoolFlag(key: String): Bool {
     for (k in ["screenshot", "verifyOnly", "apply", "start", "all", "json", "wait", "applyPort",
-               "preflight", "force", "shot", "checkMaterial"]) {
+               "preflight", "force", "shot", "checkMaterial", "run", "status"]) {
         if (k == key) {
             return true
         }
@@ -189,6 +189,8 @@ public func cliUsage(): String {
     text += "  lingqu-cli notes --action digest         # 回显「任务书会带的已入库经验摘要」（--max 改条数，默认 8）\n"
     text += "  lingqu-cli autoport --path E:/work/habit-tree\n" +
         "                                         # **无界面**准备现场 + 生成任务书（与界面同源），打印可直接跑的 cjh 命令\n"
+    text += "  lingqu-cli autoport --path . --run      # 真起一轮（状态写 .lingqu/agent/cli-run.json，进度原文写 cli-run.log）\n"
+    text += "  lingqu-cli autoport --path . --status   # 只读回看那一轮（state/verdict/elapsed/tools/lastTool/logTail），绝不重跑\n"
     text += "说明：命令与界面上的按钮一一对应（同一份实现），结果同时落工程里的 .lingqu/。\n"
     text += "退出码：0 = ok；1 = 失败或参数不全（stderr 里会是 JSON 的错误原因）。\n"
     return text
@@ -505,8 +507,14 @@ func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcCont
         return BatchCommand().handle(fullName, args, ctx)
     }
     if (cmd == "autoport") {
-        // 无界面入口（0.39.153）：准备现场 + 生成任务书，任务书与界面同源；
-        // 真正的回合由 cjh 跑（`runHint` 里给出可直接复制的命令）
+        // 无界面入口（0.39.153 / 0.39.155）：
+        //   --status 只读回看（不重跑）；--run 真起一轮（写 cli-run.json + cli-run.log）；默认只准备现场+出任务书
+        if (argBool(args, "status", false)) {
+            return autoPortRunStatusOf(args)
+        }
+        if (argBool(args, "run", false)) {
+            return runAutoPortHeadlessRound(args)
+        }
         return prepareAutoPortHeadless(args)
     }
     if (cmd == "resume") {

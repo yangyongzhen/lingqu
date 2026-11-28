@@ -7300,11 +7300,65 @@ func firstExistingPath(cands: Array<String>): String {
 }
 
 /** 取整数参数（缺失/类型不符回默认值） */
+/**
+ * 纯函数：把「字符串形态的数字」解析成整数（不是纯数字给 fallback）。
+ *
+ * 为什么需要它（0.39.155 实测）：CLI 的 `argvToJson` 把 `--minutes 6` 存成 **`JsonString("6")`**，
+ * 而 `argInt` 只认 `JsInt`/`JsFloat` ⇒ 数值参数被**静默回落到默认值**（实测 `--minutes 6` 落成 40、
+ * `notes --max 3` 落成 8）。这类"传了等于没传"的坑比报错难查得多（§4-115 同族：同一个设置两种形态，
+ * 得两边都认）。
+ */
+public func intArgOfText(text: String, fallback: Int64): Int64 {
+    let s = text.trimAscii()
+    if (s.size == 0) {
+        return fallback
+    }
+    var neg = false
+    var i: Int64 = 0
+    if (s.startsWith("-")) {
+        neg = true
+        i = 1
+    }
+    if (i >= Int64(s.size)) {
+        return fallback
+    }
+    var v: Int64 = 0
+    var saw = false
+    let bs = s.toArray()
+    while (i < Int64(bs.size)) {
+        let b = Int64(bs[i])
+        if (b < 48 || b > 57) {
+            return fallback
+        }
+        v = v * 10 + (b - 48)
+        saw = true
+        i += 1
+    }
+    if (!saw) {
+        return fallback
+    }
+    return if (neg) { -v } else { v }
+}
+
+/** 纯函数：把「字符串形态的布尔」解析出来；认不出给 fallback（别默默当 false） */
+public func boolArgOfText(text: String, fallback: Bool): Bool {
+    let s = text.trimAscii()
+    if (s == "true" || s == "1" || s == "yes" || s == "on") {
+        return true
+    }
+    if (s == "false" || s == "0" || s == "no" || s == "off") {
+        return false
+    }
+    return fallback
+}
+
 func argInt(args: JsonObject, key: String, fallback: Int64): Int64 {
     match (args.get(key)) {
         case Some(v) => match (v.kind()) {
             case JsonKind.JsInt => return v.asInt().getValue()
             case JsonKind.JsFloat => return Int64(v.asFloat().getValue())
+            // CLI 传进来的都是 JsString（`--minutes 6`）——不认这条就是"传了等于没传"
+            case JsonKind.JsString => return intArgOfText(v.asString().getValue(), fallback)
             case _ => return fallback
         }
         case None => return fallback
@@ -7327,6 +7381,7 @@ func argBool(args: JsonObject, key: String, fallback: Bool): Bool {
     match (args.get(key)) {
         case Some(v) => match (v.kind()) {
             case JsonKind.JsBool => return v.asBool().getValue()
+            case JsonKind.JsString => return boolArgOfText(v.asString().getValue(), fallback)
             case _ => return fallback
         }
         case None => return fallback
