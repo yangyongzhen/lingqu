@@ -522,3 +522,15 @@ public func testFlywheelHintNeedsTwoFailuresAndEmptyNotes(): Unit {
     skippedOnly.add(mkSkippedRow("report", "用户停了"))
     @Assert(flywheelHintOf(skippedOnly, false), "")
 }
+// ===== 0.39.153：无界面入口的提示词（必须纯 ASCII，§4-119）=====
+
+@Test
+public func headlessPromptIsAsciiAndPointsAtDirective(): Unit {
+    let p = autoPortHeadlessPromptOf(".lingqu/autoport-directive.md")
+    // cjh 的 `--mode json <prompt>` 把提示词当 argv；Windows 上非 ASCII 直接抛 Invalid unicode scalar value
+    @Assert(hasNonAsciiOf(p), false)
+    @Assert(p.contains(".lingqu/autoport-directive.md"), true)
+    @Assert(p.contains("Do not ask for confirmation"), true)
+    // 反例：工程路径含中文时，绝对路径就会带非 ASCII ⇒ 调用方应退回相对路径
+    @Assert(hasNonAsciiOf("E:/工作/juCang/.lingqu/autoport-directive.md"), true)
+}

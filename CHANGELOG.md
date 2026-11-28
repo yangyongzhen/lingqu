@@ -5,6 +5,41 @@
 
 ---
 
+## [0.39.153] - 2026-11-28
+
+**`lingqu-cli autoport`：把"跑一轮迁移"从界面里解耦出来（任务书仍只有一份）。**
+
+### Added
+- **`lingqu-cli autoport --path <工程>`**（`src/autoport_cli.cj`）：无界面地准备现场（装技能 + 写工程
+  `AGENTS.md` 并把 cjh 工作区切过去，均幂等）→ 读断点板与已入库经验 → **用同一个
+  `buildAutoPortDirective` 生成任务书**并落 `<工程>/.lingqu/autoport-directive.md`。回包里带
+  `directiveChars` / `lessonsDigestItems` / `lessonsDigestChars` / `device` / `promptAscii` / `kickoff` /
+  `headlessPrompt` / `cjhBin` / `runHint`——**能当证据的字段全给出来**，避免"说成功了但复现不了"。
+- 纯函数 `autoPortHeadlessPromptOf(relDirective)` + `hasNonAsciiOf(s)`：无界面轮的提示词**必须纯 ASCII**。
+  原因：cjh 的 `--mode json <prompt>` 把提示词当命令行参数，而仓颉程序在 Windows 上接不了非 ASCII 的
+  argv（§4-119，直接抛 `Invalid unicode scalar value`）⇒ 提示词只写"去读哪个文件 + 别问确认 + 判据看落档"，
+  中文全留在任务书里（正是「落文件 + 短 kickoff」的既有设计）。
+- 单测 **672 → 674**：`headlessPromptIsAsciiAndPointsAtDirective`（纯 ASCII + 指向任务书 + 中文路径反例）、
+  `autoportIsReachableFromCli`（CLI 可达 / 用法文本列出 / 界面"一键跑"仍拒）。
+
+### Changed
+- CLI 子命令 23 → **24**（新增 `autoport`）；`cliRunAllowed` 对 `autoport` 给出明确说法
+  （**界面一键跑仍拒**：它会起一整轮 agent 并改工程；命令行里可直跑）。
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **674/674** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+- 实跑：`lingqu-cli autoport --path E:/test/rust/juCang` → `ok=true / directiveChars=26403 /
+  lessonsDigestItems=3 / lessonsDigestChars=897 / promptAscii=true / skill=已装 / agentContext=已写`，
+  随后的无界面轮读数记在 `docs/进度记录.md` 0.39.153 节。
+
+### 未验
+- `autoport` 只做"准备 + 出任务书"，**不驱动回合**：真正跑那一轮仍由 `cjh --mode json "<ASCII prompt>"`
+  完成（`runHint` 给出可直接复制的命令）。缺的是界面那侧的**监管态 / 自动续跑 / `ui_report`**——
+  无界面轮跑完一轮就结束，不会自动接续。
+
+---
+
 ## [0.39.152] - 2026-11-28
 
 **门禁 ③ 的"必红"归因被实测推翻 —— 它是偶发，不是 Git Bash 起不来。**

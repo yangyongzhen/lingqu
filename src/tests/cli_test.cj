@@ -157,3 +157,18 @@ func assertStr(o: JsonObject, key: String, expect: String): Unit {
         case None => @Assert("缺少键 ${key}", expect)
     }
 }
+
+// ===== 0.39.153：无界面入口 autoport 可达 =====
+
+@Test
+public func autoportIsReachableFromCli(): Unit {
+    @Assert(cliCommandSupported("autoport"), true)
+    let o = argvToJson(["autoport", "--path", "E:/p"])
+    @Assert(o.get("autoport").isSome(), true)
+    // 用法文本要列出来（agent 靠它发现工具）
+    @Assert(cliUsage().contains("lingqu-cli autoport"), true)
+    // 界面上"一键跑"必须拒（会起一整轮 agent + 改工程），命令行仍可直跑
+    let (ok, why) = cliRunAllowed("autoport", JsonObject())
+    @Assert(ok, false)
+    @Assert(why.contains("一键迁移"), true)
+}

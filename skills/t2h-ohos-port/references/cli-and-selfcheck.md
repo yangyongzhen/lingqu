@@ -28,6 +28,7 @@ lingqu-cli migrate --path .                  # 8 步一条命令跑完（分钟�
 lingqu-cli diagnose --log <正文> | --logPath <文件>   # 报错诊断（**文件用 --logPath**）
 lingqu-cli notes  --path . --action append --body <json文件>   # 记一条经验（中文必须走文件）
 lingqu-cli export --path . --out <目录>      # 导出移植成果（默认 %USERPROFILE%\lingqu-migrated）
+lingqu-cli autoport --path .                 # 无界面：准备现场 + 生成任务书（与界面同源），回包给 runHint
 ```
 
 规则：**先 `resume` 看停在哪步，再跑那一步**；判断"能不能用"只认 `verify` 的落档，

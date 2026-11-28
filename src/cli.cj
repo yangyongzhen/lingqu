@@ -26,7 +26,7 @@ import stdx.encoding.json.*
 public let CLI_COMMANDS: Array<String> = [
     "migrate", "scan", "deps", "port", "revert", "decisions", "diagnose", "build", "hap", "sign",
     "deploy", "verify", "report", "probe", "batch", "resume", "env", "skill", "agent_context",
-    "git_clone", "notes", "pr", "export"
+    "git_clone", "notes", "pr", "export", "autoport"
 ]
 
 /** 允许的布尔开关（没有值就算 true；写成 `--x false` 也算 false） */
@@ -187,6 +187,8 @@ public func cliUsage(): String {
         "                                         # 下一次 diagnose / migrate 就会命中它（用户级排前，同 id 用你的版本）\n"
     text += "  lingqu-cli notes --action fp-list        # 合并库：内置 + 用户级，每条带 source\n"
     text += "  lingqu-cli notes --action digest         # 回显「任务书会带的已入库经验摘要」（--max 改条数，默认 8）\n"
+    text += "  lingqu-cli autoport --path E:/work/habit-tree\n" +
+        "                                         # **无界面**准备现场 + 生成任务书（与界面同源），打印可直接跑的 cjh 命令\n"
     text += "说明：命令与界面上的按钮一一对应（同一份实现），结果同时落工程里的 .lingqu/。\n"
     text += "退出码：0 = ok；1 = 失败或参数不全（stderr 里会是 JSON 的错误原因）。\n"
     return text
@@ -304,6 +306,10 @@ public func cliRunAllowed(cmd: String, args: JsonObject): (Bool, String) {
         // 一键迁移会改用户工程、占机器几分钟、还可能动真机：只允许在「一键迁移」屏由人点开始。
         // （agent 自己要用整条链，走 `lingqu-cli migrate --path …`，那条路是 bash 直调、有人盯着。）
         return (false, "一键迁移会改工程并占用机器几分钟，请在「一键迁移」屏点「开始」")
+    }
+    if (cmd == "autoport") {
+        // 无界面入口：会写任务书 + 装技能 + 改工程 AGENTS.md，并起一整轮 agent
+        return (false, "AI 自动迁移要起一整轮 agent，请在「一键迁移」屏点开始；命令行里可直跑 `lingqu-cli autoport --path .`")
     }
     if (cmd == "decisions") {
         return (false, "人工决策要留痕到落档，请在 ④ 屏操作")
@@ -497,6 +503,11 @@ func runCliHandler(cmd: String, fullName: String, args: JsonObject, ctx: IpcCont
     }
     if (cmd == "batch") {
         return BatchCommand().handle(fullName, args, ctx)
+    }
+    if (cmd == "autoport") {
+        // 无界面入口（0.39.153）：准备现场 + 生成任务书，任务书与界面同源；
+        // 真正的回合由 cjh 跑（`runHint` 里给出可直接复制的命令）
+        return prepareAutoPortHeadless(args)
     }
     if (cmd == "resume") {
         return ResumeCommand().handle(fullName, args, ctx)
