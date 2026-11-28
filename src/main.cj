@@ -5720,7 +5720,8 @@ func migrateHasDevice(): Bool {
         let (code, out, errOut) = executeWithOutput(hdc, ["list", "targets", "-v"])
         let _ = code
         let listText = lenientUtf8(out) + "\n" + lenientUtf8(errOut)
-        return parseHdcTargets(listText).size > 0
+        // 0.39.150：只认**能用**的目标——`-v` 里一条 Offline 不算"有设备"
+        return onlineHdcTargetsOf(listText).size > 0
     } catch (e: Exception) {
         eprintln("[lingqu][migrate] 查设备失败：${e}")
         return false
@@ -6744,7 +6745,9 @@ public class DeployCommand <: CommandHandler {
         } catch (e: Exception) {
             listText = "hdc 起不来：${e}"
         }
-        let devices = parseHdcTargets(listText)
+        let allDevices = parseHdcTargets(listText)
+        // 0.39.150：自动挑设备只挑**能用**的；离线的（Offline/Unauthorized）不算
+        let devices = onlineHdcTargetsOf(listText)
         var serial = argStr(args, "serial", "")
         if (serial == "") {
             serial = envOr("LINGQU_DEPLOY_SERIAL", "")
@@ -6755,7 +6758,8 @@ public class DeployCommand <: CommandHandler {
         var serialOk = false
         if (serial != "") {
             if (devices.size == 0) {
-                serialOk = true   // 列表拿不到（老版本 hdc）时信任显式 serial
+                // 列表里明确有目标但一台都用不了时**不再**信任显式 serial（它多半就是那条离线的）
+                serialOk = allDevices.size == 0
             } else {
                 for (d in devices) {
                     if (d.serial == serial) {
@@ -7337,6 +7341,31 @@ public func build(): AppSpec {
 }
 
 /**
+ * 纯函数：`notes` 没给 `--action` 却给了写入类参数时该报什么错（空串 = 没问题）。
+ *
+ * 为什么要这条（0.39.150 实测）：任务书「纪律」教的是
+ * `notes --path . --rule <规则号> --body-file <文件>`，**漏了 `--action append`**——
+ * 命令于是落进只读分支，回 `ok:true` 而 `count:0`：**什么都没写却报成功**，
+ * 「每撞一次坑先落经验」整条链路静默断掉（与 §4-136 假绿同族：沉默的失败比报错更贵）。
+ */
+public func notesMissingActionErrorOf(body: String, rule: String): String {
+    if (body.trimAscii().size > 0 || rule.trimAscii().size > 0) {
+        return "notes 缺少 --action：写经验要显式给 `--action append`（本次只读到 --body/--body-file 或 --rule），" +
+            "否则本命令只读、不会写任何经验"
+    }
+    return ""
+}
+
+/** 取第一个非空参数（别名：`--body` 与 `--body-file` 同义——任务书里两种写法都出现过） */
+func firstNonEmptyArgOf(args: JsonObject, a: String, b: String): String {
+    let x = argStr(args, a, "")
+    if (x.size > 0) {
+        return x
+    }
+    return argStr(args, b, "")
+}
+
+/**
  * t2h:notes —— 本地经验的读写（0.39.55）。
  *
  * 为什么给 agent 一条命令而不是只让它写文件：**落档形状要一致**（四段 + 次数），
@@ -7344,7 +7373,8 @@ public func build(): AppSpec {
  *
  * action：
  *   · `list`（默认）：列出已有经验 + 一句话摘要
- *   · `append`：写一条（`title` / `symptom` / `cause` / `repro` / `fix`，或 `--body <json 文件>`）——**同标题只累加次数**
+ *   · `append`：写一条（`title` / `symptom` / `cause` / `repro` / `fix`，或 `--body`/`--body-file <json 文件>`；
+ *     `--rule <规则号或指纹号>` 会写成条目里的「入库：」行，那是 `archive` 的判据）——**同标题只累加次数**
  *   · `export`：整份 markdown（给报告/人看）
  *   · `suggest`：**筛候选**（次数 ≥2 + 四段齐全 + 未入库）→ 写 `<工程>-candidates.md` + 逐条 PR 正文草稿；
  *     未命中台账里同签名 ≥3 次的也一并列出来（0.39.56）
@@ -7371,10 +7401,22 @@ public class NotesCommand <: CommandHandler {
         }
         let projName = sanitizeFileName(projectNameOf(path))
         var res = JsonObject()
+        // 0.39.150：只读分支不许吞掉写入意图（任务书曾教过漏 `--action append` 的写法）
+        if (rawAction.size == 0) {
+            let miss = notesMissingActionErrorOf(firstNonEmptyArgOf(args, "body", "body-file"),
+                argStr(args, "rule", ""))
+            if (miss.size > 0) {
+                res.put("ok", JsonBool(false))
+                res.put("error", JsonString(miss))
+                eprintln("[lingqu][notes] ${miss}")
+                return res
+            }
+        }
         if (action == "append") {
             let n = LessonNote()
-            // `--body <文件>`：内容走文件（**中文参数在 Windows 上过不了 argv**，见 AGENTS §4-119）
-            let bodyPath = argStr(args, "body", "")
+            // `--body` / `--body-file`（后者是任务书里的写法，0.39.150 起同义）；
+            // 内容走文件：**中文参数在 Windows 上过不了 argv**，见 AGENTS §4-119
+            let bodyPath = firstNonEmptyArgOf(args, "body", "body-file")
             var bodyUsed = false
             if (bodyPath.size > 0) {
                 var bodyText = ""
@@ -7404,6 +7446,14 @@ public class NotesCommand <: CommandHandler {
                 n.cause = argStr(args, "cause", "")
                 n.repro = argStr(args, "repro", "")
                 n.fix = argStr(args, "fix", "")
+            }
+            // `--rule`：这条经验对应哪个规则/指纹 ⇒ 直接写成条目里的「入库：」行。
+            // 为什么必须实现它（0.39.150 实测）：`archive --to user` 的判据就是这一行
+            // （`splitArchivedLessons` 只认它），以前只教参数不实现 ⇒ 归档永远回
+            // 「本工程还没有已归档的经验」⇒ 用户级经验本永远空 ⇒ 任务书那节永远不出现。
+            let ruleRef = argStr(args, "rule", "").trimAscii()
+            if (ruleRef.size > 0) {
+                n.archivedRef = ruleRef
             }
             n.project = projName
             n.at = nowText()

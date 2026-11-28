@@ -549,7 +549,7 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     }
 
     d += "## 纪律（说错一句就露馅）\n"
-    d += "- **每撞一次坑，先落经验再重试**：失败后第一件事是 `lingqu-cli notes --path . --rule <规则号或指纹号> --body-file <文件>`（或 `diagnose`），\n"
+    d += "- **每撞一次坑，先落经验再重试**：失败后第一件事是 `lingqu-cli notes --action append --path . --rule <规则号或指纹号> --body-file <文件>`（或 `diagnose`），\n"
     d += "  然后再动代码/重跑。跑完一轮 `.lingqu/notes/<工程>.md` 里没东西 = 这轮的坑白踩了（2026-11-19 实测：\n"
     d += "  EcoPaste 连撞 4 次坑、notes 与 diagnose 目录全空，飞轮等于没转）。\n"
     d += "- **`build` 长时间没输出先看是不是在下载依赖**：`rustc.exe` 一个都没起、cargo CPU 近 0、\n"

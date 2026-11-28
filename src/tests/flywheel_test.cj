@@ -310,6 +310,18 @@ public func truncateUtf8BytesKeepsCharsWhole(): Unit {
 }
 
 @Test
+public func clippedUtf8MarksTruncation(): Unit {
+    // 被截了必须看得出来（否则摘要里「…否则 h」这种半句会被当成原文，0.39.150 实测）
+    @Assert(clippedUtf8Of("中文截断测试", 5), "中…")
+    @Assert(clippedUtf8Of("中文截断测试", 6), "中文…")
+    // 没截就不许加省略号（别把完整内容伪装成"还有下文"）
+    @Assert(clippedUtf8Of("abc", 10), "abc")
+    @Assert(clippedUtf8Of("中文", 6), "中文")
+    // 截到 0 字节时也不许拼出光秃秃的「…」
+    @Assert(clippedUtf8Of("中文", 2), "…")
+}
+
+@Test
 public func lessonsDigestIsCappedByItemsAndBytes(): Unit {
     // 空经验本 → 空串（调用方据此让整节不出现，不许留空标题）
     @Assert(lessonsDigestFromText("", LESSON_DIGEST_MAX), "")

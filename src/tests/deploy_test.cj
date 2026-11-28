@@ -210,3 +210,29 @@ public func testJudgeDeployOrderedFailures(): Unit {
     @Assert(crashed.reason.contains("崩溃"), true)
     @Assert(crashed.nextStep.contains("faultlog"), true)
 }
+// ===== 0.39.150：Offline / Unauthorized 的目标不算"在线设备" =====
+
+@Test
+public func offlineTargetIsNotCountedAsOnline(): Unit {
+    // 现场原文：`hdc list targets` 是 [Empty]，`-v` 却有一条 Offline，任务书曾据此写「真机：在线」
+    let verboseOffline = "192.168.3.13:46163\t\tTCP\tOffline\tunknown...\thdc\n"
+    let devs = parseHdcTargets(verboseOffline)
+    @Assert(devs.size, 1)
+    // ① state 必须是 Offline（旧实现取行尾字段，拿到的是 hdc）
+    @Assert(devs[0].state, "Offline")
+    @Assert(devs[0].usable(), false)
+    // ② 在线判据只认能用的
+    @Assert(onlineHdcTargetsOf(verboseOffline).size, 0)
+    // ③ -v 只有 Offline、纯列表 [Empty] ⇒ 合并后仍是 0 台能用
+    @Assert(onlineHdcTargetsOf(mergeHdcTargetsTextOf(verboseOffline, "[Empty]\n")).size, 0)
+    // ④ connect-key 不许再选那台离线的（旧行为会拿它去 hdc -t，必然 Not match target founded）
+    @Assert(resolveDeviceKeyOf(verboseOffline, ""), "")
+    // ⑤ 对照组：Connected 就算在线，且沿用落档号
+    let verboseOk = "192.168.3.13:46163\t\tTCP\tConnected\tunknown...\thdc\n"
+    @Assert(onlineHdcTargetsOf(verboseOk).size, 1)
+    @Assert(resolveDeviceKeyOf(verboseOk, "192.168.3.13:46163"), "192.168.3.13:46163")
+    // ⑥ 未授权（Unauthorized）同样不算在线
+    @Assert(onlineHdcTargetsOf("X1\t\tUSB\tUnauthorized\tunknown...\thdc\n").size, 0)
+    // ⑦ 老口径保留：列表整段空白（hdc 不可用）时沿用落档，不凭空说"没有设备"
+    @Assert(resolveDeviceKeyOf("", "3QC0124B20000048"), "3QC0124B20000048")
+}

@@ -505,3 +505,17 @@ public func testRecordDiagnoseMissAccumulates(): Unit {
     // 台账必须是**一条一行**的紧凑 JSONL（美化输出会摊成多行，按行计数就废了）
     @Assert(text.split("\n", -1).size, 4)
 }
+
+// ===== 0.39.150：notes 缺 --action 时不许"静默只读" =====
+
+@Test
+public func notesWithoutActionButWithWriteArgsIsRejected(): Unit {
+    // 任务书「纪律」曾教过漏 `--action append` 的写法：那样会落进只读分支，
+    // 回 ok:true 而 count:0——什么都没写却报成功（0.39.150 实测）。
+    @Assert(notesMissingActionErrorOf("E:/tmp/note-in.json", "").size > 0, true)
+    @Assert(notesMissingActionErrorOf("", "R2-PORT-015").size > 0, true)
+    @Assert(notesMissingActionErrorOf("E:/tmp/n.json", "FP-021").size > 0, true)
+    // 纯读命令（list / digest / fp-list）不带写入参数，必须照常通过
+    @Assert(notesMissingActionErrorOf("", ""), "")
+    @Assert(notesMissingActionErrorOf("  ", "  "), "")
+}

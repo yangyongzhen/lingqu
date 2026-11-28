@@ -17,22 +17,74 @@ import stdx.encoding.json.*
  * 10106102（锁屏拒绝自动解锁）。
  */
 
-/** 一个在线设备 */
+/** hdc 列表里的一个目标（**可能是 Offline / Unauthorized**，用 `usable()` 判能不能用） */
 public class HdcDevice {
     public var serial: String
-    public var state: String   // 通常为空；`Connected` / `Offline` 之类原样保留
+    public var state: String   // 通常为空；`Connected` / `Offline` / `Unauthorized` 原样保留
 
     public init(serial: String, state: String) {
         this.serial = serial
         this.state = state
     }
 
+    /**
+     * 这个目标**现在**能不能用。
+     *
+     * 起因（0.39.150 实测）：`hdc list targets` 回 `[Empty]`，`hdc list targets -v` 里却有一条
+     * `192.168.3.13:46163  TCP  Offline` ——旧解析把 state 取成行尾的 `hdc`，于是这条被判成
+     * 「有设备」⇒ 任务书写「真机：**在线**」⇒ agent 拿着一条连不上的设备去 deploy，
+     * 白烧轮次后才失败。`Offline` / `Unauthorized` / `Unknown` 都不是"在线"。
+     */
+    public func usable(): Bool {
+        let s = this.state.trimAscii()
+        if (s.size == 0) {
+            return true
+        }
+        if (s == "Offline" || s == "Unauthorized" || s == "Unknown") {
+            return false
+        }
+        return true
+    }
+
     public func toJson(): JsonObject {
         var o = JsonObject()
         o.put("serial", JsonString(this.serial))
         o.put("state", JsonString(this.state))
+        o.put("usable", JsonBool(this.usable()))
         return o
     }
+}
+
+/**
+ * 纯函数：从 `hdc list targets -v` 的一行里取**状态**字段。
+ *
+ * `-v` 的形态是 `<serial>\t<TCP|USB>\t<Connected|Offline|Unauthorized>\t<...>\thdc`，
+ * 所以"取最后一个字段"拿到的是 `hdc`（0.39.150 实测的真凶）。这里按已知状态词扫描。
+ */
+public func hdcStateOfPartsOf(parts: Array<String>): String {
+    var i: Int64 = 1
+    while (i < Int64(parts.size)) {
+        let p = parts[i].trimAscii()
+        if (p == "Connected" || p == "Offline" || p == "Unauthorized" || p == "Ready" || p == "Unknown") {
+            return p
+        }
+        i += 1
+    }
+    if (parts.size > 1) {
+        return parts[parts.size - 1].trimAscii()
+    }
+    return ""
+}
+
+/** 纯函数：只留**现在能用**的目标（`Offline` 的那条是"登记过但连不上"） */
+public func onlineHdcTargetsOf(text: String): ArrayList<HdcDevice> {
+    let out = ArrayList<HdcDevice>()
+    for (d in parseHdcTargets(text)) {
+        if (d.usable()) {
+            out.add(d)
+        }
+    }
+    return out
 }
 
 /** 解析 `hdc list targets`（含 -v 形态）→ 只留真设备 */
@@ -57,10 +109,9 @@ public func parseHdcTargets(text: String): ArrayList<HdcDevice> {
         if (isComPort(serial)) {
             continue
         }
-        var state = ""
-        if (parts.size > 1) {
-            state = parts[parts.size - 1].trimAscii()
-        }
+        // `-v` 形态：`<serial>\t<TCP|USB>\t<Connected|Offline|Unauthorized>\t<...>\thdc`
+        // —— 以前取「最后一个字段」得到的是 `hdc`，于是 Offline 的目标也被当成在线（0.39.150 实测）
+        let state = hdcStateOfPartsOf(parts)
         // `127.0.0.1:5555` 这类 TCP 目标后面常跟 Connected/Offline
         var exists = false
         for (d in out) {
@@ -91,17 +142,24 @@ public func parseHdcTargets(text: String): ArrayList<HdcDevice> {
  * @return 可用的 connect-key；解析不到在线设备时沿用 `recorded`（不比旧行为更差）
  */
 public func resolveDeviceKeyOf(liveTargets: String, recorded: String): String {
-    let devices = parseHdcTargets(liveTargets)
-    if (devices.size == 0) {
+    let parsed = parseHdcTargets(liveTargets)
+    let online = onlineHdcTargetsOf(liveTargets)
+    if (online.size == 0) {
+        // 列表里明确有目标、但**一台都用不了**（Offline / Unauthorized）⇒ 就是没有可用设备，
+        // 别拿落档旧号硬试（`hdc -t <离线号>` 一律回 `Not match target founded`，§4-184 同族）
+        if (parsed.size > 0) {
+            return ""
+        }
+        // 列表整段空白（hdc 没跑起来 / 老版本不给列表）⇒ 没有证据，只好沿用落档
         return recorded
     }
-    for (d in devices) {
+    for (d in online) {
         if (d.serial == recorded) {
             // 仍然在线 → 用落档那份，历史证据与本次取证的键保持一致
             return recorded
         }
     }
-    return devices[0].serial
+    return online[0].serial
 }
 
 /**
@@ -117,10 +175,12 @@ public func resolveDeviceKeyOf(liveTargets: String, recorded: String): String {
  * 两者都没有时把 `-v` 原样返回（保留串口噪声，便于事后看现场）。
  */
 public func mergeHdcTargetsTextOf(verbose: String, plain: String): String {
-    if (parseHdcTargets(verbose).size > 0) {
+    // 0.39.150：判据从"解析出设备"改成"解析出**能用**的设备"——`-v` 里那条 Offline
+    // 不算有设备，否则会把「连不上」写成「真机在线」（实测：list 是 [Empty]、-v 是 Offline，任务书却写在线）
+    if (onlineHdcTargetsOf(verbose).size > 0) {
         return verbose
     }
-    if (parseHdcTargets(plain).size > 0) {
+    if (onlineHdcTargetsOf(plain).size > 0) {
         return plain
     }
     return verbose

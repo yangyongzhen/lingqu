@@ -5,6 +5,46 @@
 
 ---
 
+## [0.39.151] - 2026-11-28
+
+**真实跑一轮 autoport，任务书里那两条命令/判据当场露馅 —— 「先落经验」写不成、「真机在线」是假的。**
+
+### Fixed
+- **`notes --action append` 的三个缺口让「每撞一次坑先落经验」静默失效**。任务书教的是
+  `notes --path . --rule <规则号> --body-file <文件>`，照原样跑：回包 **`ok: true` 而 `count: 0`**——
+  ① 命令缺 `--action append` ⇒ 落进只读分支（缺省 `list`）却仍报成功；② `--body-file` 不被识别（只认 `--body`）；
+  ③ **`--rule` 压根没实现**，而 `archive --to user` 的判据正是条目里那行 `- 入库：<引用>` ⇒ 用户级经验本
+  永远空 ⇒ 0.39.150 新加的「已入库经验」那节永远不出现（现场：`count: 0` + `archivedNotes: 0`）。
+  处置：`--body-file` 作 `--body` 别名；`--rule` 写成 `archivedRef`；**缺 `--action` 却带写入参数时明确
+  `ok:false`**（纯函数 `notesMissingActionErrorOf` + 单测）；任务书那条命令补 `--action append`。
+- **`hdc list targets -v` 里 `Offline` 的目标被当成「真机在线」**。现场：`hdc list targets` 是 `[Empty]`、
+  `-v` 只有 `192.168.3.13:46163 TCP **Offline**`，而任务书写「真机：**在线** ⇒ deploy/verify/probe 都要跑」。
+  真凶是 state 取错字段——`-v` 形态是 `<serial> TAB <TCP|USB> TAB <状态> TAB <…> TAB hdc`，旧实现取
+  「最后一个字段」拿到的是 **`hdc`**，于是任何目标都"有状态"⇒ 判成在线。处置：`hdcStateOfPartsOf`
+  按已知状态词扫描；`HdcDevice.usable()` 把 `Offline`/`Unauthorized`/`Unknown` 判为不可用；
+  `onlineHdcTargetsOf` 供 `mergeHdcTargetsTextOf` / `resolveDeviceKeyOf` / `migrateHasDevice` / 部署选设备
+  统一使用（`serialOk` 也不再信任显式 serial——它多半就是那条离线的）。
+- **摘要截断处没有标记**（0.39.150 的尾巴）：标题/正文被切成「…否则 h」「…不要手」像原文就这么断。
+  新增 `clippedUtf8Of`（截了加「…」），并把标题/正文配额放宽到 96 / 216 字节。
+
+### Changed
+- 任务书「## 纪律」里那条落经验命令补 `--action append`；`notes` 的 action 注释同步真实参数。
+
+### 证据
+- 单测 **669 → 672**（`notesWithoutActionButWithWriteArgsIsRejected`、`offlineTargetIsNotCountedAsOnline`、
+  `clippedUtf8MarksTruncation`）；门禁六项全绿：`cjpm build` 0 warning · `cjpm test` 672/672 ·
+  `cj-tauri check` `com.lingqu.migrator@0.39.151` · 页面脚本 · `targets/desktop` 与 `cli/` 均 0 warning。
+- 真实链路实测（`LINGQU_FLYWHEEL_DIR` 指向临时工程）：`notes --action append --rule R2-PORT-015 --body-file …`
+  → `ok:true / added:…`；`archive --to user` → **`archivedNotes: 3` / 用户级经验 3 条**；
+  `notes --path . --rule FP-021 --body-file …`（漏 action）→ **`ok:false` + 明确错误**（修前是 `ok:true / count:0`）。
+- 真机判据实测：同一份 `-v` 输出，修前任务书写「真机：在线」，修后写「真机：**不在线**」。
+
+### 未验
+- 本轮 autoport 的**行为读数**记在 `docs/进度记录.md` 0.39.151 节（含"摘要有没有真的改变 agent 的选择"，
+  本轮样本没撞到那三条经验对应的症状 ⇒ 客观未证，不编结论）。
+
+---
+
 ## [0.39.150] - 2026-11-28
 
 **已入库经验第一次随任务书下发 —— 飞轮从「攒下来」走到「用起来」。**

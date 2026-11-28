@@ -237,8 +237,8 @@ public func mergeArchivedIntoUserBook(projDir: String, projName: String): String
 /** 任务书里「已入库经验摘要」的条数上限 */
 public let LESSON_DIGEST_MAX: Int64 = 8
 /** 每条摘要的标题 / 正文截断字节数（**按完整字符切**，不许切出半个中文） */
-public let LESSON_DIGEST_TITLE_BYTES: Int64 = 60
-public let LESSON_DIGEST_BODY_BYTES: Int64 = 180
+public let LESSON_DIGEST_TITLE_BYTES: Int64 = 96
+public let LESSON_DIGEST_BODY_BYTES: Int64 = 216
 /** 整段摘要的字节上限：宁可少给两条，也不能把任务书撑到被丢弃 */
 public let LESSON_DIGEST_MAX_BYTES: Int64 = 1800
 
@@ -287,9 +287,24 @@ public func truncateUtf8BytesOf(s: String, maxBytes: Int64): String {
     return String.fromUtf8(bs[0..i])
 }
 
+/**
+ * 纯函数：按字符截断，**被截了就加省略号**。
+ *
+ * 为什么不直接用 `truncateUtf8BytesOf`：摘要里出现「…否则 h」「…不」这种半句话，
+ * 读的人会以为原文就这么断（0.39.150 实测），排除故障时反而误导；
+ * 加个「…」能一眼看出"这里被截了，细节去查入库那条规则"。
+ */
+public func clippedUtf8Of(s: String, maxBytes: Int64): String {
+    let t = truncateUtf8BytesOf(s, maxBytes)
+    if (t.size >= s.size) {
+        return t
+    }
+    return t + "…"
+}
+
 /** 纯函数：一条经验的摘要行（标题 + **修法**，修法空就退回根因；已入库的带上引用） */
 public func lessonsDigestLineOf(n: LessonNote): String {
-    let title = truncateUtf8BytesOf(oneLineOf(n.title), LESSON_DIGEST_TITLE_BYTES)
+    let title = clippedUtf8Of(oneLineOf(n.title), LESSON_DIGEST_TITLE_BYTES)
     if (title.size == 0) {
         return ""
     }
@@ -297,7 +312,7 @@ public func lessonsDigestLineOf(n: LessonNote): String {
     if (body.size == 0) {
         body = oneLineOf(n.cause)
     }
-    body = truncateUtf8BytesOf(body, LESSON_DIGEST_BODY_BYTES)
+    body = clippedUtf8Of(body, LESSON_DIGEST_BODY_BYTES)
     var s = "- **" + title + "**"
     if (body.size > 0) {
         s += "：" + body
