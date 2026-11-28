@@ -16,12 +16,14 @@ import std.fs.*
  */
 
 /** setup 块内要注入的调用行（照 habit-tree 迁移后的实际形态） */
-func setupWiringLines(): Array<String> {
+public func setupWiringLines(): Array<String> {
     return [
         "            // === lingqu: R2-PORT-010 ===",
-        "            install_panic_hook(app);",
+        // 0.39.156 真机实测：**先建目录、再装 hook**。反过来的话，崩溃那一刻 hook 自己
+        // 连日志都写不进去（沙箱目录还不存在）⇒ 白屏闪退只剩一句 `exit with signal:6`。
         "            let dir = resolve_app_data_dir(app)?;",
         "            std::fs::create_dir_all(&dir)?;",
+        "            install_panic_hook(app);",
     ]
 }
 

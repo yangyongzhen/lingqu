@@ -5,6 +5,43 @@
 
 ---
 
+## [0.39.156] - 2026-11-28
+
+**真机「白屏一闪就退」定位到根因：setup 里第二处 `app_data_dir()` + panic hook 装得太早 —— 规则补上，下次不再踩。**
+
+### Fixed
+- **`R2-PORT-009` 只注入 helper，不改写已有的裸调用**（真机实测的真空洞）。juCang 的 setup 里
+  `resolve_app_data_dir` 建完目录后，**又**用桌面语义的 `app.path().app_data_dir()` 取了一次去开 SQLite；
+  鸿蒙上它**不报错**却返回 `/storage/Users/currentUser/…`（不可写）⇒ 开库失败 ⇒ setup 返回 `Err`
+  ⇒ tauri panic ⇒ 进程 abort（`appspawn … exit with signal:6`），而 hilog 一行线索都不留。
+  现在：`libRsOutcome` 在"helper 已存在但还有裸调用"时也落一次改写
+  （纯函数 `bareAppDataDirCallsOf` / `rewriteAppDataDirCallsOf`，**跳过 helper 自己的函数体**
+  ——否则会把 helper 改成递归；机械替换安全，因为两者返回类型与错误类型完全一致；幂等）。
+- **`R2-PORT-010` 接线顺序把 hook 放在建目录之前** ⇒ 崩溃那一刻 hook 连 `panic.log` 都写不进去，
+  于是"白屏闪退"只剩一句 signal:6。接线模板改成 **`let dir = resolve_app_data_dir(app)?`
+  → `create_dir_all(&dir)?` → `install_panic_hook(app)`**。
+- 单测 **678 → 680**（`appDataDirBareCallsAreRewrittenOutsideHelper`、
+  `setupWiringCreatesDirBeforeInstallingHook`）。
+
+### 证据（真机 A/B，同一台设备 192.168.3.13:46163）
+| 构建 | 改动 | 结果 |
+|---|---|---|
+| 18:20 | 只给窗口加 `label: "jucang-main"`（§4-203 假设） | **仍 abort**：`pid 44204 exit with signal:6`，无进程 |
+| 18:22 | 上述 + db 目录改走 `resolve_app_data_dir`、hook 挪到建目录之后 | **起来了**：`OnPageEnd httpStatusCode:200`，主进程 + render 进程存活（46135 / 46468） |
+
+定位链（都是实测读数）：`hilog` 里 `appspawn … exit with signal:6`（SIGABRT）+ 沙箱**没有**
+`panic.log` / `panic-early.log` + `hilog` 缓冲（11-26 起）里**零** `OnPageEnd`/`loadUrl` ⇒
+**这份 HAP 从来没渲染成功过**，15:47 那次 `started=true` 是 §4-208 的"旧实例还在前台"假象；
+`si_code(-6)`（SI_TKILL）说明是进程自己 abort，不是收到外部信号。
+
+### 未验 / 边界
+- 这次两个改动同批构建，严格说无法百分百分离"db 路径"与"hook 顺序"的贡献；但 hook 顺序只影响
+  **日志**，行为差异只能来自 db 路径 ⇒ 归因成立。
+- 探针在渲染成功的应用上跑通（`probe --auto --max 8`：1 pass「最新↓」+ 6 unknown「点了没反应，
+  可能是没点中，不据此判不可用」），**这轮没有再跑 verify**，可用率数字未更新。
+
+---
+
 ## [0.39.155] - 2026-11-28
 
 **无界面轮终于有"眼睛"了：`autoport --run` 写状态与进度原文，`--status` 只读回看。**

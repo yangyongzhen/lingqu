@@ -225,3 +225,56 @@ public func testGuideOutcomesDetectRealCalls(): Unit {
         @Assert(outs2[0].applied, false)
     }
 }
+
+// ===== 0.39.156：R2-PORT-009 必须把已有裸 app_data_dir() 调用也改掉（juCang 真机白屏闪退的根因）=====
+
+@Test
+public func appDataDirBareCallsAreRewrittenOutsideHelper(): Unit {
+    let src = "fn resolve_app_data_dir(app: &tauri::App) -> Result<PathBuf, tauri::Error> {\n" +
+        "    #[cfg(not(target_env = \"ohos\"))]\n" +
+        "    {\n" +
+        "        app.path().app_data_dir()\n" +
+        "    }\n" +
+        "}\n" +
+        "fn setup(app: &tauri::App) {\n" +
+        "    let dir = app.path().app_data_dir().unwrap();\n" +
+        "}\n"
+    // ① helper 自己那处不算裸调用（否则会把 helper 改成递归）
+    @Assert(bareAppDataDirCallsOf(src), 1)
+    let fixed = rewriteAppDataDirCallsOf(src)
+    // ② helper 内保持原样，外面那处改走 resolve_app_data_dir
+    @Assert(fixed.contains("        app.path().app_data_dir()\n"), true)
+    @Assert(fixed.contains("let dir = resolve_app_data_dir(app)"), true)
+    // ③ 幂等：再跑不再变化，也没有可改的了
+    @Assert(rewriteAppDataDirCallsOf(fixed), fixed)
+    @Assert(bareAppDataDirCallsOf(fixed), 0)
+    // ④ 没有 helper 时（规则首次落地那轮）全部改写
+    let noHelper = "let a = app.path().app_data_dir()?;\n"
+    @Assert(bareAppDataDirCallsOf(noHelper), 1)
+    @Assert(rewriteAppDataDirCallsOf(noHelper).contains("resolve_app_data_dir(app)?"), true)
+}
+
+@Test
+public func setupWiringCreatesDirBeforeInstallingHook(): Unit {
+    // hook 必须装在建目录之后——否则崩溃那一刻它自己也写不进 panic.log（只剩 signal:6）
+    let lines = setupWiringLines()
+    var dirAt: Int64 = -1
+    var createAt: Int64 = -1
+    var hookAt: Int64 = -1
+    var i: Int64 = 0
+    for (l in lines) {
+        if (l.contains("let dir = resolve_app_data_dir")) {
+            dirAt = i
+        }
+        if (l.contains("create_dir_all")) {
+            createAt = i
+        }
+        if (l.contains("install_panic_hook")) {
+            hookAt = i
+        }
+        i += 1
+    }
+    @Assert(dirAt >= 0, true)
+    @Assert(createAt > dirAt, true)
+    @Assert(hookAt > createAt, true)
+}

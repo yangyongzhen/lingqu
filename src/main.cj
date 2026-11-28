@@ -1476,7 +1476,10 @@ public class PortCommand <: CommandHandler {
                         let p = if (exists(Path("${srcTauriDir}/src/lib.rs"))) { "${srcTauriDir}/src/lib.rs" } else { "${srcTauriDir}/src/main.rs" }
                         backupFile(p, "${backupPath}/${BAK_LIBRS}")
                         let old = lenientUtf8(File.readFrom(p))
-                        File.writeTo(p, (old + o.after).toArray())
+                        // 0.39.156：注入 helper 之外，**还要把已有的裸调用改掉**——
+                        // juCang 真机实测：setup 里第二次用 `app.path().app_data_dir()` 开 SQLite，
+                        // 鸿蒙上拿到不可写路径且不报错 ⇒ setup Err ⇒ SIGABRT 白屏闪退、hilog 零线索。
+                        File.writeTo(p, rewriteAppDataDirCallsOf(old + o.after).toArray())
                         wroteAny = true
                     }
                     if (o.id == "R2-PORT-010" && o.applied) {

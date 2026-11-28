@@ -52,6 +52,89 @@ public func libRsInjectionBlock(): String {
     return s
 }
 
+/** 读源文件文本（读不到给空串——"读不到"不是"没有裸调用"以外的另一种结论） */
+func readPortTextOf(path: String): String {
+    try {
+        return String.fromUtf8(File.readFrom(path))
+    } catch (e: Exception) {
+        let _ = e
+        return ""
+    }
+}
+
+/**
+ * helper `fn resolve_app_data_dir` 的函数体区间（首个 `{` 到配平的 `}`）；找不到给 (-1,-1)。
+ *
+ * 为什么需要区间：改写裸调用时必须**跳过 helper 自己**——它的桌面分支本来就要调
+ * `app.path().app_data_dir()`，一起改会把 helper 改成递归。括号按字节数，够用；
+ * 已知局限：函数体里若有含花括号的字符串会被数错（本 helper 没有）。
+ */
+func helperBodyRangeOf(text: String): (Int64, Int64) {
+    match (text.indexOf("fn resolve_app_data_dir")) {
+        case Some(s) =>
+            let bs = text.toArray()
+            var i = s
+            while (i < Int64(bs.size) && Int64(bs[i]) != 123) {
+                i += 1
+            }
+            if (i >= Int64(bs.size)) {
+                return (-1, -1)
+            }
+            var depth: Int64 = 0
+            var j = i
+            while (j < Int64(bs.size)) {
+                let b = Int64(bs[j])
+                if (b == 123) {
+                    depth += 1
+                } else if (b == 125) {
+                    depth -= 1
+                    if (depth == 0) {
+                        return (i, j)
+                    }
+                }
+                j += 1
+            }
+            return (-1, -1)
+        case None => return (-1, -1)
+    }
+}
+
+/**
+ * 纯函数：**helper 之外**还有几处裸 `app.path().app_data_dir()`（0.39.156 真机实测的缺口）。
+ *
+ * 现场：R2-PORT-009 只注入了 helper，juCang 的 setup 里**第二次**用裸 `app_data_dir()` 开 SQLite ⇒
+ * 鸿蒙上拿到 `/storage/Users/currentUser/…`（不可写、且**不报错**）⇒ 开库失败 ⇒ setup 返回 Err
+ * ⇒ 进程 abort（`signal:6`），hilog 一行不留。规则不把已有的裸调用改掉，等于这一条没落地。
+ */
+public func bareAppDataDirCallsOf(text: String): Int64 {
+    let needle = "app.path().app_data_dir()"
+    let (hs, he) = helperBodyRangeOf(text)
+    if (hs < 0) {
+        return Int64(text.split(needle, -1).size) - 1
+    }
+    let before = text[0..hs]
+    let after = text[(he + 1)..]
+    return Int64(before.split(needle, -1).size) + Int64(after.split(needle, -1).size) - 2
+}
+
+/**
+ * 纯函数：把 helper 之外的裸 `app.path().app_data_dir()` 改写成 `resolve_app_data_dir(app)`。
+ *
+ * 为什么可以机械替换：两者**返回类型与错误类型完全相同**（`Result<PathBuf, tauri::Error>`），
+ * 而 `resolve_app_data_dir` 在鸿蒙分支固定给沙箱路径、桌面分支本来就走 `app_data_dir()`。
+ * 幂等：改写后的文本不再含 needle。
+ */
+public func rewriteAppDataDirCallsOf(text: String): String {
+    let needle = "app.path().app_data_dir()"
+    let repl = "resolve_app_data_dir(app)"
+    let (hs, he) = helperBodyRangeOf(text)
+    if (hs < 0) {
+        return text.replace(needle, repl)
+    }
+    return text[0..hs].replace(needle, repl) + text[hs..(he + 1)] +
+        text[(he + 1)..].replace(needle, repl)
+}
+
 /**
  * R2-PORT-009：lib.rs 注入沙箱路径解析 + panic hook（T4-4）。
  * 幂等判定：文件里已有 `resolve_app_data_dir` 就跳过。
@@ -62,7 +145,18 @@ public func libRsOutcome(path: String): RuleOutcome {
     var o = RuleOutcome("R2-PORT-009", false, "", "", block)
     o.tier = T_AUTO
     if (fileContains(path, "resolve_app_data_dir")) {
-        o.note = "lib.rs 已有 resolve_app_data_dir——跳过"
+        // 0.39.156：helper 已注入 ≠ 这条规则落地了——**已有的裸调用也得改掉**。
+        // juCang 现场：helper 在（009 早先跑过），但 setup 里第二处 `app.path().app_data_dir()`
+        // 还在 ⇒ 真机白屏闪退。这里补一次改写（after 留空，只做原地替换）。
+        let text = readPortTextOf(path)
+        let bare = bareAppDataDirCallsOf(text)
+        if (bare > 0) {
+            o.applied = true
+            o.after = ""
+            o.note = "已有 resolve_app_data_dir；本次把 ${bare} 处裸 `app.path().app_data_dir()` 改走它（鸿蒙上那是不可写路径）"
+            return o
+        }
+        o.note = "lib.rs 已有 resolve_app_data_dir，且没有裸 app_data_dir() 调用——跳过"
         return o
     }
     if (!fileContains(path, "fn run()")) {
@@ -70,7 +164,7 @@ public func libRsOutcome(path: String): RuleOutcome {
         return o
     }
     o.applied = true
-    o.note = "lib.rs 注入沙箱路径解析 + panic hook；**还需在 setup 里接线调用（guide）**"
+    o.note = "lib.rs 注入沙箱路径解析 + panic hook，并把裸 app_data_dir() 调用改走它；**还需在 setup 里接线调用（guide）**"
     return o
 }
 
