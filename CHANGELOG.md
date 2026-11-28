@@ -5,6 +5,49 @@
 
 ---
 
+## [0.39.160] - 2026-11-28
+
+**`platform-api` 判据升级为「逐处命中点判定」——查完发现 juCang 这一条是**真缺口**，不是假红。**
+
+### Changed
+- 平台 API 的落地判定以前有两条互不通气的路：**命令层**（`related>0` 时按"碰到它的命令"算，
+  一个 API 只判命中它的命令）与**单点兜底**（`related==0` 时只判 `sites[0]`）。
+  可一个 API 常有**多处**命中点，两套都可能漏。现在在命令层之后补一遍
+  `platformLandedOf`：按 `platform[].sites` **逐处**读源码 → `judgePlatformSiteWith`
+  （沿用 0.39.107/129/131 的判序与追两层）→ **任一处没落地就是没落地**，并把第一处位置与原因写进 note；
+  命令层结论保留在 note 里当补充（两套证据都能看到）。只判 `.rs`；前端命中点计入"另 N 处判不了"。
+- 纯函数 `platformLandedNoteOf(judged, landed, nonRs, gapNote)`：
+  一处都判不了 ⇒ 仍未落地 **but** note 明说"静态判据不适用，需真机实测"（保守，不虚增）；
+  部分空壳 ⇒ 点名第一处；全落地 ⇒ `limit`。
+- 单测 **683 → 684**（`platformLandedNoteDistinguishesGapFromUnjudgeable` 四种形态）。
+
+### 查证的结论（比"修个假红"重要）
+我原以为 `app_data_dir` 是 R2-PORT-009 注入的 helper 被误判。**查完不是**：juCang 的 `app_data_dir`
+有 **5 处**命中点，helper `resolve_app_data_dir`（`lib.rs:956`）与 setup（`lib.rs:915`）确实落了地，
+但另三处**没有**：
+- `src-tauri/src/cache.rs:79`（`cache_dir`）
+- `src-tauri/src/lib.rs:337`（`save_article`）
+- `src-tauri/src/lib.rs:356`
+
+它们直接调桌面语义的 `app.path().app_data_dir()` ⇒ 鸿蒙真机上拿到 `/storage/Users/currentUser/…`
+（不可写）⇒ **文章/视频缓存写不进去**。所以 `platform-api = fail` 是**真的**，旧判据只是没把位置说清。
+
+### 顺带暴露的规则缺口（未修，已记）
+`R2-PORT-009` 只在 `lib.rs`/`main.rs` 里改写裸调用；`cache.rs` 这类**别的文件**它够不着。
+而且**不能机械照搬**：helper 收的是 `&tauri::App`，而 `cache.rs` 拿的是 `&AppHandle`（类型不同）。
+正解是再注入一个 `&AppHandle` 版本的 helper 并改写其他文件的调用——属规则改动，不在本版。
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **684/684** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+- juCang 复跑读数见 `docs/进度记录.md` 0.39.160 节。
+
+### 未验
+- 只按 juCang 一个样本看过；其余样本（habit-tree / m3u8dl / EcoPaste / dbx / note-gen-2）的
+  `platform-api` 结论会一起变，需按 D-020 重跑才能进报告与矩阵。
+
+---
+
 ## [0.39.159] - 2026-11-28
 
 **`probe --auto` 的结果终于有人读了：冒烟单列进 verify，仍不进 A4 分母。**

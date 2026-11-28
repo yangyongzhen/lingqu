@@ -1104,3 +1104,27 @@ public func smokeProbesStayOutOfA4Denominator(): Unit {
     }
     @Assert(st.total, transplant)
 }
+
+// ===== 0.39.160：platform-api 不再"没有探针就必 fail"（静态落地判定）=====
+
+@Test
+public func platformLandedNoteDistinguishesGapFromUnjudgeable(): Unit {
+    // ① 一处都判不了（命中点全在前端文件）⇒ 未落地，但 note 要说清"判不了"而不是"空壳"
+    let (ok0, n0) = platformLandedNoteOf(0, 0, 2, "")
+    @Assert(ok0, false)
+    @Assert(n0.contains("非 Rust"), true)
+    @Assert(n0.contains("需真机实测"), true)
+    // ② 判了 2 处、1 处空壳 ⇒ 未落地，并把空壳位置写出来（人能顺着复核）
+    let (ok1, n1) = platformLandedNoteOf(2, 1, 0, "src-tauri/src/lib.rs:12 —— 没有鸿蒙分支")
+    @Assert(ok1, false)
+    @Assert(n1.contains("1 处没有落地的鸿蒙分支"), true)
+    @Assert(n1.contains("lib.rs:12"), true)
+    // ③ 全都落地 ⇒ 落地
+    let (ok2, n2) = platformLandedNoteOf(2, 2, 0, "")
+    @Assert(ok2, true)
+    @Assert(n2.contains("都有落地的鸿蒙分支"), true)
+    // ④ 全落地但另有前端命中点 ⇒ 仍算落地，但要注明"判不了"的部分（不许假装全判过）
+    let (ok3, n3) = platformLandedNoteOf(1, 1, 3, "")
+    @Assert(ok3, true)
+    @Assert(n3.contains("3 处非 Rust"), true)
+}

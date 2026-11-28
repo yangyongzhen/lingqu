@@ -42,6 +42,103 @@ public func platformProbeVerdictOf(probe: JsonValue, name: String): (String, Str
 }
 
 /**
+ * 纯函数：一处平台 API 的静态判定结论（0.39.160）。
+ *
+ * 起因：`PlatformInput.fallbackLanded` 以前**只有** `probe.json` 的 `platform:<名>`
+ * 能改写（见 `collectVerifyInput` 的实测优先段），**没有任何静态计算** ⇒ 没跑过平台探针的工程
+ * `platform-api` 一律 fail。juCang 现场：3 处命中点全被判"没有落地的降级方案"，其中
+ * `app_data_dir` 的鸿蒙降级其实早在 helper 里落地了（§4-157 同族：观测缺陷当功能缺陷）。
+ *
+ * 口径：只判 `.rs` 命中点；前端（`.ts/.tsx`）命中点静态判不了，**如实写进 note**，
+ * 且这种情况仍算"未落地"（保守，绝不因此虚增通过）。
+ */
+public func platformLandedNoteOf(judged: Int64, landed: Int64, nonRs: Int64, gapNote: String): (Bool, String) {
+    if (judged <= 0) {
+        return (false, "命中点都在非 Rust 文件（${nonRs} 处），静态判据不适用——需真机实测（probe 的 platform:<名>）")
+    }
+    if (landed < judged) {
+        return (false, "${judged} 处 Rust 命中点里有 ${judged - landed} 处没有落地的鸿蒙分支；例：${gapNote}")
+    }
+    var note = "${judged} 处 Rust 命中点都有落地的鸿蒙分支（静态判定）"
+    if (nonRs > 0) {
+        note += "；另有 ${nonRs} 处非 Rust 命中点静态判不了"
+    }
+    return (true, note)
+}
+
+/**
+ * 一处平台 API 的静态落地判定（0.39.160，半边带 IO：要读工程源码）。
+ *
+ * `helperSrcs` 由调用方在**命令层**填好（追两层），这样 `app_data_dir` 这类"功能落在 helper 里"
+ * 的形态才判得出来（0.39.129/0.39.131 那套追层逻辑）。
+ */
+func platformLandedOf(name: String, projName: String, projPath: String, helperSrcs: HashMap<String, String>): (Bool, String, Int64) {
+    let platArr = scanPlatformItemsOf(projName, projPath)
+    var item = JsonObject()
+    match (platArr.kind()) {
+        case JsonKind.JsArray =>
+            let a = platArr.asArray()
+            var k: Int64 = 0
+            while (k < a.size()) {
+                match (a.get(k)) {
+                    case Some(v) =>
+                        if (jsonStrField(v, "name") == name) {
+                            item = v.asObject()
+                        }
+                    case None => ()
+                }
+                k += 1
+            }
+        case _ => ()
+    }
+    let sites = objFieldOf(item, "sites")
+    var judged: Int64 = 0
+    var landed: Int64 = 0
+    var nonRs: Int64 = 0
+    var gapNote = ""
+    match (sites.kind()) {
+        case JsonKind.JsArray =>
+            let a = sites.asArray()
+            var k: Int64 = 0
+            while (k < a.size()) {
+                match (a.get(k)) {
+                    case Some(v) =>
+                        let site = v.asString().getValue()
+                        let file = siteFileOf(site)
+                        let line = siteLineOf(site)
+                        if (file.endsWith(".rs") && line > 0) {
+                            let src = readProjectSrc(projPath, file)
+                            if (src != "") {
+                                judged += 1
+                                let (gap, why) = judgePlatformSiteWith(src, line, helperSrcs)
+                                if (!gap) {
+                                    landed += 1
+                                } else if (gapNote == "") {
+                                    gapNote = "${file}:${line} —— ${why}"
+                                }
+                            }
+                        } else {
+                            nonRs += 1
+                        }
+                    case None => ()
+                }
+                k += 1
+            }
+        case _ => ()
+    }
+    let (ok, note) = platformLandedNoteOf(judged, landed, nonRs, gapNote)
+    return (ok, note, judged)
+}
+
+/** 动作层：读工程的 scan 落档，取出 `items.platform` 数组（读不到给空数组） */
+func scanPlatformItemsOf(projName: String, projPath: String): JsonValue {
+    match (readJsonOrNone(resolveLqPath(projPath, "scan/${projName}.json"))) {
+        case Some(root) => return objFieldOf(objFieldOf(root, "items"), "platform")
+        case None => return JsonArray()
+    }
+}
+
+/**
  * 纯函数：取出 `probe.json` 里**按按钮文本**记的实测条目（0.39.159）。
  *
  * 排除 `platform:` / `event:` 两个前缀——它们各有专门通道（平台能力实测优先、事件触发计数），
@@ -646,6 +743,22 @@ func scanSurfaceOf(scan: JsonValue, projName: String,
         } else {
             p.note = "${related - landed}/${related} 个命令的鸿蒙分支是空壳（等于没实现）"
         }
+    }
+
+    // 逐处静态判定（0.39.160）：命令层只看"碰到它的命令"，而一个 API 可能有**多处**命中点。
+    // 现场（juCang）：`app_data_dir` 5 处 —— helper `resolve_app_data_dir` 落了地，但
+    // `cache.rs:79`（`cache_dir`）与 `lib.rs:337`（`save_article`）仍直接调桌面语义 API
+    // ⇒ 真机上文章/视频缓存写进不可写路径。旧判据只判"第一处"或只按命令数，点不出这种分布。
+    // 口径：逐处判 `.rs` 命中点，**任一处没落地就是没落地**，并把第一处位置写进 note；
+    // 命令层的结论保留在 note 里当补充（两套证据都要能看到）。
+    for (p in platforms) {
+        let cmdNote = p.note
+        let (sok, snote, judged) = platformLandedOf(p.name, projName, projPath, helperSrcs)
+        if (judged <= 0) {
+            continue
+        }
+        p.fallbackLanded = sok && p.fallbackLanded
+        p.note = if (cmdNote != "") { "${snote}；命令层：${cmdNote}" } else { snote }
     }
 
     return (features, platforms)
