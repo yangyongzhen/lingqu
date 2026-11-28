@@ -186,6 +186,7 @@ public func cliUsage(): String {
         "                                         # 写用户级错误指纹（body 走 UTF-8 文件；缺 id 自动编号 FP-U001）\n" +
         "                                         # 下一次 diagnose / migrate 就会命中它（用户级排前，同 id 用你的版本）\n"
     text += "  lingqu-cli notes --action fp-list        # 合并库：内置 + 用户级，每条带 source\n"
+    text += "  lingqu-cli notes --action digest         # 回显「任务书会带的已入库经验摘要」（--max 改条数，默认 8）\n"
     text += "说明：命令与界面上的按钮一一对应（同一份实现），结果同时落工程里的 .lingqu/。\n"
     text += "退出码：0 = ok；1 = 失败或参数不全（stderr 里会是 JSON 的错误原因）。\n"
     return text

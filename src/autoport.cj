@@ -87,6 +87,11 @@ public class AutoPortInput {
      * 其它 = 半自动（只干那一步，做完停下等人点下一步）——左侧各屏的「🤖 交给 AI」走这个。
      */
     public var scope: String = "all"
+    /**
+     * 本机已入库经验的摘要（`~/.lingqu/flywheel/lessons.md` → `readUserLessonsDigest`）。
+     * 空串 = 还没有经验 ⇒ 任务书里**不留空节**（空标题会被读成"经验库是空的"，§4-136）。
+     */
+    public var knownLessons: String = ""
 
     public init() {}
 }
@@ -204,6 +209,8 @@ public let DIRECTIVE_WHEN_DEVICE: String = "device"
 public let DIRECTIVE_WHEN_STATE: String = "state"
 /** 半自动作用域才有（只做一步、做完就停） */
 public let DIRECTIVE_WHEN_HALF: String = "half"
+/** 本机有已入库经验摘要才有（飞轮攒的经验，每轮随任务书下发，0.39.150） */
+public let DIRECTIVE_WHEN_LESSONS: String = "lessons"
 
 /**
  * 任务书的一条必备小节。
@@ -246,6 +253,9 @@ public func directiveClauses(): ArrayList<DirectiveClause> {
         "会话会被压缩，细节一压就淡；不落成笔记就等于没踩过（飞轮第 ①步的入口）"))
     out.add(DirectiveClause("**判断只认落档**", DIRECTIVE_WHEN_ALWAYS,
         "退出码 0 不等于通过（§4-63 假绿）；不写这条，它会拿\"跑完了\"当\"迁好了\""))
+    out.add(DirectiveClause("## 已入库经验（跨工程，先看这里）", DIRECTIVE_WHEN_LESSONS,
+        "经验只在任务书里才会被复用：技能按需读、cjh ≤1.6.18 还有技能区上限（§4-214），" +
+            "不写进任务书，下个工程就从零再撞一遍同一个坑（0.39.150）"))
     out.add(DirectiveClause("## 工作循环", DIRECTIVE_WHEN_ALWAYS,
         "不给固定循环，它会跳步或反复重跑已通过的步骤，白烧轮次"))
     out.add(DirectiveClause("## 当前落档", DIRECTIVE_WHEN_STATE,
@@ -463,6 +473,18 @@ public func buildAutoPortDirective(inp: AutoPortInput): String {
     }
     d += "\n**判断只认落档**：`.lingqu/<步骤>/<工程>.json` 里的判定字段才算数，退出码为 0 不等于通过。\n"
     d += "日志在 `.lingqu/<步骤>/<工程>.log`；失败先读它的最后 40 行，再动手。\n\n"
+
+    // 0.39.150：飞轮攒的经验要**立刻复用**，否则"跨工程累积"只是写在文档里的一句话。
+    // 通道比较过三条（技能 / 用户级指纹 / 任务书），只有任务书靠得住——见 flywheel.cj 顶部注释。
+    // 限条数与限字节在 `lessonsDigestOf` 里：任务书越长越危险（0.37.2 实测 4433 字单帧被 cjh 静默丢弃）。
+    if (inp.knownLessons.size > 0) {
+        d += "## 已入库经验（跨工程，先看这里）\n"
+        d += "下面是本机历次迁移**已经入库**的经验摘要（`~/.lingqu/flywheel/lessons.md`，每轮随任务书重发，"
+        d += "共 ${lessonsDigestCountOf(inp.knownLessons)} 条）。**撞到同类症状先按这里的修法做**，别从零试错；"
+        d += "条目末尾的「入库」是它在规则/指纹/技能里的位置，要细节再查那一处。\n"
+        d += inp.knownLessons
+        d += "（这些已经进过认知层，**不用再归档一次**。）\n\n"
+    }
 
     d += "## 工作循环（照顺序做，别跳步、别重复跑已通过的步骤）\n"
     d += "1. `resume` 定位当前步骤；\n"

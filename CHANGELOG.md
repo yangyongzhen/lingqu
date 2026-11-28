@@ -5,6 +5,47 @@
 
 ---
 
+## [0.39.150] - 2026-11-28
+
+**已入库经验第一次随任务书下发 —— 飞轮从「攒下来」走到「用起来」。**
+
+### Added
+- **任务书新增一节「## 已入库经验（跨工程，先看这里）」**（`DirectiveClause`，触发条件 `lessons`）：
+  `t2h:autoport_start` 每轮把 `~/.lingqu/flywheel/lessons.md` 压成摘要拼进任务书，每条一行
+  「**标题**：修法（入库：FP-021）」。撞到同类症状时 agent 先按它做，不必从零试错。
+  通道比较过三条：技能（cjh ≤1.6.18 技能区有上限、超出按目录顺序静默丢弃，且按需读）、用户级指纹
+  （只收唯一可识别的报错串）都盖不住「形态选择」类经验 ⇒ 只有任务书是每轮必读的入口。
+- 纯函数（`src/flywheel.cj`）：`truncateUtf8BytesOf`（**只在完整字符边界切**——直接取字节前缀会切出
+  半个中文，`String.fromUtf8` 当场抛 `Invalid utf8 byte sequence`，§4-116 同族）、
+  `lessonsDigestLineOf` / `lessonsDigestOf`（限条数 8 + 限字节 1800，越长的任务书越可能被丢弃，0.37.2）、
+  `lessonsDigestFromText` / `lessonsDigestCountOf`，动作层 `readUserLessonsDigest`。
+- `t2h:notes --action digest`：回显「任务书会带的那份摘要」（`--max` 改条数），并把
+  `lessonsFile` / `lessonsTotal` / `digestItems` / `digestChars` / `userLessonsPath` 一并回投——
+  本机经验本为空时任务书那一节不出现，界面看不出差别，这个动作让它在 CLI 层可逐字节复核。
+- `t2h:autoport_start` 的返回与启动日志带 `lessonsDigestItems` / `lessonsDigestChars` / `lessonsSource`。
+- 单测 **664 → 669**：`directive_spec_test` +1（有经验才出现、没经验整节不出现）；
+  `flywheel_test` +4（按字符截断不切坏中文、条数与字节双上限、修法优先并带入库引用、走真实经验本格式）。
+
+### Changed
+- 任务书条款 21 → **22**；`docs/任务书规范.md` §3 表补该行、§3.1 触发条件（五个 → 六个，并修掉原
+  「四个触发条件」的陈旧标题）、§3.2 说明 `lessons` 不随变体走；`docs/AI自进化飞轮.md` §8 阶段 4 与
+  `docs/会话交接.md` 的「未完成第 3 条」同步收口。
+
+### 证据
+- 门禁六项（`scripts/test.sh -s`，`CANGJIE_STDX` 指 **dynamic** 树）：`cjpm build` 0 warning ·
+  `cjpm test` **669/669** · `cj-tauri check` `com.lingqu.migrator@0.39.150` · 页面脚本 · `targets/desktop`
+  0 warning · `cli/` 0 warning。
+- 本机环境判据（再次确认，§4-170）：`CANGJIE_STDX` 指 **static** 树时 `cjpm test` 链接必失败
+  （`CertOpenSystemStoreA` 一族），门禁要显式指 dynamic。
+
+### 未验
+- **「agent 会不会照做」仍未验**：本版只保证经验进了任务书，行为验收要换工程重跑一轮 autoport
+  （`docs/任务书规范.md` §8）。
+- 本机此刻 `~/.lingqu/flywheel/lessons.md` **还不存在**（经验本为空）⇒ 任务书那一节不会出现；
+  摘要的生成走单测 + CLI `digest` 复核，**"真实迁移里 agent 照着摘要做"这一步没有现场证据**。
+
+---
+
 ## [0.39.149] - 2026-11-27
 
 **真机明明连着，agent 却去启模拟器 —— 修掉「只看 `-v` 的设备探测」并给任务书写死纪律。**

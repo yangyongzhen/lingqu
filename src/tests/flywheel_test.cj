@@ -292,3 +292,70 @@ public func renderUserLessonsFileCarriesHeaderAndAllNotes(): Unit {
     // 读回来条数要对得上（头是 markdown，解析器不能把它当条目）
     @Assert(parseLessons(text).size, 2)
 }
+
+// ===== ⑦ 经验摘要（0.39.150：把已入库经验拼进任务书）=====
+
+@Test
+public func truncateUtf8BytesKeepsCharsWhole(): Unit {
+    // 中文每字 3 字节：截到 5 字节只能留 1 个字，且绝不许切出半个（§4-116 同族）
+    let s = "中文截断测试"
+    @Assert(truncateUtf8BytesOf(s, 7), "中文")
+    @Assert(truncateUtf8BytesOf(s, 6), "中文")
+    @Assert(truncateUtf8BytesOf(s, 5), "中")
+    @Assert(truncateUtf8BytesOf(s, 0), "")
+    // 不超上限时原样返回（别顺手多截一刀）
+    @Assert(truncateUtf8BytesOf("abc", 10), "abc")
+    // ASCII 与中文混排也要断在字符边界上
+    @Assert(truncateUtf8BytesOf("ab中", 3), "ab")
+}
+
+@Test
+public func lessonsDigestIsCappedByItemsAndBytes(): Unit {
+    // 空经验本 → 空串（调用方据此让整节不出现，不许留空标题）
+    @Assert(lessonsDigestFromText("", LESSON_DIGEST_MAX), "")
+    // 条数上限
+    let many = ArrayList<LessonNote>()
+    var i: Int64 = 0
+    while (i < 10) {
+        many.add(noteOf("坑${i}", 1))
+        i += 1
+    }
+    @Assert(lessonsDigestCountOf(lessonsDigestOf(many, 3)), 3)
+    // 字节上限：100 条超长正文也只能截到 LESSON_DIGEST_MAX_BYTES 之内
+    // （任务书越长越危险——0.37.2 实测长单帧被 cjh 静默丢弃，不是越全越好）
+    let fat = ArrayList<LessonNote>()
+    var j: Int64 = 0
+    while (j < 100) {
+        fat.add(LessonNote("标题${j}", "现象", "根因", "复现", "修法很长很长很长很长很长很长很长"))
+        j += 1
+    }
+    let digest = lessonsDigestOf(fat, 100)
+    @Assert(Int64(digest.size) <= LESSON_DIGEST_MAX_BYTES, true)
+    @Assert(lessonsDigestCountOf(digest) > 0, true)
+}
+
+@Test
+public func lessonsDigestCarriesFixAndArchiveRef(): Unit {
+    let n = LessonNote("坑甲", "现象", "根因在 A", "复现命令", "改 B 再重跑")
+    n.archivedRef = "FP-021"
+    let line = lessonsDigestLineOf(n)
+    @Assert(line.startsWith("- **坑甲**：改 B 再重跑"), true)
+    @Assert(line.contains("（入库：FP-021）"), true)
+    // 没有修法就退回根因：摘要要回答"下次怎么躲"，不是只复述现象
+    let n2 = LessonNote("坑乙", "现象", "根因在 C", "复现", "")
+    @Assert(lessonsDigestLineOf(n2).contains("根因在 C"), true)
+    // 标题空 → 这一条不给（一条没头没尾的摘要只会占位置）
+    @Assert(lessonsDigestLineOf(LessonNote("  ", "现象", "根因", "复现", "修法")), "")
+}
+
+@Test
+public func lessonsDigestParsesRealBookText(): Unit {
+    // 走真实段落格式（`renderUserLessonsFile` 的产出），确认摘要取自经验本而非某种巧合格式
+    let list = ArrayList<LessonNote>()
+    let n = LessonNote("坑甲", "现象", "根因", "复现", "改 B")
+    n.occurrences = 2
+    list.add(n)
+    let digest = lessonsDigestFromText(renderUserLessonsFile(list), LESSON_DIGEST_MAX)
+    @Assert(lessonsDigestCountOf(digest), 1)
+    @Assert(digest.contains("改 B"), true)
+}

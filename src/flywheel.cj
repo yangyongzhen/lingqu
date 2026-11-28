@@ -218,6 +218,144 @@ public func mergeArchivedIntoUserBook(projDir: String, projName: String): String
     return mergeIntoUserLessons(parseLessons(t))
 }
 
+/*
+ * 经验**用起来**那一环（0.39.150）。
+ *
+ * 过去 `lessons.md` 攒下的经验只服务"本工程 + 本仓文档"，下个工程又从零撞同一个坑
+ * （交接文档「未完成第 3 条」）。三条候选通道逐条比过：
+ *   ① 技能（`~/.cjh/skills/`）——cjh ≤1.6.18 的技能区有总量上限、超出按目录顺序**静默丢弃**
+ *      （§4-214），而且技能是"按需读"，agent 撞坑时未必想得到去翻；
+ *   ② 用户级指纹——只收**唯一可识别**的报错串（§4-164），大部分"形态选择"类经验进不去；
+ *   ③ **任务书**——agent 每轮必读（`docs/任务书规范.md` §5）。
+ * 能靠得住的只有 ③，所以每轮把已入库经验的**摘要**拼进任务书。
+ *
+ * 两条界限（都是实测逼出来的）：
+ *   - **限条数**：经验本是长期累积的，无上限下发等于把任务书变成一本手册；
+ *   - **限字节**：0.37.2 实测 4433 字任务书单帧被 cjh 静默丢弃 ⇒ 越长越危险，不是越全越好。
+ */
+
+/** 任务书里「已入库经验摘要」的条数上限 */
+public let LESSON_DIGEST_MAX: Int64 = 8
+/** 每条摘要的标题 / 正文截断字节数（**按完整字符切**，不许切出半个中文） */
+public let LESSON_DIGEST_TITLE_BYTES: Int64 = 60
+public let LESSON_DIGEST_BODY_BYTES: Int64 = 180
+/** 整段摘要的字节上限：宁可少给两条，也不能把任务书撑到被丢弃 */
+public let LESSON_DIGEST_MAX_BYTES: Int64 = 1800
+
+/** 纯函数：UTF-8 首字节决定这个字符占几字节（非法首字节按 1 处理，绝不越界） */
+func utf8CharLenOf(b: Int64): Int64 {
+    if (b < 128) {
+        return 1
+    }
+    if ((b & 224) == 192) {
+        return 2
+    }
+    if ((b & 240) == 224) {
+        return 3
+    }
+    if ((b & 248) == 240) {
+        return 4
+    }
+    return 1
+}
+
+/**
+ * 纯函数：按字节截断，但**只在完整字符边界切**。
+ *
+ * 为什么不直接取字节前缀：那会切出半个中文，`String.fromUtf8` 当场抛
+ * `IllegalArgumentException: Invalid utf8 byte sequence`（§4-113 / §4-116 同族）。
+ */
+public func truncateUtf8BytesOf(s: String, maxBytes: Int64): String {
+    if (maxBytes <= 0) {
+        return ""
+    }
+    let bs = s.toArray()
+    if (Int64(bs.size) <= maxBytes) {
+        return s
+    }
+    var i: Int64 = 0
+    while (i < Int64(bs.size)) {
+        let len = utf8CharLenOf(Int64(bs[i]))
+        if (i + len > maxBytes) {
+            break
+        }
+        i += len
+    }
+    if (i <= 0) {
+        return ""
+    }
+    return String.fromUtf8(bs[0..i])
+}
+
+/** 纯函数：一条经验的摘要行（标题 + **修法**，修法空就退回根因；已入库的带上引用） */
+public func lessonsDigestLineOf(n: LessonNote): String {
+    let title = truncateUtf8BytesOf(oneLineOf(n.title), LESSON_DIGEST_TITLE_BYTES)
+    if (title.size == 0) {
+        return ""
+    }
+    var body = oneLineOf(n.fix)
+    if (body.size == 0) {
+        body = oneLineOf(n.cause)
+    }
+    body = truncateUtf8BytesOf(body, LESSON_DIGEST_BODY_BYTES)
+    var s = "- **" + title + "**"
+    if (body.size > 0) {
+        s += "：" + body
+    }
+    let ref = oneLineOf(n.archivedRef)
+    if (ref.size > 0) {
+        s += "（入库：${ref}）"
+    }
+    return s + "\n"
+}
+
+/**
+ * 纯函数：把经验列表压成"任务书用"的摘要（限条数 + 限总字节）。
+ *
+ * 顺序就是入参顺序（用户级本按归档先后追加，先入库的通常更常见）。
+ * 空列表 → 空串，**调用方据此让整节不出现**——留个空标题等于告诉 agent「经验库是空的」（§4-136）。
+ */
+public func lessonsDigestOf(list: ArrayList<LessonNote>, maxItems: Int64): String {
+    var out = ""
+    var shown: Int64 = 0
+    for (n in list) {
+        if (shown >= maxItems) {
+            break
+        }
+        let line = lessonsDigestLineOf(n)
+        if (line.size == 0) {
+            continue
+        }
+        if (Int64(out.size) + Int64(line.size) > LESSON_DIGEST_MAX_BYTES) {
+            break
+        }
+        out += line
+        shown += 1
+    }
+    return out
+}
+
+/** 纯函数：经验本全文 → 摘要（解析宽容：认不出的段落跳过，绝不抛） */
+public func lessonsDigestFromText(text: String, maxItems: Int64): String {
+    return lessonsDigestOf(parseLessons(text), maxItems)
+}
+
+/** 纯函数：摘要里有几条（回投给界面/落档当证据，别只说"加上了"） */
+public func lessonsDigestCountOf(digest: String): Int64 {
+    var n: Int64 = 0
+    for (line in digest.split("\n", -1)) {
+        if (line.startsWith("- ")) {
+            n += 1
+        }
+    }
+    return n
+}
+
+/** 动作层：读用户级经验本并压成摘要（读不到 = 空串——"还没有经验"不是错误） */
+public func readUserLessonsDigest(maxItems: Int64): String {
+    return lessonsDigestFromText(readTextOrEmpty(userLessonsPath()), maxItems)
+}
+
 /** 用户级指纹写回结果（把"新增几条 / 覆盖几条"当证据回投，别只说成功） */
 public class FpUpsertResult {
     public var text: String = ""

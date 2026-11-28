@@ -52,16 +52,17 @@ public func testClausesAreWellFormed(): Unit {
     // 清单不能是空的——空清单会让所有同源断言变成假绿（§4-136 假绿同族）
     // 0.39.130：18 → 19（「插件不满足：三层适配优先于降级」，外部反馈采纳）；
     // 19 → 20（「鸿蒙知识库（MCP 工具）」，cjh 1.6.13 接入华为开发者知识库后补"何时该查"纪律）
-    @Expect(clauses.size, 21)
+    // 20 → 21（0.39.143 之后的条款）；21 → 22（「已入库经验（跨工程，先看这里）」，0.39.150）
+    @Expect(clauses.size, 22)
     let seen = ArrayList<String>()
     for (c in clauses) {
         @Assert(c.section.size > 0)
         // 删条款的人靠 why 判断"这条还成不成立"，空理由等于不许删也不用知道为什么
         @Assert(c.why.size > 0)
-        // 触发条件只能是这五个之一，写错一个字就会让整条永远不出现在判据里
+        // 触发条件只能是这六个之一，写错一个字就会让整条永远不出现在判据里
         @Assert(c.when == DIRECTIVE_WHEN_ALWAYS || c.when == DIRECTIVE_WHEN_CLI ||
             c.when == DIRECTIVE_WHEN_DEVICE || c.when == DIRECTIVE_WHEN_STATE ||
-            c.when == DIRECTIVE_WHEN_HALF)
+            c.when == DIRECTIVE_WHEN_HALF || c.when == DIRECTIVE_WHEN_LESSONS)
         for (s in seen) {
             // 重名会让"缺了哪一条"指向不明
             @Assert(s != c.section)
@@ -135,6 +136,24 @@ public func testGapsReportMissingSectionsByName(): Unit {
     @Expect(directiveGapsOf("", ["## 工具箱", "## 纪律"]).size, 2)
     // 全都有 → 空
     @Assert(directiveGapsOf(body, ["## 工具箱"]).size == 0)
+}
+
+@Test
+public func testLessonsSectionAppearsOnlyWhenProvided(): Unit {
+    // 有经验 → 该节出现，摘要原样带上、条数写对（这是"经验被复用"的唯一证据位）
+    let inp = AutoPortInput()
+    inp.project = "habit-tree"
+    inp.projectDir = "E:/test/rust/habit-tree"
+    inp.knownLessons = "- **坑甲**：先查 `.cargo/config.toml`（入库：FP-021）\n"
+    let d = buildAutoPortDirective(inp)
+    @Assert(sectionsTextOf(directiveGapsOf(d, directiveSectionsOf([DIRECTIVE_WHEN_LESSONS]))), "")
+    @Assert(d.contains("- **坑甲**：先查 `.cargo/config.toml`（入库：FP-021）"), true)
+    @Assert(d.contains("共 1 条"), true)
+    // 没有经验 → 整节不许出现：留个空标题等于告诉 agent「经验库是空的」（§4-136 同族）
+    let inp2 = AutoPortInput()
+    inp2.project = "habit-tree"
+    inp2.projectDir = "E:/test/rust/habit-tree"
+    @Assert(buildAutoPortDirective(inp2).contains("## 已入库经验"), false)
 }
 
 @Test

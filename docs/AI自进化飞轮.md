@@ -415,6 +415,12 @@ archive 双目标。
 | 4.2 | `t2h:notes --action archive --to user\|repo` | `user`（默认）= 并入 `~/.lingqu/flywheel/lessons.md`（`unionUserLessons` 去重、**不累加次数**）；`repo` = 留在候选草稿等提 PR，**不写用户级**；`--to` 认不出 → `ok=false` 并说明 |
 | 4.3 | 无代码 | 技能回流仍是 `t2h:skill` → `~/.cjh/skills/`；`~/.lingqu/flywheel/skills/` 只留位与说明 |
 | 4.4 | 无代码 | `~/.lingqu/flywheel/` 整目录可拷/同步到团队私有仓（`LINGQU_FLYWHEEL_DIR` 指过去即可） |
+| 4.5 | `src/flywheel.cj` + `src/autoport.cj`（**0.39.150 补**） | **经验随任务书每轮下发**：`readUserLessonsDigest(8)` 把 `lessons.md` 压成摘要（每条一行「**标题**：修法（入库：FP-021）」，**限 8 条 / 1800 字节**、按完整字符截断），拼进任务书的「## 已入库经验（跨工程，先看这里）」（条款 `lessons`，没经验则整节不出现）。为什么不走技能：cjh ≤1.6.18 技能区有上限、超出静默丢弃（§4-214）且按需读；为什么不走用户级指纹：只收唯一可识别的报错串（§4-164）。`t2h:notes --action digest` 回显同一份摘要，`t2h:autoport_start` 回投 `lessonsDigestItems` / `lessonsDigestChars` / `lessonsSource` |
+
+**为什么"归档"不等于"复用"（0.39.150 的判断）**：4.2 让经验能进 `lessons.md`，但那是**落档**，
+消费方只有 `diagnose` 的指纹库与"人去看文档"。一次实测对照就够说明问题：0.39.120 的零干预轮里
+agent 连撞 4 次坑、`notes/` 全空；0.39.148 的真实 autoport 轮里同样没写 notes ⇒ **不主动查的通道等于没有通道**。
+所以这一环必须落在"agent 每轮必读"的地方（任务书），而不是"它想起来才查"的地方（技能/文档）。
 
 **诚实边界（这条别在后续版本里被"顺手放宽"）**：用户级层**只装能合并的东西**——指纹（JSON 数据）
 与经验/技能（文本）。`R2-PORT-*` 规则是确定性的**文本变换函数**（`src/port/port.cj`），

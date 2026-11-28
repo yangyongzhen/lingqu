@@ -6279,6 +6279,13 @@ public class AutoPortStartCommand <: CommandHandler {
         let iterBudget = enforceIterBudgetBeforeRun(userHomeDir(), AUTOPORT_MIN_ITERATIONS)
         eprintln("[lingqu][autoport] 轮次预算：${iterBudget}")
         traceStartup("autoport 轮次预算：${iterBudget}", 0)
+        // 飞轮阶段 4 的「用起来」那一环（0.39.150）：经验入了 `~/.lingqu/flywheel/lessons.md`，
+        // 但过去只服务本工程——下个工程从零再撞一遍（交接文档「未完成第 3 条」）。
+        // 技能不合适（cjh ≤1.6.18 技能区有上限、超出静默丢弃，且按需读），所以每轮把**摘要**
+        // 拼进任务书（agent 唯一必读的入口）。限条数 + 限字节，别把任务书撑到被丢弃（0.37.2）。
+        let lessonsDigest = readUserLessonsDigest(LESSON_DIGEST_MAX)
+        let lessonsItems = lessonsDigestCountOf(lessonsDigest)
+        eprintln("[lingqu][autoport] 已入库经验摘要：${lessonsItems} 条 / ${lessonsDigest.size} 字节（${userLessonsPath()}）")
         let inp = AutoPortInput()
         inp.project = name
         inp.projectDir = path
@@ -6288,6 +6295,7 @@ public class AutoPortStartCommand <: CommandHandler {
         inp.minutes = minutes
         inp.stateLines = stateLines
         inp.scope = scope
+        inp.knownLessons = lessonsDigest
         let directive = buildAutoPortDirective(inp)
 
         // 任务书**落进目标工程**（agent 的 cwd 就是那里），消息里只发短 kickoff。
@@ -6326,6 +6334,10 @@ public class AutoPortStartCommand <: CommandHandler {
         res2.put("cliPath", JsonString(cliPath))
         res2.put("directive", JsonString(directive))
         res2.put("directiveChars", JsonInt(Int64(directive.size)))
+        // 经验摘要的证据（0.39.150）：条数与来源都回投——只说"加上了"没法复核
+        res2.put("lessonsDigestItems", JsonInt(lessonsItems))
+        res2.put("lessonsDigestChars", JsonInt(Int64(lessonsDigest.size)))
+        res2.put("lessonsSource", JsonString(userLessonsPath()))
         res2.put("keepRunningOnDisconnect", JsonString(keepRunning))
         res2.put("iterationBudget", JsonString(iterBudget))
         res2.put("directivePath", JsonString(directivePath))
@@ -7556,6 +7568,31 @@ public class NotesCommand <: CommandHandler {
             res.put("userNote", JsonString(note))
             res.put("librarySize", JsonInt(Int64(fingerprintLibraryWithUser(readUserFingerprintsText()).size)))
             eprintln("[lingqu][notes] fp-add: ${note}")
+            return res
+        }
+        // digest（0.39.150）：回显"任务书会用的那份已入库经验摘要"。
+        // 为什么要一个回显口：本机经验本为空时任务书那一节**不出现**，
+        // 于是"经验有没有真被复用"在界面上看不出来。这里让 CLI 逐字节复核（不起应用、不跑迁移），
+        // 并如实区分「经验本不存在」与「有经验但摘要为空」（§4-136：别拿"空"当"齐了"）。
+        if (action == "digest") {
+            let max = argInt(args, "max", LESSON_DIGEST_MAX)
+            let userPath = userLessonsPath()
+            let bookText = readTextOrEmpty(userPath)
+            let all = parseLessons(bookText)
+            let digest = lessonsDigestFromText(bookText, max)
+            let items = lessonsDigestCountOf(digest)
+            res.put("ok", JsonBool(true))
+            res.put("project", JsonString(projName))
+            res.put("userDir", JsonString(userFlywheelDir()))
+            res.put("userLessonsPath", JsonString(userPath))
+            res.put("lessonsFile", JsonBool(bookText.size > 0))
+            res.put("lessonsTotal", JsonInt(Int64(all.size)))
+            res.put("lessonsMax", JsonInt(max))
+            res.put("digestItems", JsonInt(items))
+            res.put("digestChars", JsonInt(Int64(digest.size)))
+            res.put("digest", JsonString(digest))
+            eprintln("[lingqu][notes] digest: 经验本 ${all.size} 条 → 摘要 ${items} 条 / ${digest.size} 字节" +
+                "（上限 ${max} 条 / ${LESSON_DIGEST_MAX_BYTES} 字节）@ ${userPath}")
             return res
         }
         let lessons = loadLessons(path, projName)
