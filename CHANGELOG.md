@@ -5,6 +5,36 @@
 
 ---
 
+## [0.39.152] - 2026-11-28
+
+**门禁 ③ 的"必红"归因被实测推翻 —— 它是偶发，不是 Git Bash 起不来。**
+
+### Fixed
+- **`scripts/test.sh` 的 ③ 不再被瞬时启动失败打红**。先实测定性：同机、同 PATH、同一份脚本环境装配下，
+  框架 CLI `--version` **30/30 成功**、`sync` **3/3 成功**，`./scripts/test.sh -s` 的 `[0/5] sync` 与
+  `[3/5] check` 也都 **PASS** ⇒ §4-210 那条"Git Bash 里必红"的归因（早先记"与 CLI、stdx、PATH 都无关，
+  是启动链/会话环境问题"）**站不住**，真实情况是**偶发**（安全软件拦进程创建那一族，§4-152）。
+  处置：新增 `run_capture_retry <次数>`——**只对 `126`/`127`（根本没起来）重试 3 次**，
+  命令真跑起来但自己失败（`check` 返回 1 并打印原因）**不重试**（那是真红）；重试过就记在 PASS 行上
+  （`cj-tauri check（第 N 次才起来：瞬时进程创建失败，已重试）`）；最终失败时 `spawn_fail_hint`
+  打一句"多为安全软件拦进程创建"，别让人再往"缺 DLL / 缺 PATH"上猜。`sync` 与 `check` 两处都走它。
+
+### Changed
+- 本机跑门禁的手工步骤可以回退：不必再用"宿主侧 PowerShell 跑 sync/check"那套（§4-210 已按本版修正）；
+  仍需的是 **`CANGJIE_STDX` 指 dynamic 树**（指 static 时 `cjpm test` 链接期失败，§4-170）。
+
+### 证据
+- 定性读数：`--version` 30/30、`sync` 3/3、`./scripts/test.sh -s` 的 `[0/5] sync` PASS 与 `[3/5] check` PASS。
+- 门禁读数：`cjpm build` 0 warning · `cjpm test` **672/672** · `cj-tauri check`
+  `com.lingqu.migrator@0.39.152` · 页面脚本 · `targets/desktop` 与 `cli/` 均 0 warning。
+
+### 未验
+- 这次**没有**人工制造"126/127"来验证重试分支真的会触发（安全软件拦截不可控）；重试逻辑只通过
+  `bash -n` 语法检查 + 正常路径（`[0/5] sync` / `[3/5] check` 均 PASS）证明"不误伤真红"这点的一半。
+  **能红的方向**：把 `run_capture_retry` 的 tries 改成 0 或用不存在的路径起 CLI 即可看到提示与 `rc=`。
+
+---
+
 ## [0.39.151] - 2026-11-28
 
 **真实跑一轮 autoport，任务书里那两条命令/判据当场露馅 —— 「先落经验」写不成、「真机在线」是假的。**

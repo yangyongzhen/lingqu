@@ -149,6 +149,38 @@ run_capture() {
 
 count_pattern() { printf '%s\n' "$TEXT" | grep -c -E "$1" || true; }
 
+# 跑原生命令，并**只对"根本没起来"重试**（126 / 127 = EACCES / command not found）。
+#
+# 起因（0.39.152 实测）：本机安全软件偶发拦进程创建（§4-152 同族），`cj-tauri` CLI 会在 exec 阶段
+# 直接 `Permission denied`（126）或静默 127。今天实测同一份 PATH 下 `--version` **30/30 成功**、
+# `sync` **3/3 成功** ⇒ 不是缺 DLL、也不是缺 PATH（§4-210 早先那条"必红"的归因据此修正），
+# 而是**偶发**；对它重试比改环境更贴近真相。
+# 命令真跑起来但自己失败（check 返回 1 并打印原因）**不重试**——那是真红。
+ATTEMPTS=0
+run_capture_retry() {
+  local tries="$1"; shift
+  local n=0
+  while : ; do
+    n=$((n + 1))
+    run_capture "$@"
+    ATTEMPTS=$n
+    case "$CODE" in
+      126|127) ;;
+      *) return 0 ;;
+    esac
+    [ "$n" -ge "$tries" ] && return 0
+    say "      （启动失败 rc=${CODE}，第 ${n} 次重试…）"
+    sleep 1
+  done
+}
+
+# 启动失败时的通用提示：让看日志的人别再往"缺 DLL / 缺 PATH"上猜
+spawn_fail_hint() {
+  case "$CODE" in
+    126|127) warn "进程起不来（rc=${CODE}）：多为安全软件拦进程创建，重试一次通常就过（AGENTS §4-152 / §4-210）" ;;
+  esac
+}
+
 # ---------- 只结束"本仓自己的" main.exe（别按进程名一刀切） ----------
 # 现象（0.39.27 实测）：dev 期间一边开着应用一边跑门禁，第 ④/⑤ 闸为了释放产物
 # 执行 `taskkill /F /IM main.exe` —— **按进程名一刀切**，于是把同样叫 main.exe 的
@@ -192,8 +224,8 @@ say "cj-tauri  : $CJ_TAURI_ROOT"
 if [ "$SYNC" = "1" ]; then
   info "[0/5] cj-tauri sync ..."
   if [ ! -x "$CLI" ] && [ ! -f "$CLI" ]; then fail "找不到 cj-tauri CLI：$CLI"; exit 1; fi
-  run_capture "$ROOT" "$CLI" sync
-  if [ "$CODE" -ne 0 ]; then fail "sync 失败"; printf '%s\n' "$TEXT"; exit 1; fi
+  run_capture_retry 3 "$ROOT" "$CLI" sync
+  if [ "$CODE" -ne 0 ]; then fail "sync 失败（rc=${CODE}）"; spawn_fail_hint; printf '%s\n' "$TEXT"; exit 1; fi
   pass "sync"
 fi
 
@@ -241,12 +273,17 @@ if [ ! -f "$CLI" ] && [ ! -x "$CLI" ]; then
   fail "找不到 CLI：$CLI"
   RESULTS+=("check:FAIL")
 else
-  run_capture "$ROOT" "$CLI" check
+  run_capture_retry 3 "$ROOT" "$CLI" check
   if [ "$CODE" -eq 0 ]; then
-    pass "cj-tauri check"
+    if [ "$ATTEMPTS" -gt 1 ]; then
+      pass "cj-tauri check（第 ${ATTEMPTS} 次才起来：瞬时进程创建失败，已重试）"
+    else
+      pass "cj-tauri check"
+    fi
     RESULTS+=("check:PASS")
   else
-    fail "cj-tauri check"
+    fail "cj-tauri check（rc=${CODE}）"
+    spawn_fail_hint
     printf '%s\n' "$TEXT" | head -20 | while IFS= read -r l; do [ -n "$l" ] && warn "$l"; done
     RESULTS+=("check:FAIL")
   fi
