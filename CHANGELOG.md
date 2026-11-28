@@ -5,6 +5,37 @@
 
 ---
 
+## [0.39.158] - 2026-11-28
+
+**无界面轮第一次带着真机跑通：`verify` 被重建为 83%，顺手修掉一条把人带偏的日志。**
+
+### Fixed
+- **校验失败的日志一律写「vendor SHA256 不符」，哪怕错的是"部署目录副本"**。实测（本轮无界面轮）
+  日志连着刷：`vendor SHA256 不符：cjh.exe expected=c5372e72… got=07f5427a…`，接着才说
+  `部署目录副本与随包清单不符，跳过 C:\Users\yang\AppData\Local\lingqu\cjh\cjh.exe`。
+  实测核对：**随包 `vendor/cjh/win-x64/cjh.exe` 与清单完全一致（都是 c5372e72…）**，
+  `07f5427a` 是 11-02 那份旧部署副本 —— 行为正确（跳过旧副本、用随包引擎），**只有日志写错了对象**，
+  白花一轮排查。现在两条校验都打路径：`二进制 SHA256 不符：${p} expected=… got=…`。
+
+### 实测（无界面轮 + 真机在线，样本 juCang）
+| 判据 | 读数 |
+|---|---|
+| 任务书 | 28,242 字符；`device=true`（写「真机：**在线**」）；「已入库经验」3 条；`promptAscii=true` |
+| 跑中 `--status` | `state=running / verdict=跑着 / elapsedSecs=38 / budgetMinutes=10 / lessonsDigestItems=3` |
+| 跑完 `--run` | `ok=true / state=done / exitCode=0 / elapsedSecs=139 / tools=75 / lastTool=bash / rounds=41 / verdict=已完成` |
+| 工具构成（cli-run.log） | 60× bash / 11× read_file / 4× skill_load |
+| **verify 重建** | **83%**（`total=7 / pass=5 / fail=1 / unknown=1 / covered=6 / featurePass=5`，20:40）——把 17:09 被压到 50% 的那份降级记录修回来了 |
+| 探针 | 本轮 agent **没有**调 `probe`（工具构成里没有）⇒ `feat:*` 仍是未测，没有虚增 |
+
+### 证据
+- 门禁六项全绿：`cjpm build` 0 warning · `cjpm test` **681/681** · `cj-tauri check` PASS ·
+  页面脚本 PASS · `targets/desktop` 与 `cli/` 均 0 warning。
+
+### 未验
+- 日志文案改动没有单测（纯 eprintln，行为不变）；验证靠本轮实测现场 + 随包/副本两份哈希的人工核对。
+
+---
+
 ## [0.39.157] - 2026-11-28
 
 **`autoport --run` 不再在设备离线时白烧一轮。**

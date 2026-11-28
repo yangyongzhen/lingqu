@@ -745,7 +745,10 @@ public func cjhVendorVerified(dir: String): Bool {
         }
         let got = sha256FileHex(p)
         if (got != want) {
-            eprintln("[lingqu] vendor SHA256 不符：${name} expected=${want} got=${got}")
+            // 0.39.158：这条校验既用于 vendor，也用于"部署目录副本"（cjhDeployAndStart 会拿它验
+            // %LOCALAPPDATA%\lingqu\cjh）。原来一律写 "vendor SHA256 不符"，实测时被它误导
+            // 去查随包二进制（其实随包是对的，错的是 11-02 那份旧部署副本）⇒ 把路径打出来。
+            eprintln("[lingqu] 二进制 SHA256 不符：${p} expected=${want} got=${got}")
             return false
         }
     }
@@ -766,7 +769,7 @@ public func cjhVendorVerified(dir: String): Bool {
     }
     let got = sha256FileHex(p)
     if (got != CJH_LINUX_SHA) {
-        eprintln("[lingqu] vendor SHA256 不符：${cjhBinName()} expected=${CJH_LINUX_SHA} got=${got}")
+        eprintln("[lingqu] 二进制 SHA256 不符：${p} expected=${CJH_LINUX_SHA} got=${got}")
         return false
     }
     return true
